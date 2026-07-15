@@ -1,0 +1,21 @@
+{
+  "name": "@handleplan/kassalapp",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "tsc --noEmit --strict --skipLibCheck --target ES2022 --module ESNext --moduleResolution Bundler --resolveJsonModule src/*.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit --strict --skipLibCheck --target ES2022 --module ESNext --moduleResolution Bundler --resolveJsonModule src/*.ts"
+  },
+  "dependencies": {
+    "@handleplan/domain": "workspace:*",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "4.0.18"
+  }
+}
