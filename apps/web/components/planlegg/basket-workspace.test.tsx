@@ -95,6 +95,36 @@ describe("Planlegg basket workspace", () => {
     });
   });
 
+  it("preserves ready candidates while keyboard focus moves to generic add and approval", async () => {
+    const user = userEvent.setup();
+    render(
+      <BasketWorkspace
+        createId={idFactory()}
+        searchProducts={async () => [milk]}
+        searchDelayMs={0}
+      />,
+    );
+
+    const input = screen.getByRole("combobox", { name: "Hva skal du handle?" });
+    await user.type(input, "lettmelk");
+    await screen.findByRole("option", { name: /TINE Lettmelk/ });
+    await user.tab();
+    await user.tab();
+    const add = screen.getByRole("button", { name: "Legg til" });
+    expect(add).toHaveFocus();
+    await user.keyboard(" ");
+    const approval = screen.getByRole("group", { name: "Godkjenn treff for lettmelk" });
+    expect(approval).toBeVisible();
+    expect(within(approval).getByRole("button", { name: "Samme type, valgfritt merke" })).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    expect(screen.getByRole("listitem", { name: /lettmelk/i })).toBeVisible();
+    expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}")).toMatchObject({
+      matchingRules: [{ mode: "flexible", productFamily: "lettmelk", userApproved: true }],
+      products: [expect.objectContaining({ ean: milk.ean, productFamily: "lettmelk" })],
+    });
+  });
+
   it("offers a constrained generic match that requires a brand before approval", async () => {
     const user = userEvent.setup();
     render(
@@ -252,20 +282,27 @@ describe("Planlegg basket workspace", () => {
     expect(screen.queryByRole("option", { name: /TINE Lettmelk/ })).not.toBeInTheDocument();
   });
 
-  it("dismisses on Tab blur while option pointer selection still succeeds", async () => {
+  it("preserves search inside the composer, dismisses after leaving it, and keeps pointer selection", async () => {
     const user = userEvent.setup();
-    render(
+    render(<>
       <BasketWorkspace
         createId={idFactory()}
         searchProducts={async () => [milk]}
         searchDelayMs={0}
-      />,
-    );
+      />
+      <button type="button">Utenfor søkerammen</button>
+    </>);
     const input = screen.getByRole("combobox", { name: "Hva skal du handle?" });
 
     await user.type(input, "melk");
     expect(await screen.findByRole("option", { name: /TINE Lettmelk/ })).toBeVisible();
     await user.tab();
+    expect(input).toHaveAttribute("aria-expanded", "true");
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Legg til" })).toHaveFocus();
+    expect(input).toHaveAttribute("aria-expanded", "true");
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Utenfor søkerammen" })).toHaveFocus();
     expect(input).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
 
@@ -348,7 +385,7 @@ describe("Planlegg basket workspace", () => {
     expect(controlledListbox).toHaveRole("listbox");
 
     fireEvent.change(input, { target: { value: "tomt" } });
-    expect(await screen.findByText("Ingen produkter funnet. Legg til som et generelt behov.")).toBeVisible();
+    expect(await screen.findByText(/Ingen støttede produkter funnet/)).toBeVisible();
     expect(document.getElementById(controls ?? "")).toBe(controlledListbox);
     expect(controlledListbox).toHaveRole("listbox");
 

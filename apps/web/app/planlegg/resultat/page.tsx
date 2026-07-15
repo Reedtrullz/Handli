@@ -68,7 +68,7 @@ function sameMembers(left: readonly string[], right: readonly string[]): boolean
 function assignmentIdentity(candidate: ParsedResultResponse["plans"][number]): string {
   return [...candidate.assignments]
     .sort((left, right) => left.needId.localeCompare(right.needId))
-    .map((row) => `${row.needId}\0${row.ean}\0${row.chain}\0${row.quantity}\0${row.costOre}\0${row.observedAt}\0${row.source}`)
+    .map((row) => `${row.needId}\0${row.ean}\0${row.chain}\0${row.quantity}\0${row.costOre}`)
     .join("\u0001");
 }
 
@@ -358,7 +358,7 @@ export default function ResultPage() {
           </a>
           <nav aria-label="Hovedmeny">
             <a className="active" href="/planlegg" aria-current="page">Planlegg</a>
-            <span>Oppdag kommer senere</span>
+            <span className="coming-later">Oppdag kommer senere</span>
           </nav>
         </div>
       </header>

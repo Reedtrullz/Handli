@@ -194,8 +194,8 @@ function subsets(maximum: number): Chain[][] {
 }
 
 function assignmentIdentity(assignments: PlanResult["assignments"]): string {
-  return JSON.stringify(assignments.map(({ needId, ean: productEan, chain, quantity, costOre, observedAt, source }) =>
-    [needId, productEan, chain, quantity, costOre, observedAt, source]));
+  return JSON.stringify(assignments.map(({ needId, ean: productEan, chain, quantity, costOre }) =>
+    [needId, productEan, chain, quantity, costOre]));
 }
 
 type OraclePlan = Omit<PlanResult, "id" | "freshness">;

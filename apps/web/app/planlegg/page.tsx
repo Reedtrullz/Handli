@@ -13,7 +13,7 @@ export default function PlanleggPage() {
           </a>
           <nav aria-label="Hovedmeny">
             <a className="active" href="/planlegg" aria-current="page">Planlegg</a>
-            <span>Oppdag kommer senere</span>
+            <span className="coming-later">Oppdag kommer senere</span>
           </nav>
         </div>
       </header>

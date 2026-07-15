@@ -76,6 +76,21 @@ export const browserBasketSchema = z
       }
     }
 
+    const rulesById = new Map(matchingRules.map((rule) => [rule.id, rule]));
+    for (const need of needs) {
+      const rule = rulesById.get(need.matchRuleId);
+      if (
+        rule !== undefined &&
+        rule.mode !== "exact" &&
+        matchProducts(need, rule, products).length === 0
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Generic rules must retain at least one matching catalog candidate",
+        });
+      }
+    }
+
     for (const rule of matchingRules) {
       if (ruleUsage.get(rule.id) !== 1) {
         context.addIssue({

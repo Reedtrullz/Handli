@@ -302,4 +302,22 @@ describe("calculatePlans", () => {
     expect(new Set(first.map(({ id }) => id)).size).toBe(first.length);
     expect(first.every(({ totalOre, substitutions }) => totalOre === 2_000 && substitutions.length === 0)).toBe(true);
   });
+
+  it("keeps semantic plan IDs stable while refreshing selected provenance", () => {
+    const initial = request({
+      needs: [needs[0]!], matchingRules: [rules[0]!], maxStores: 1,
+      prices: [price("7038010000010", "extra", 1_000, 2)],
+    });
+    const refreshed = {
+      ...initial,
+      prices: [price("7038010000010", "extra", 1_000, 1)],
+    };
+
+    const [before] = calculatePlans(initial, NOW);
+    const [after] = calculatePlans(refreshed, NOW);
+
+    expect(after?.id).toBe(before?.id);
+    expect(after?.assignments[0]?.observedAt).toBe("2026-07-15T11:00:00.000Z");
+    expect(before?.assignments[0]?.observedAt).toBe("2026-07-15T10:00:00.000Z");
+  });
 });

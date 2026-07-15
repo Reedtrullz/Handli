@@ -1,7 +1,7 @@
 "use client";
 
 import type { MatchRule, Product } from "@handleplan/domain";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import {
   loadBasket,
@@ -78,10 +78,15 @@ function BasketWorkspaceClient({
   const [basket, setBasket] = useState<BrowserBasket>(() => loadBasket(storage));
   const [pending, setPending] = useState<PendingGenericNeed | null>(null);
   const [allowedBrands, setAllowedBrands] = useState("");
+  const primaryApproval = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     saveBasket(basket, storage);
   }, [basket, storage]);
+
+  useEffect(() => {
+    if (pending) primaryApproval.current?.focus();
+  }, [pending]);
 
   function addApprovedNeed(
     query: string,
@@ -186,7 +191,7 @@ function BasketWorkspaceClient({
                 <h2>Godkjenn valg</h2>
                 <p>{pending.query}</p>
                 <div className="approval-actions">
-                  <button className="secondary-button" type="button" onClick={approveFlexible}>
+                  <button ref={primaryApproval} className="secondary-button" type="button" onClick={approveFlexible}>
                     Samme type, valgfritt merke
                   </button>
                   <button

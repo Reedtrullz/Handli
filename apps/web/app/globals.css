@@ -290,3 +290,7 @@ a { color: inherit; }
   .basket-row { grid-template-columns: 50px minmax(0, 1fr) 44px; padding-left: 10px; }
   .site-footer > div { flex-direction: column; }
 }
+
+@media (max-width: 480px) {
+  .site-header .coming-later { display: none; }
+}

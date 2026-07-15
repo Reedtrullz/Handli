@@ -143,6 +143,21 @@ describe("browser basket persistence", () => {
     expect(storage.getItem(BASKET_STORAGE_KEY)).not.toContain("origin");
   });
 
+  it("resets a flexible or constrained v1 basket without a stored matching candidate", () => {
+    const generic = {
+      ...populatedBasket,
+      needs: [{ ...populatedBasket.needs[0], query: "havregryn", matchRuleId: "rule-generic" }],
+      matchingRules: [{ id: "rule-generic", mode: "flexible" as const, productFamily: "havregryn", userApproved: true as const, explanation: "Samme type" }],
+    };
+    const constrained = {
+      ...generic,
+      matchingRules: [{ id: "rule-generic", mode: "constrained" as const, productFamily: "lettmelk", allowedBrands: ["Q"], userApproved: true as const, explanation: "Bare Q" }],
+    };
+
+    expect(loadBasket(memoryStorage(JSON.stringify(generic)))).toEqual(emptyBasketV1);
+    expect(loadBasket(memoryStorage(JSON.stringify(constrained)))).toEqual(emptyBasketV1);
+  });
+
   it("round-trips only the selected plan ID without changing basket relationships", () => {
     const storage = memoryStorage();
 

@@ -61,6 +61,7 @@ export function NeedComposer({
   const timer = useRef<number | undefined>(undefined);
   const controller = useRef<AbortController | undefined>(undefined);
   const popup = useRef<HTMLDivElement | null>(null);
+  const boundary = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     return () => {
@@ -172,7 +173,7 @@ export function NeedComposer({
   const genericFamily = genericCandidateFamily(query, products);
 
   return (
-    <section className="need-composer-section">
+    <section className="need-composer-section" ref={boundary}>
       <h1>Hva skal du handle?</h1>
       <div className="need-composer">
         <div className="need-search-wrap">
@@ -200,7 +201,7 @@ export function NeedComposer({
             onKeyDown={onKeyDown}
             onBlur={(event) => {
               const nextTarget = event.relatedTarget;
-              if (nextTarget instanceof Node && popup.current?.contains(nextTarget)) return;
+              if (nextTarget instanceof Node && boundary.current?.contains(nextTarget)) return;
               dismissSearch();
             }}
           />
@@ -220,7 +221,18 @@ export function NeedComposer({
             >+</button>
           </div>
         </div>
-        <button className="primary-button composer-add" type="button" onMouseDown={(event) => event.preventDefault()} onClick={addGeneric} disabled={disabled || !query.trim() || searchState !== "ready" || genericFamily === undefined}>
+        <button
+          className="primary-button composer-add"
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={addGeneric}
+          onBlur={(event) => {
+            const nextTarget = event.relatedTarget;
+            if (nextTarget instanceof Node && boundary.current?.contains(nextTarget)) return;
+            dismissSearch();
+          }}
+          disabled={disabled || !query.trim() || searchState !== "ready" || genericFamily === undefined}
+        >
           Legg til
         </button>
       </div>
@@ -230,7 +242,7 @@ export function NeedComposer({
         {open ? (
           <>
             {searchState === "loading" ? <p role="status">Henter produkter …</p> : null}
-            {searchState === "empty" ? <p role="status">Ingen produkter funnet. Legg til som et generelt behov.</p> : null}
+            {searchState === "empty" ? <p role="status">Ingen støttede produkter funnet. Velg et eksakt produkt eller avgrens søket til en støttet varetype.</p> : null}
             {searchState === "error" ? <p role="alert">Kunne ikke hente produkter. Prøv igjen.</p> : null}
           </>
         ) : null}

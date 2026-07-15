@@ -70,8 +70,6 @@ function assignmentKey(assignment: Assignment): string {
     assignment.chain,
     assignment.quantity,
     assignment.costOre,
-    assignment.observedAt,
-    assignment.source,
   ].join(":");
 }
 

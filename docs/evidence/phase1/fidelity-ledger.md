@@ -8,7 +8,7 @@ Approved public-draft references: Superdesign Planlegg `e70c7978-04ed-4f97-809b-
 | Result decision hierarchy | `final-result-{320,768,1440}.png` | Preserves recommendation, alternatives, provenance, and store-group hierarchy at all three widths. |
 | Route/travel draft examples | Final result uses “Handleplan”, “Handleliste fordelt på butikker”, and “Butikk N”; no travel metric or control is rendered. | Intentional Phase 1 truthfulness correction: chain grouping is proven, routing and travel time are not. |
 | Location, member, offer, and branch examples | Not rendered. | Intentional privacy/data-contract deviation; Phase 1 has no evidence for these claims. |
-| Oppdag and footer actions | Rendered as plain “kommer senere” text rather than active links. | Avoids dead navigation while retaining the approved information architecture. |
+| Oppdag and footer actions | Rendered as plain “kommer senere” text rather than active links; the Oppdag placeholder is hidden at 480 px and below. | Avoids dead navigation while retaining the approved information architecture and a clean 320 px header. |
 | Price provenance | Selected observation time/range, direct-upstream or fallback-cache status, and separate calculation time. | More precise than the draft and tied to assignment evidence rather than calculation time. |
 | Narrow layout | 320 px screenshots remain within the viewport with decision content before store groups. | Retains the approved mobile hierarchy while correcting the draft preview’s horizontal overflow. |
 

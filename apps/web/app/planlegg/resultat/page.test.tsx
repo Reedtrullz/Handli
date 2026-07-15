@@ -239,6 +239,7 @@ describe("Planlegg result workspace", () => {
   it.each([
     ["false substitutions", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: body.plans.map((plan, index) => index === 0 ? { ...plan, substitutions: ["milk"] } : plan) })],
     ["duplicate assignment identity", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: [...body.plans, { ...body.plans[0]!, id: "duplicate-identity" }] })],
+    ["duplicate semantic identity with refreshed evidence", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: [...body.plans, { ...body.plans[0]!, id: "duplicate-refreshed", assignments: body.plans[0]!.assignments.map((row) => ({ ...row, observedAt: "2026-07-15T06:13:00.000Z" })) }] })],
     ["dominated pair", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: [...body.plans, { ...body.plans[0]!, id: "dominated", totalOre: 83_460, assignments: body.plans[0]!.assignments.map((row, index) => index === 0 ? { ...row, costOre: row.costOre + 1_000 } : row) }] })],
     ["overlong plan ID", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: body.plans.map((plan, index) => index === 0 ? { ...plan, id: "x".repeat(201) } : plan) })],
     ["duplicate plan ID", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: body.plans.map((plan, index) => index === 1 ? { ...plan, id: body.plans[0]!.id } : plan) })],
