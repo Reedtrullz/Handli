@@ -72,6 +72,19 @@ const moneyOreSchema = z
   .int()
   .nonnegative()
   .transform((amount) => amount as MoneyOre);
+const chainSchema = z.enum(["bunnpris", "rema-1000", "extra"]);
+const sizeRangeSchema = z
+  .object({
+    min: z.number().positive(),
+    max: z.number().positive(),
+    unit: z.enum(["g", "ml"]),
+  })
+  .refine(({ min, max }) => min <= max);
+const matchRuleBaseShape = {
+  id: nonEmptyStringSchema,
+  userApproved: z.literal(true),
+  explanation: nonEmptyStringSchema,
+};
 
 export const needSchema: z.ZodType<Need> = z.object({
   id: nonEmptyStringSchema,
@@ -82,28 +95,42 @@ export const needSchema: z.ZodType<Need> = z.object({
   required: z.boolean(),
 });
 
-export const matchRuleSchema: z.ZodType<MatchRule> = z
+const exactMatchRuleSchema = z
   .object({
-    id: nonEmptyStringSchema,
-    mode: z.enum(["exact", "constrained", "flexible"]),
-    exactEan: eanSchema.optional(),
-    productFamily: nonEmptyStringSchema.optional(),
-    allowedBrands: z.array(nonEmptyStringSchema).optional(),
-    sizeRange: z
-      .object({
-        min: z.number().positive(),
-        max: z.number().positive(),
-        unit: z.enum(["g", "ml"]),
-      })
-      .refine(({ min, max }) => min <= max)
-      .optional(),
-    userApproved: z.boolean(),
-    explanation: nonEmptyStringSchema,
+    ...matchRuleBaseShape,
+    mode: z.literal("exact"),
+    exactEan: eanSchema,
   })
-  .refine(({ mode, userApproved }) => mode !== "flexible" || userApproved, {
-    message: "Flexible matching rules require user approval",
-    path: ["userApproved"],
-  });
+  .strict();
+
+const constrainedMatchRuleSchema = z
+  .object({
+    ...matchRuleBaseShape,
+    mode: z.literal("constrained"),
+    productFamily: nonEmptyStringSchema.optional(),
+    allowedBrands: z.array(nonEmptyStringSchema).min(1).optional(),
+    sizeRange: sizeRangeSchema.optional(),
+  })
+  .strict()
+  .refine(
+    ({ productFamily, allowedBrands, sizeRange }) =>
+      productFamily !== undefined || allowedBrands !== undefined || sizeRange !== undefined,
+    { message: "Constrained matching rules require at least one constraint" },
+  );
+
+const flexibleMatchRuleSchema = z
+  .object({
+    ...matchRuleBaseShape,
+    mode: z.literal("flexible"),
+    productFamily: nonEmptyStringSchema,
+  })
+  .strict();
+
+export const matchRuleSchema: z.ZodType<MatchRule> = z.discriminatedUnion("mode", [
+  exactMatchRuleSchema,
+  constrainedMatchRuleSchema,
+  flexibleMatchRuleSchema,
+]);
 
 export const productSchema: z.ZodType<Product> = z.object({
   ean: eanSchema,
@@ -116,7 +143,7 @@ export const productSchema: z.ZodType<Product> = z.object({
 
 export const priceObservationSchema: z.ZodType<PriceObservation> = z.object({
   ean: eanSchema,
-  chain: z.enum(["bunnpris", "rema-1000", "extra"]),
+  chain: chainSchema,
   amountOre: moneyOreSchema,
   observedAt: z.iso.datetime(),
   source: z.literal("kassalapp"),
@@ -136,13 +163,18 @@ export const planResultSchema: z.ZodType<PlanResult> = z.object({
     z.object({
       needId: nonEmptyStringSchema,
       ean: eanSchema,
-      chain: z.enum(["bunnpris", "rema-1000", "extra"]),
+      chain: chainSchema,
       quantity: z.number().positive(),
       costOre: moneyOreSchema,
     }),
   ),
   totalOre: moneyOreSchema,
-  chains: z.array(z.enum(["bunnpris", "rema-1000", "extra"])),
+  chains: z
+    .array(chainSchema)
+    .max(3)
+    .refine((chains) => new Set(chains).size === chains.length, {
+      message: "Plan result chains must be unique",
+    }),
   substitutions: z.array(z.string()),
   coverage: z.literal(1),
   freshness: z.record(z.string(), z.string()),

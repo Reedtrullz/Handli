@@ -18,7 +18,27 @@ describe("classifyFreshness", () => {
     expect(classifyFreshness(now, hoursAgo(now, 73))).toBe("stale-visible");
   });
 
+  it("transitions to stale-visible one millisecond after 72 hours", () => {
+    expect(
+      classifyFreshness(now, new Date(hoursAgo(now, 72).getTime() - 1)),
+    ).toBe("stale-visible");
+  });
+
+  it("keeps an observation exactly 14 days old visible but stale", () => {
+    expect(classifyFreshness(now, daysAgo(now, 14))).toBe("stale-visible");
+  });
+
+  it("transitions to historical one millisecond after 14 days", () => {
+    expect(
+      classifyFreshness(now, new Date(daysAgo(now, 14).getTime() - 1)),
+    ).toBe("historical");
+  });
+
   it("classifies observations over 14 days as historical", () => {
     expect(classifyFreshness(now, daysAgo(now, 15))).toBe("historical");
+  });
+
+  it("fails closed for an observation one millisecond in the future", () => {
+    expect(classifyFreshness(now, new Date(now.getTime() + 1))).toBe("invalid");
   });
 });
