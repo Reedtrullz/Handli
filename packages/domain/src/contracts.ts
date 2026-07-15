@@ -145,7 +145,7 @@ export const priceObservationSchema: z.ZodType<PriceObservation> = z.object({
   ean: eanSchema,
   chain: chainSchema,
   amountOre: moneyOreSchema,
-  observedAt: z.iso.datetime(),
+  observedAt: z.iso.datetime({ offset: false, precision: 3 }),
   source: z.literal("kassalapp"),
 });
 

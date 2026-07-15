@@ -30,6 +30,16 @@ export function fromPriceCacheRow(
   });
 }
 
+export function dedupePriceObservations(rows: PriceObservation[]): PriceObservation[] {
+  const byKey = new Map<string, PriceObservation>();
+
+  for (const row of rows) {
+    byKey.set(`${row.ean}\u0000${row.chain}`, row);
+  }
+
+  return [...byKey.values()];
+}
+
 export class PostgresPriceCache implements PriceCache {
   constructor(private readonly db: HandleplanDatabase) {}
 
@@ -47,11 +57,12 @@ export class PostgresPriceCache implements PriceCache {
   }
 
   async putMany(rows: PriceObservation[]): Promise<void> {
-    if (rows.length === 0) return;
+    const dedupedRows = dedupePriceObservations(rows);
+    if (dedupedRows.length === 0) return;
 
     await this.db
       .insert(priceCache)
-      .values(rows.map(toPriceCacheRow))
+      .values(dedupedRows.map(toPriceCacheRow))
       .onConflictDoUpdate({
         target: [priceCache.ean, priceCache.chain],
         set: {

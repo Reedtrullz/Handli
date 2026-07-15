@@ -227,4 +227,21 @@ describe("domain schemas", () => {
       priceObservationSchema.safeParse({ ...validPrice, ean: "not-an-ean" }).success,
     ).toBe(false);
   });
+
+  it("accepts only canonical millisecond UTC observation timestamps", () => {
+    expect(priceObservationSchema.safeParse(validPrice).success).toBe(true);
+
+    for (const observedAt of [
+      "2026-07-15T10:00:00Z",
+      "2026-07-15T10:00:00.0Z",
+      "2026-07-15T10:00:00.000000Z",
+      "2026-07-15T12:00:00.000+02:00",
+      "2026-07-15T10:00:00.000z",
+    ]) {
+      expect(
+        priceObservationSchema.safeParse({ ...validPrice, observedAt }).success,
+        observedAt,
+      ).toBe(false);
+    }
+  });
 });
