@@ -43,26 +43,45 @@ const fakePrices: PriceObservation[] = [
   fakePrice("7038010000044", "extra", 100, STALE_OBSERVED_AT),
 ];
 
-class MemoryPriceCache implements PriceCache {
-  private rows: PriceObservation[] = [];
+export class InMemoryPriceCache implements PriceCache {
+  private readonly rows = new Map<string, PriceObservation>();
 
   async getMany(eans: string[]): Promise<PriceObservation[]> {
     const selected = new Set(eans);
-    return this.rows.filter(({ ean }) => selected.has(ean)).map((row) => ({ ...row }));
+    return [...this.rows.values()]
+      .filter(({ ean }) => selected.has(ean))
+      .sort((left, right) => left.ean.localeCompare(right.ean) || left.chain.localeCompare(right.chain))
+      .map((row) => ({ ...row }));
   }
 
   async putMany(rows: PriceObservation[]): Promise<void> {
-    this.rows = rows.map((row) => ({ ...row }));
+    const latestInBatch = new Map<string, PriceObservation>();
+    for (const row of rows) {
+      const key = `${row.ean}\u0000${row.chain}`;
+      const candidate = latestInBatch.get(key);
+      if (candidate === undefined || row.observedAt >= candidate.observedAt) {
+        latestInBatch.set(key, row);
+      }
+    }
+    for (const [key, row] of latestInBatch) {
+      const persisted = this.rows.get(key);
+      if (persisted === undefined || row.observedAt > persisted.observedAt) {
+        this.rows.set(key, { ...row });
+      }
+    }
   }
 }
 
 export function createServerContainer(env: ServerEnv): ServerContainer {
   if (env.mode === "fake") {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("Fake server composition is disabled in production");
+    }
     const gateway = new FakeKassalappGateway(fakeProducts, fakePrices);
     return {
       gateway,
       planService: new PlanService({
-        cache: new MemoryPriceCache(),
+        cache: new InMemoryPriceCache(),
         gateway,
         now: () => new Date(FAKE_EVALUATION_TIME),
       }),

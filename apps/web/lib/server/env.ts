@@ -32,6 +32,9 @@ export function readServerEnv(
   values: Record<string, string | undefined> = process.env,
 ): ServerEnv {
   if (values.KASSAL_MODE === "fake") {
+    if (values.NODE_ENV === "production") {
+      throw new Error("KASSAL_MODE=fake is disabled in production");
+    }
     fakeServerEnvSchema.parse(values);
     return { mode: "fake" };
   }

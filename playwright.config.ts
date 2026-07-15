@@ -15,7 +15,7 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: "KASSAL_MODE=fake pnpm --filter web exec next dev --hostname 127.0.0.1 --port 3109",
+    command: "KASSAL_MODE=fake KASSAL_API_KEY=sentinel-review-only-7f42 pnpm --filter web exec next dev --hostname 127.0.0.1 --port 3109",
     url: "http://127.0.0.1:3109/api/health",
     reuseExistingServer: false,
     timeout: 120_000,

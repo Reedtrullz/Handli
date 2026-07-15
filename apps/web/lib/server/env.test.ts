@@ -45,6 +45,14 @@ describe("readServerEnv", () => {
     ).toEqual({ mode: "fake" });
   });
 
+  it("rejects fake mode in production even when an override-like value is supplied", () => {
+    expect(() => readServerEnv({
+      NODE_ENV: "production",
+      KASSAL_MODE: "fake",
+      ALLOW_FAKE_IN_PRODUCTION: "true",
+    })).toThrow(/production/i);
+  });
+
   it("rejects unsupported modes and keeps real mode strict", () => {
     expect(() => readServerEnv({ KASSAL_MODE: "preview" })).toThrow(/KASSAL_MODE/);
     expect(() => readServerEnv({ KASSAL_MODE: "real" })).toThrow(/KASSAL_API_KEY/);

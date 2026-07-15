@@ -12,7 +12,7 @@ corepack pnpm install --frozen-lockfile
 KASSAL_MODE=fake corepack pnpm dev
 ```
 
-Open `http://localhost:3000/planlegg`. Fake mode is explicit, server-only, fixed-clock, network-free, and does not need credentials or PostgreSQL.
+Open `http://localhost:3000/planlegg`. Fake mode is explicit, server-only, fixed-clock, makes no Kassalapp or PostgreSQL network request, and does not need credentials or PostgreSQL.
 
 ## Verification
 
