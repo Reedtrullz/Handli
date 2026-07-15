@@ -136,7 +136,7 @@ describe("Planlegg result workspace", () => {
     const savings = await screen.findByRole("radio", { name: /Mest spart/ });
     await user.click(savings);
     expect(screen.getByText("793,20 kr", { selector: ".result-total" })).toBeVisible();
-    expect(screen.getByText("157,40 kr")).toBeVisible();
+    expect(screen.getByText("157,40 kr spart")).toBeVisible();
     expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}")).toMatchObject({
       selectedPlanId: "plan-savings",
       needs: basket.needs,
@@ -155,7 +155,7 @@ describe("Planlegg result workspace", () => {
     render(<ResultPage />);
 
     await user.click(await screen.findByRole("radio", { name: /Enklest/ }));
-    expect(screen.getByText("0,00 kr")).toBeVisible();
+    expect(screen.getByText("Samme pris")).toBeVisible();
     expect(screen.getAllByRole("region", { name: /Stopp/ })).toHaveLength(1);
 
     await user.click(screen.getByRole("radio", { name: /Mest spart/ }));
@@ -222,6 +222,93 @@ describe("Planlegg result workspace", () => {
 
     expect(await screen.findByRole("heading", { name: "Kunne ikke vise handleplanen" })).toBeVisible();
     expect(screen.queryByText("Anbefalt totalpris")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["false substitutions", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: body.plans.map((plan, index) => index === 0 ? { ...plan, substitutions: ["milk"] } : plan) })],
+    ["duplicate assignment identity", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: [...body.plans, { ...body.plans[0]!, id: "duplicate-identity" }] })],
+    ["dominated pair", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: [...body.plans, { ...body.plans[0]!, id: "dominated", totalOre: 83_460, assignments: body.plans[0]!.assignments.map((row, index) => index === 0 ? { ...row, costOre: row.costOre + 1_000 } : row) }] })],
+    ["overlong plan ID", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: body.plans.map((plan, index) => index === 0 ? { ...plan, id: "x".repeat(201) } : plan) })],
+    ["duplicate plan ID", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: body.plans.map((plan, index) => index === 1 ? { ...plan, id: body.plans[0]!.id } : plan) })],
+  ])("rejects deep plan inconsistency: %s", async (_label, mutate) => {
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    vi.stubGlobal("fetch", okFetch(mutate(resultResponse())));
+    render(<ResultPage />);
+    expect(await screen.findByRole("heading", { name: "Kunne ikke vise handleplanen" })).toBeVisible();
+  });
+
+  it("requires every non-exact assignment and only those assignments in substitutions", async () => {
+    const flexibleBasket = {
+      ...basket,
+      matchingRules: basket.matchingRules.map((rule) => rule.id === "cheese-rule"
+        ? { id: rule.id, mode: "flexible", productFamily: "cheese", userApproved: true, explanation: "Valgfri ost" }
+        : rule),
+      products: basket.products.map((product) => product.ean === "7038010000020" ? { ...product, productFamily: "cheese" } : product),
+    };
+    const response = resultResponse();
+    response.plans = response.plans.map((plan) => ({ ...plan, substitutions: [] }));
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(flexibleBasket));
+    vi.stubGlobal("fetch", okFetch(response));
+    render(<ResultPage />);
+    expect(await screen.findByRole("heading", { name: "Kunne ikke vise handleplanen" })).toBeVisible();
+  });
+
+  it("accepts valid JSON parameters and a multibyte code point split across chunks", async () => {
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    const encoded = new TextEncoder().encode(JSON.stringify({ ...resultResponse(), caveats: ["Kjedepris – ærlig"] }));
+    const split = encoded.findIndex((byte) => byte === 0xc3) + 1;
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(encoded.slice(0, split)); controller.enqueue(encoded.slice(split)); controller.close(); } });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(stream, { headers: { "content-type": "Application/JSON; profile=\"a\\\"b\"; charset = utf-8" } })));
+    render(<ResultPage />);
+    expect(await screen.findByRole("radio", { name: /Balansert/ })).toBeChecked();
+    expect(screen.getByText("Kjedepris – ærlig")).toBeVisible();
+  });
+
+  it.each(["application/jsonp", "text/application/json", "application/json garbage"])("rejects lookalike media type %s", async (contentType) => {
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(resultResponse()), { headers: { "content-type": contentType } })));
+    render(<ResultPage />);
+    expect(await screen.findByRole("heading", { name: "Kunne ikke vise handleplanen" })).toBeVisible();
+  });
+
+  it("cancels an unbounded response stream after 128 KiB", async () => {
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new Uint8Array(65_537)); },
+      cancel() { cancelled = true; },
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(stream, { headers: { "content-type": "application/json" } })));
+    render(<ResultPage />);
+    expect(await screen.findByRole("heading", { name: "Kunne ikke vise handleplanen" })).toBeVisible();
+    expect(cancelled).toBe(true);
+  });
+
+  it("cancels immediately when a numeric content-length exceeds 128 KiB", async () => {
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(stream, { headers: { "content-type": "application/json", "content-length": String(128 * 1024 + 1) } })));
+    render(<ResultPage />);
+    expect(await screen.findByRole("heading", { name: "Kunne ikke vise handleplanen" })).toBeVisible();
+    expect(cancelled).toBe(true);
+  });
+
+  it("uses fatal UTF-8 decoding", async () => {
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array([0xc3, 0x28])); controller.close(); } });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(stream, { headers: { "content-type": "application/json" } })));
+    render(<ResultPage />);
+    expect(await screen.findByRole("heading", { name: "Kunne ikke vise handleplanen" })).toBeVisible();
+  });
+
+  it("fails closed when the response body is already locked", async () => {
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    const response = new Response(JSON.stringify(resultResponse()), { headers: { "content-type": "application/json" } });
+    response.body?.getReader();
+    vi.stubGlobal("fetch", vi.fn(async () => response));
+    render(<ResultPage />);
+    expect(await screen.findByRole("heading", { name: "Kunne ikke vise handleplanen" })).toBeVisible();
   });
 
   it("aborts the request on unmount and ignores a late response", async () => {

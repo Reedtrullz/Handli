@@ -19,7 +19,7 @@ export function PriceProvenance({ generatedAt, caveats }: PriceProvenanceProps) 
       <p><span aria-hidden="true">✓</span> Beregnet sparing sammenlignes med det rimeligste komplette alternativet med færrest butikker.</p>
       <p><span aria-hidden="true">⚠</span> Handleplan garanterer ikke lagerstatus eller hyllepris i den enkelte butikk.</p>
       <p><span aria-hidden="true">↗</span> Kjedepriser er ikke bevis på avdelingslager eller butikkspesifikk hyllepris.</p>
-      {caveats.map((caveat) => <p key={caveat}>{caveat}</p>)}
+      {caveats.map((caveat) => <p key={caveat}><span aria-hidden="true">•</span>{caveat}</p>)}
     </section>
   );
 }

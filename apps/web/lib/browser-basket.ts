@@ -10,6 +10,7 @@ export const BASKET_STORAGE_KEY = "handleplan:basket:v1";
 export const BASKET_QUANTITY_MIN = 1;
 export const BASKET_QUANTITY_MAX = 999;
 export const BASKET_NEEDS_MAX = 50;
+export const SELECTED_PLAN_ID_MAX = 200;
 
 const browserNeedSchema = z
   .object({
@@ -39,7 +40,7 @@ export const browserBasketSchema = z
     needs: z.array(browserNeedSchema).max(BASKET_NEEDS_MAX),
     matchingRules: z.array(matchRuleSchema).max(BASKET_NEEDS_MAX),
     products: z.array(browserProductSchema).max(200),
-    selectedPlanId: z.string().min(1).max(200).optional(),
+    selectedPlanId: z.string().min(1).max(SELECTED_PLAN_ID_MAX).optional(),
     travel: z
       .object({
         enabled: z.boolean(),

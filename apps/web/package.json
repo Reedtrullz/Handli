@@ -5,6 +5,7 @@
     "dev": "next dev",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:result:browser": "playwright test --config playwright.task8.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -18,6 +19,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "1.58.0",
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "16.3.2",
     "@testing-library/user-event": "14.6.1",

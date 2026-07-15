@@ -10,15 +10,16 @@ import {
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { z } from "zod";
 
-import { balancedPlanId, compareConvenience, orderPlanFrontier, PlanSelector } from "../../../components/planlegg/plan-selector";
+import { balancedPlanId, compareConvenience, projectPlanFrontier, PlanSelector } from "../../../components/planlegg/plan-selector";
 import { PlanSummary } from "../../../components/planlegg/plan-summary";
 import { PriceProvenance } from "../../../components/planlegg/price-provenance";
 import { StoreAssignment } from "../../../components/planlegg/store-assignment";
-import { loadBasket, saveBasket, type BrowserBasket } from "../../../lib/browser-basket";
+import { loadBasket, saveBasket, SELECTED_PLAN_ID_MAX, type BrowserBasket } from "../../../lib/browser-basket";
 
 const MAX_RESPONSE_BYTES = 128 * 1024;
 const MAX_PLANS = 24;
 const publicText = z.string().trim().min(1).max(300);
+const planId = z.string().trim().min(1).max(SELECTED_PLAN_ID_MAX);
 const ean = z.string().regex(/^(?:\d{8}|\d{13})$/);
 const chain = z.enum(["bunnpris", "rema-1000", "extra"]);
 const moneyOre = z.number().int().nonnegative().safe().max(100_000_000);
@@ -30,7 +31,7 @@ const assignment = z.object({
   costOre: moneyOre,
 }).strict();
 const plan = z.object({
-  id: publicText,
+  id: planId,
   assignments: z.array(assignment).min(1).max(50),
   totalOre: moneyOre,
   chains: z.array(chain).min(1).max(3),
@@ -61,8 +62,25 @@ function sameMembers(left: readonly string[], right: readonly string[]): boolean
   return left.length === right.length && new Set(left).size === left.length && left.every((value) => right.includes(value));
 }
 
+function assignmentIdentity(candidate: ParsedResultResponse["plans"][number]): string {
+  return [...candidate.assignments]
+    .sort((left, right) => left.needId.localeCompare(right.needId))
+    .map((row) => `${row.needId}\0${row.ean}\0${row.chain}\0${row.quantity}\0${row.costOre}`)
+    .join("\u0001");
+}
+
+function dominates(
+  left: ParsedResultResponse["plans"][number],
+  right: ParsedResultResponse["plans"][number],
+): boolean {
+  const noWorse = left.totalOre <= right.totalOre && left.chains.length <= right.chains.length && left.substitutions.length <= right.substitutions.length;
+  return noWorse && (left.totalOre < right.totalOre || left.chains.length < right.chains.length || left.substitutions.length < right.substitutions.length);
+}
+
 function isCompleteSafeResponse(response: ParsedResultResponse, basket: BrowserBasket): boolean {
   if (new Set(response.plans.map(({ id }) => id)).size !== response.plans.length) return false;
+  if (new Set(response.plans.map(assignmentIdentity)).size !== response.plans.length) return false;
+  if (response.plans.some((candidate, index) => response.plans.some((other, otherIndex) => index !== otherIndex && dominates(other, candidate)))) return false;
   const requiredNeeds = basket.needs.filter(({ required }) => required);
   const requiredIds = requiredNeeds.map(({ id }) => id);
   const productsByEan = new Map(basket.products.map((product) => [product.ean, product]));
@@ -74,8 +92,12 @@ function isCompleteSafeResponse(response: ParsedResultResponse, basket: BrowserB
     if (!sameMembers(candidate.chains, candidate.assignments.map(({ chain: assignmentChain }) => assignmentChain).filter((value, index, all) => all.indexOf(value) === index))) return false;
     if (!sameMembers(Object.keys(candidate.freshness), requiredIds)) return false;
     if (candidate.assignments.reduce((sum, row) => sum + row.costOre, 0) !== candidate.totalOre) return false;
-    if (new Set(candidate.substitutions).size !== candidate.substitutions.length) return false;
-    if (candidate.substitutions.some((needId) => !needsById.has(needId))) return false;
+    const expectedSubstitutions = candidate.assignments.flatMap((row) => {
+      const need = needsById.get(row.needId);
+      const rule = need ? rulesById.get(need.matchRuleId) : undefined;
+      return rule?.mode === "exact" ? [] : [row.needId];
+    });
+    if (!sameMembers(candidate.substitutions, expectedSubstitutions)) return false;
 
     return candidate.assignments.every((row) => {
       const need = needsById.get(row.needId);
@@ -89,9 +111,43 @@ function isCompleteSafeResponse(response: ParsedResultResponse, basket: BrowserB
 
 async function readSafeResponse(response: Response, basket: BrowserBasket): Promise<ResultResponse | undefined> {
   const contentType = response.headers.get("content-type") ?? "";
-  if (!contentType.toLowerCase().includes("application/json")) return undefined;
-  const body = await response.text();
-  if (new TextEncoder().encode(body).byteLength > MAX_RESPONSE_BYTES) return undefined;
+  const token = "[!#$%&'*+.^_`|~0-9A-Za-z-]+";
+  const quotedString = '"(?:[^"\\\\\\r\\n]|\\\\[\\t\\x20-\\x7e])*"';
+  const parameter = `(?:${token})\\s*=\\s*(?:${token}|${quotedString})`;
+  if (!new RegExp(`^application/json(?:\\s*;\\s*${parameter})*\\s*$`, "i").test(contentType)) return undefined;
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null && /^\d+$/.test(contentLength) && Number(contentLength) > MAX_RESPONSE_BYTES) {
+    try { await response.body?.cancel(); } catch { /* Cleanup only. */ }
+    return undefined;
+  }
+  if (response.body === null) return undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  try {
+    reader = response.body.getReader();
+  } catch {
+    try { await response.body.cancel(); } catch { /* Cleanup only. */ }
+    return undefined;
+  }
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const fragments: string[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        return undefined;
+      }
+      fragments.push(decoder.decode(value, { stream: true }));
+    }
+    fragments.push(decoder.decode());
+  } catch {
+    try { await reader.cancel(); } catch { /* Cleanup only. */ }
+    return undefined;
+  }
+  const body = fragments.join("");
   let value: unknown;
   try {
     value = JSON.parse(body);
@@ -153,10 +209,11 @@ function ResultWorkspaceClient() {
         setState({ status: "empty" });
         return;
       }
-      const returnedIds = new Set(safe.plans.map(({ id }) => id));
+      const representatives = projectPlanFrontier(safe.plans);
+      const returnedIds = new Set(representatives.map(({ id }) => id));
       const nextSelection = selectedPlanId && returnedIds.has(selectedPlanId)
         ? selectedPlanId
-        : balancedPlanId(safe.plans);
+        : balancedPlanId(representatives);
       if (!nextSelection) {
         setState({ status: "invalid" });
         return;
@@ -205,7 +262,7 @@ function ResultWorkspaceClient() {
     return <ResultMessage title="Kunne ikke vise handleplanen" copy="Svaret kunne ikke bekreftes som en komplett og trygg plan." />;
   }
 
-  const ordered = orderPlanFrontier(state.response.plans);
+  const ordered = projectPlanFrontier(state.response.plans);
   const selected = ordered.find(({ id }) => id === selectedPlanId) ?? ordered[0]!;
   const convenience = [...ordered].sort(compareConvenience)[0]!;
 

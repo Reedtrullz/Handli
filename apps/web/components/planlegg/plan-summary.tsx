@@ -13,15 +13,20 @@ export function PlanSummary({
   requiredItems,
   travelRequested,
 }: PlanSummaryProps) {
-  const savingOre = Math.max(0, convenienceTotalOre - plan.totalOre);
+  const savingOre = convenienceTotalOre - plan.totalOre;
+  const comparison = savingOre > 0
+    ? { label: "Beregnet forskjell", value: `${formatNok(savingOre)} spart` }
+    : savingOre < 0
+      ? { label: "Beregnet forskjell", value: `${formatNok(-savingOre)} dyrere` }
+      : { label: "Beregnet forskjell", value: "Samme pris" };
 
   return (
     <section className="result-summary" aria-labelledby="result-summary-title">
       <p className="result-eyebrow" id="result-summary-title">Anbefalt totalpris</p>
       <p className="result-total">{formatNok(plan.totalOre)}</p>
       <div className="saving-evidence">
-        <span>Beregnet sparing</span>
-        <strong>{formatNok(savingOre)}</strong>
+        <span>{comparison.label}</span>
+        <strong>{comparison.value}</strong>
       </div>
       <dl className="result-metrics">
         <div><dt>Butikker</dt><dd>{plan.chains.length}</dd></div>

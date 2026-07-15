@@ -16,6 +16,13 @@ interface StoreAssignmentProps {
   products: readonly Product[];
 }
 
+function formatQuantity(need: Need | undefined, fallback: number): string {
+  const quantity = need?.quantity ?? fallback;
+  if (need?.quantityUnit === "g") return `${quantity.toLocaleString("nb-NO")} g`;
+  if (need?.quantityUnit === "ml") return `${quantity.toLocaleString("nb-NO")} ml`;
+  return `${quantity.toLocaleString("nb-NO")}×`;
+}
+
 export function StoreAssignment({
   chain,
   order,
@@ -45,7 +52,7 @@ export function StoreAssignment({
           const need = needsById.get(assignment.needId);
           return (
             <li className="result-store-row" key={assignment.needId}>
-              <span className="assignment-quantity">{assignment.quantity}×</span>
+              <span className="assignment-quantity">{formatQuantity(need, assignment.quantity)}</span>
               <div>
                 <strong>{product?.name ?? need?.query ?? "Ukjent vare"}</strong>
                 <small>{product?.brand ? `${product.brand} · ` : ""}Dekker «{need?.query ?? assignment.needId}»</small>
