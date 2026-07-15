@@ -104,7 +104,7 @@ The initial position is a balanced frontier plan near the middle, not a claim of
 Moving the slider updates, without a page transition:
 
 - checkout total;
-- savings relative to the cheapest complete one-store plan;
+- savings relative to the lowest-cost complete plan among the fewest-stop alternatives (normally the cheapest complete one-store plan);
 - number of stops;
 - travel time when enabled;
 - substitutions and offer conditions;
@@ -270,7 +270,7 @@ If no eligible product satisfies a required need, that candidate plan is incompl
 2. Build an item-by-chain cost matrix using quantity-aware eligible prices.
 3. Reject observations and offers that fail freshness, validity, scope, membership, or matching rules.
 4. Enumerate feasible assignments for one, two, and three chains.
-5. For location-enabled requests, select nearby branch candidates and calculate the shortest practical round trip for each chain set.
+5. For location-enabled requests, select one nearby branch per chosen chain and calculate the shortest practical round trip for each chain set. Duplicate stops at the same chain are excluded because v1 has neither branch-level stock nor branch-level price proof that could justify them.
 6. Calculate total checkout cost, stops, travel time, and substitutions for every complete assignment.
 7. Remove dominated plans. A plan is dominated when another plan is no worse on checkout total, stop count, travel time when enabled, and substitution burden, and is strictly better on at least one.
 8. Sort and reduce the remaining frontier into the slider positions described in section 5.4.
@@ -373,4 +373,3 @@ The implementation plan should preserve vertical proof rather than build every s
 ## 18. Decisions intentionally deferred beyond v1
 
 Accounts and cross-device synchronization, collaborative household lists, receipt import, push alerts, additional chains, delivery-service comparison, and native applications are future decisions. Their absence must not weaken anonymous local use or change the public-good ranking policy.
-
