@@ -41,8 +41,7 @@ export function NeedComposer({
   searchProducts,
   searchDelayMs = 250,
 }: NeedComposerProps) {
-  const popupId = useId();
-  const listId = `${popupId}-listbox`;
+  const listId = useId();
   const [query, setQuery] = useState("");
   const [quantity, setQuantity] = useState(1);
   const [products, setProducts] = useState<Product[]>([]);
@@ -168,12 +167,12 @@ export function NeedComposer({
       <div className="need-composer">
         <div className="need-search-wrap">
           <span className="search-mark" aria-hidden="true">⌕</span>
-          <label className="sr-only" htmlFor={`${popupId}-input`}>Hva skal du handle?</label>
+          <label className="sr-only" htmlFor={`${listId}-input`}>Hva skal du handle?</label>
           <input
-            id={`${popupId}-input`}
+            id={`${listId}-input`}
             role="combobox"
             aria-autocomplete="list"
-            aria-controls={popupId}
+            aria-controls={listId}
             aria-expanded={open}
             aria-activedescendant={activeOptionId}
             autoComplete="off"
@@ -214,33 +213,33 @@ export function NeedComposer({
           Legg til
         </button>
       </div>
-      <div id={popupId} ref={popup} className="search-popover" hidden={!open}>
+      <div ref={popup} className="search-popover" hidden={!open}>
         {open ? (
           <>
-          {searchState === "loading" ? <p role="status">Henter produkter …</p> : null}
-          {searchState === "empty" ? <p role="status">Ingen produkter funnet. Legg til som et generelt behov.</p> : null}
-          {searchState === "error" ? <p role="alert">Kunne ikke hente produkter. Prøv igjen.</p> : null}
-          {searchState === "ready" ? (
-            <ul id={listId} role="listbox" aria-label="Produktforslag">
-              {products.map((product, index) => (
-                <li
-                  id={`${listId}-option-${index}`}
-                  key={product.ean}
-                  role="option"
-                  tabIndex={-1}
-                  aria-selected={activeIndex === index}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => chooseProduct(product)}
-                >
-                  <span>{product.name}</span>
-                  {product.brand ? <small>{product.brand}</small> : null}
-                  <span className="sr-only">{optionLabel(product)}</span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
+            {searchState === "loading" ? <p role="status">Henter produkter …</p> : null}
+            {searchState === "empty" ? <p role="status">Ingen produkter funnet. Legg til som et generelt behov.</p> : null}
+            {searchState === "error" ? <p role="alert">Kunne ikke hente produkter. Prøv igjen.</p> : null}
           </>
         ) : null}
+        <ul id={listId} role="listbox" aria-label="Produktforslag">
+          {open && searchState === "ready"
+            ? products.map((product, index) => (
+              <li
+                id={`${listId}-option-${index}`}
+                key={product.ean}
+                role="option"
+                tabIndex={-1}
+                aria-selected={activeIndex === index}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => chooseProduct(product)}
+              >
+                <span>{product.name}</span>
+                {product.brand ? <small>{product.brand}</small> : null}
+                <span className="sr-only">{optionLabel(product)}</span>
+              </li>
+            ))
+            : null}
+        </ul>
       </div>
     </section>
   );

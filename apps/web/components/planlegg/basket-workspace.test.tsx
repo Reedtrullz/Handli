@@ -291,29 +291,52 @@ describe("Planlegg basket workspace", () => {
     expect(signal.aborted).toBe(true);
   });
 
-  it("keeps aria-controls valid and expanded semantics accurate for search states", async () => {
-    let reject!: (error: Error) => void;
-    const user = userEvent.setup();
+  it("keeps aria-controls on the same listbox through loading, error, empty, and ready", async () => {
+    let rejectLoading!: (error: Error) => void;
+    const searchProducts = vi.fn((query: string) => {
+      if (query === "melk") {
+        return new Promise<Product[]>((_resolve, reject) => (rejectLoading = reject));
+      }
+      if (query === "tomt") return Promise.resolve([]);
+      return Promise.resolve([milk]);
+    });
     render(
       <BasketWorkspace
         createId={idFactory()}
-        searchProducts={() => new Promise((_resolve, rejectPromise) => (reject = rejectPromise))}
+        searchProducts={searchProducts}
         searchDelayMs={0}
       />,
     );
     const input = screen.getByRole("combobox", { name: "Hva skal du handle?" });
     const controls = input.getAttribute("aria-controls");
     expect(controls).toBeTruthy();
-    expect(document.getElementById(controls ?? "")).toBeInTheDocument();
+    const controlledListbox = document.getElementById(controls ?? "");
+    expect(controlledListbox).toHaveRole("listbox");
+    expect(controlledListbox).not.toBeVisible();
     expect(input).toHaveAttribute("aria-expanded", "false");
 
-    await user.type(input, "melk");
+    fireEvent.change(input, { target: { value: "melk" } });
     expect(await screen.findByText("Henter produkter …")).toBeVisible();
     expect(input).toHaveAttribute("aria-expanded", "true");
-    expect(document.getElementById(controls ?? "")).toBeInTheDocument();
-    await act(async () => reject(new Error("offline")));
+    expect(document.getElementById(controls ?? "")).toBe(controlledListbox);
+    expect(controlledListbox).toHaveRole("listbox");
+    expect(controlledListbox).toBeVisible();
+
+    await act(async () => rejectLoading(new Error("offline")));
     expect(await screen.findByRole("alert")).toBeVisible();
     expect(input).toHaveAttribute("aria-expanded", "true");
+    expect(document.getElementById(controls ?? "")).toBe(controlledListbox);
+    expect(controlledListbox).toHaveRole("listbox");
+
+    fireEvent.change(input, { target: { value: "tomt" } });
+    expect(await screen.findByText("Ingen produkter funnet. Legg til som et generelt behov.")).toBeVisible();
+    expect(document.getElementById(controls ?? "")).toBe(controlledListbox);
+    expect(controlledListbox).toHaveRole("listbox");
+
+    fireEvent.change(input, { target: { value: "ost" } });
+    expect(await screen.findByRole("option", { name: /TINE Lettmelk/ })).toBeVisible();
+    expect(document.getElementById(controls ?? "")).toBe(controlledListbox);
+    expect(controlledListbox).toHaveRole("listbox");
   });
 
   it("caps composer quantity at the exported maximum", async () => {
