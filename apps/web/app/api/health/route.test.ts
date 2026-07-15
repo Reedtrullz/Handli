@@ -1,0 +1,10 @@
+import { describe, expect, it } from "vitest";
+import { GET } from "./route";
+
+describe("GET /api/health", () => {
+  it("returns a versioned readiness contract", async () => {
+    const response = await GET();
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "ok", version: 1 });
+  });
+});

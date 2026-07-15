@@ -1,0 +1,54 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&family=Space+Grotesk:wght@500;600;700&display=swap');
+
+:root {
+  --paper: #f7f7f2;
+  --surface: #ffffff;
+  --forest-950: #10281d;
+  --forest-800: #1a3c2b;
+  --forest-650: #2f6248;
+  --mint-100: #e4f2e8;
+  --mint-300: #a9d6b7;
+  --coral-100: #fce9e2;
+  --coral-600: #b84f32;
+  --gold-100: #f8f0ce;
+  --gold-600: #8a6812;
+  --ink: #19201c;
+  --muted: #657069;
+  --line: #d7dcd7;
+  --line-strong: #aeb8b1;
+  --focus: #1769e0;
+  --radius: 10px;
+  --font-display: "Space Grotesk", "Avenir Next", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  color: var(--ink);
+  background: var(--paper);
+  font-family: var(--font-body);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--paper);
+}
+
+button, input, select, textarea { font: inherit; }
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

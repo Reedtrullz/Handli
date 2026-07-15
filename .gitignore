@@ -2,3 +2,8 @@
 .superpowers/
 .superdesign/tmp/
 .worktrees/
+.env*
+!.env.example
+.next/
+coverage/
+node_modules/
