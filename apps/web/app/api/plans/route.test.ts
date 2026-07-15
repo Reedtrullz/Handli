@@ -93,12 +93,14 @@ function streamingRequest(
 describe("POST /api/plans", () => {
   it("returns complete plans, canonical UTC time, and the mandatory Norwegian caveats", async () => {
     const service: PlanServiceContract = {
-      calculate: async () => ({ plans: [plan], status: "upstream" }),
+      calculate: async () => ({
+        generatedAt: "2026-07-15T12:00:00.000Z",
+        plans: [plan],
+        status: "upstream",
+      }),
     };
 
-    const response = await createPlansHandler(() => service, () => new Date("2026-07-15T12:00:00Z"))(
-      request(),
-    );
+    const response = await createPlansHandler(() => service)(request());
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -166,7 +168,11 @@ describe("POST /api/plans", () => {
     const service: PlanServiceContract = {
       calculate: async (value) => {
         seenName = value.products[0]?.name;
-        return { plans: [], status: "upstream" };
+        return {
+          generatedAt: "2026-07-15T12:00:00.000Z",
+          plans: [],
+          status: "upstream",
+        };
       },
     };
 
@@ -194,6 +200,41 @@ describe("POST /api/plans", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ code: "INVALID_REQUEST" });
     expect(service.calculate).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes a locked request stream instead of throwing", async () => {
+    const service: PlanServiceContract = { calculate: vi.fn() };
+    const incoming = request();
+    const lock = incoming.body!.getReader();
+
+    const response = await createPlansHandler(() => service)(incoming);
+    lock.releaseLock();
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ code: "INVALID_REQUEST" });
+    expect(service.calculate).not.toHaveBeenCalled();
+  });
+
+  it("best-effort cancels an early Content-Length rejection without leaking cancel errors", async () => {
+    const cancelled = vi.fn(() => {
+      throw new Error("private cancellation detail");
+    });
+    const stream = new ReadableStream<Uint8Array>({ cancel: cancelled });
+    const incoming = new Request("https://handleplan.no/api/plans", {
+      body: stream,
+      duplex: "half",
+      headers: {
+        "content-length": String(64 * 1024 + 1),
+        "content-type": "application/json",
+      },
+      method: "POST",
+    } as RequestInit & { duplex: "half" });
+
+    const response = await createPlansHandler(() => ({ calculate: vi.fn() }))(incoming);
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ code: "REQUEST_TOO_LARGE" });
+    expect(cancelled).toHaveBeenCalledOnce();
   });
 
   it("rejects invalid public bodies without returning raw Zod details", async () => {
@@ -239,7 +280,11 @@ describe("POST /api/plans", () => {
     const service: PlanServiceContract = {
       calculate: async (_value, signal) => {
         seenSignal = signal;
-        return { plans: [], status: "upstream" };
+        return {
+          generatedAt: "2026-07-15T12:00:00.000Z",
+          plans: [],
+          status: "upstream",
+        };
       },
     };
 

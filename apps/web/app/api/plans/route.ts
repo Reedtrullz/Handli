@@ -18,16 +18,29 @@ function errorResponse(code: string, status: number): Response {
   return Response.json({ code }, { status });
 }
 
+function bestEffortCancelBody(request: Request): void {
+  try {
+    const cancellation = request.body?.cancel();
+    if (cancellation !== undefined) {
+      void cancellation.catch(() => undefined);
+    }
+  } catch {
+    // Cancellation is cleanup only and never changes the sanitized response.
+  }
+}
+
 async function readJsonBody(request: Request): Promise<
   | { ok: true; value: unknown }
   | { ok: false; response: Response }
 > {
   const contentType = request.headers.get("content-type") ?? "";
   if (!/^application\/(?:[a-z0-9.+-]+\+)?json(?:\s*;|$)/i.test(contentType)) {
+    bestEffortCancelBody(request);
     return { ok: false, response: errorResponse("UNSUPPORTED_MEDIA_TYPE", 415) };
   }
   const contentLength = Number(request.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+    bestEffortCancelBody(request);
     return { ok: false, response: errorResponse("REQUEST_TOO_LARGE", 413) };
   }
 
@@ -35,7 +48,13 @@ async function readJsonBody(request: Request): Promise<
     return { ok: false, response: errorResponse("INVALID_REQUEST", 400) };
   }
 
-  const reader = request.body.getReader();
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  try {
+    reader = request.body.getReader();
+  } catch {
+    bestEffortCancelBody(request);
+    return { ok: false, response: errorResponse("INVALID_REQUEST", 400) };
+  }
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const fragments: string[] = [];
   let bytesRead = 0;
@@ -64,7 +83,6 @@ async function readJsonBody(request: Request): Promise<
 
 export function createPlansHandler(
   getService: ServiceProvider,
-  now: () => Date = () => new Date(),
 ) {
   return async function POST(request: Request): Promise<Response> {
     const body = await readJsonBody(request);
@@ -77,7 +95,7 @@ export function createPlansHandler(
       const result = await service.calculate(parsed.data, request.signal);
       return Response.json({
         caveats: PLAN_CAVEATS,
-        generatedAt: now().toISOString(),
+        generatedAt: result.generatedAt,
         plans: result.plans,
       });
     } catch (error) {

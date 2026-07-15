@@ -122,6 +122,7 @@ export const planApiRequestSchema = z
 export type PlanApiRequest = z.infer<typeof planApiRequestSchema>;
 
 export interface PlanServiceResult {
+  generatedAt: string;
   plans: PlanResult[];
   status: "upstream" | "cache";
 }
@@ -221,31 +222,41 @@ export class PlanService implements PlanServiceContract {
     }
     const input = parsed.data;
     const eans = requiredCandidateEans(input);
-    const now = this.now();
 
     try {
+      const upstreamRows = await this.dependencies.gateway.getBulkPrices(eans, signal);
+      const evaluationNow = this.now();
       const prices = normalizePrices(
-        await this.dependencies.gateway.getBulkPrices(eans, signal),
-        now,
+        upstreamRows,
+        evaluationNow,
       );
       try {
-        await this.dependencies.cache.putMany(prices, now);
+        await this.dependencies.cache.putMany(prices, evaluationNow);
       } catch {
         // A cache write is best-effort; fresh validated upstream data is still usable.
       }
       return {
-        plans: calculatePlans(toPlannerRequest(input, prices), now),
+        generatedAt: evaluationNow.toISOString(),
+        plans: calculatePlans(toPlannerRequest(input, prices), evaluationNow),
         status: "upstream",
       };
     } catch (error) {
       if (error instanceof KassalappGatewayError && error.code === "CANCELLED") {
         throw new PlanRequestCancelledError();
       }
+      const fallbackNow = this.now();
       try {
-        const cached = normalizePrices(await this.dependencies.cache.getMany(eans), now);
-        const plans = calculatePlans(toPlannerRequest(input, cached), now);
+        const cached = normalizePrices(
+          await this.dependencies.cache.getMany(eans),
+          fallbackNow,
+        );
+        const plans = calculatePlans(toPlannerRequest(input, cached), fallbackNow);
         if (plans.length > 0) {
-          return { plans, status: "cache" };
+          return {
+            generatedAt: fallbackNow.toISOString(),
+            plans,
+            status: "cache",
+          };
         }
       } catch {
         // Collapse cache/storage details into the public unavailable state.

@@ -50,6 +50,7 @@ function price(observedAt = "2026-07-15T10:00:00.000Z"): PriceObservation {
 
 class MemoryCache implements PriceCache {
   writes: PriceObservation[][] = [];
+  writeTimes: Date[] = [];
 
   constructor(private readonly rows: PriceObservation[] = []) {}
 
@@ -58,8 +59,9 @@ class MemoryCache implements PriceCache {
     return this.rows.filter((row) => selected.has(row.ean));
   }
 
-  async putMany(rows: PriceObservation[]): Promise<void> {
+  async putMany(rows: PriceObservation[], now?: Date): Promise<void> {
     this.writes.push(rows);
+    if (now !== undefined) this.writeTimes.push(now);
   }
 }
 
@@ -91,7 +93,28 @@ describe("PlanService", () => {
     expect(result.plans).toHaveLength(1);
     expect(result.plans[0]).toMatchObject({ coverage: 1, chains: ["extra"] });
     expect(cache.writes).toEqual([[price()]]);
+    expect(result.generatedAt).toBe(NOW.toISOString());
     expect(seenSignal).toBe(signal);
+  });
+
+  it("evaluates successful upstream rows after the awaited response", async () => {
+    const requestStartedAt = new Date("2026-07-15T10:00:00.000Z");
+    const observationAt = "2026-07-15T10:00:01.000Z";
+    const responseCompletedAt = new Date("2026-07-15T10:00:02.000Z");
+    let clock = requestStartedAt;
+    const cache = new MemoryCache();
+    const gateway = new FakeKassalappGateway([], []);
+    gateway.getBulkPrices = async () => {
+      clock = responseCompletedAt;
+      return [price(observationAt)];
+    };
+
+    const result = await new PlanService({ cache, gateway, now: () => clock }).calculate(request);
+
+    expect(result.plans).toHaveLength(1);
+    expect(result.generatedAt).toBe(responseCompletedAt.toISOString());
+    expect(cache.writes).toEqual([[price(observationAt)]]);
+    expect(cache.writeTimes).toEqual([responseCompletedAt]);
   });
 
   it("fetches only unique candidates for required approved matches", async () => {
@@ -168,7 +191,7 @@ describe("PlanService", () => {
     }).calculate(candidateRequest);
 
     expect(requestedEans).toEqual([constrainedProduct.ean, flexibleProduct.ean]);
-    expect(result).toEqual({ plans: [], status: "upstream" });
+    expect(result).toMatchObject({ plans: [], status: "upstream" });
   });
 
   it("drops future-invalid rows before planning and cache persistence", async () => {
@@ -200,6 +223,25 @@ describe("PlanService", () => {
 
     expect(result.status).toBe("cache");
     expect(result.plans).toHaveLength(1);
+  });
+
+  it("evaluates fallback freshness after the failed upstream wait", async () => {
+    const requestStartedAt = new Date("2026-07-15T12:00:00.000Z");
+    const afterFailure = new Date("2026-07-15T12:00:00.001Z");
+    let clock = requestStartedAt;
+    const gateway = new FakeKassalappGateway([], []);
+    gateway.getBulkPrices = async () => {
+      clock = afterFailure;
+      throw new KassalappGatewayError("TIMEOUT");
+    };
+
+    await expect(
+      new PlanService({
+        cache: new MemoryCache([price("2026-07-12T12:00:00.000Z")]),
+        gateway,
+        now: () => clock,
+      }).calculate(request),
+    ).rejects.toBeInstanceOf(PriceDataUnavailableError);
   });
 
   it.each([
