@@ -1,8 +1,12 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page, type Response } from "@playwright/test";
+import { expect, test, type Page, type Request, type Response } from "@playwright/test";
+import { createServer } from "node:http";
 
 const BASE_ORIGIN = "http://127.0.0.1:3109";
-const FORBIDDEN_VALUES = ["KASSAL_API_KEY", "sentinel-review-only-7f42"] as const;
+const FORBIDDEN_VALUES = ["KASSAL_API_KEY", process.env.HANDLEPLAN_E2E_SENTINEL].filter(
+  (value): value is string => Boolean(value),
+);
+const SENSITIVE_HEADERS = new Set(["authorization", "cookie", "set-cookie"]);
 const BODYLESS_STATUSES = new Set([101, 103, 204, 205, 304]);
 
 interface PublicEvidence {
@@ -13,9 +17,11 @@ interface PublicEvidence {
     consoleErrors: number;
     crossOriginBodiesNotInspected: number;
     forbiddenMatches: number;
+    headerReadFailures: Array<{ sameOrigin: boolean; surface: "request" | "response" }>;
     pageErrors: number;
     sameOriginBodiesInspected: number;
     surfacesInspected: number;
+    observedSensitiveHeaderNames: string[];
   };
 }
 
@@ -26,9 +32,11 @@ function collectPublicEvidence(page: Page): PublicEvidence {
     consoleErrors: 0,
     crossOriginBodiesNotInspected: 0,
     forbiddenMatches: 0,
+    headerReadFailures: [],
     pageErrors: 0,
     sameOriginBodiesInspected: 0,
     surfacesInspected: 0,
+    observedSensitiveHeaderNames: [],
   };
   const pending: Promise<void>[] = [];
 
@@ -39,10 +47,33 @@ function collectPublicEvidence(page: Page): PublicEvidence {
     }
   }
 
+  function inspectHeader(name: string, value: string): void {
+    const normalizedName = name.toLowerCase();
+    if (SENSITIVE_HEADERS.has(normalizedName) && !stats.observedSensitiveHeaderNames.includes(normalizedName)) {
+      stats.observedSensitiveHeaderNames.push(normalizedName);
+      stats.observedSensitiveHeaderNames.sort();
+    }
+    inspect(`${normalizedName}:${value}`);
+  }
+
+  function inspectHeaders(headers: Record<string, string>): void {
+    for (const [name, value] of Object.entries(headers)) inspectHeader(name, value);
+  }
+
+  function inspectHeaderEntries(headers: Array<{ name: string; value: string }>): void {
+    for (const { name, value } of headers) inspectHeader(name, value);
+  }
+
   async function inspectResponse(response: Response): Promise<void> {
     inspect(response.url());
-    inspect(JSON.stringify(response.headers()));
     const sameOrigin = new URL(response.url()).origin === BASE_ORIGIN;
+    try {
+      const [headers, headerEntries] = await Promise.all([response.allHeaders(), response.headersArray()]);
+      inspectHeaders(headers);
+      inspectHeaderEntries(headerEntries);
+    } catch {
+      stats.headerReadFailures.push({ sameOrigin, surface: "response" });
+    }
     if (!sameOrigin) {
       stats.crossOriginBodiesNotInspected += 1;
       return;
@@ -60,6 +91,17 @@ function collectPublicEvidence(page: Page): PublicEvidence {
     }
   }
 
+  async function inspectRequest(request: Request): Promise<void> {
+    inspect(request.url());
+    inspect(request.postData() ?? "");
+    const sameOrigin = new URL(request.url()).origin === BASE_ORIGIN;
+    try {
+      inspectHeaders(await request.allHeaders());
+    } catch {
+      stats.headerReadFailures.push({ sameOrigin, surface: "request" });
+    }
+  }
+
   page.on("console", (message) => {
     inspect(message.text());
     if (message.type() === "error") stats.consoleErrors += 1;
@@ -69,9 +111,7 @@ function collectPublicEvidence(page: Page): PublicEvidence {
     stats.pageErrors += 1;
   });
   page.on("request", (request) => {
-    inspect(request.url());
-    inspect(JSON.stringify(request.headers()));
-    inspect(request.postData() ?? "");
+    pending.push(inspectRequest(request));
   });
   page.on("response", (response) => {
     pending.push(inspectResponse(response));
@@ -103,6 +143,7 @@ async function expectCleanPublicEvidence(evidence: PublicEvidence): Promise<void
   expect(evidence.stats.sameOriginBodiesInspected).toBeGreaterThan(0);
   expect(evidence.stats.surfacesInspected).toBeGreaterThan(0);
   expect(evidence.stats.bodyReadErrors).toBe(0);
+  expect(evidence.stats.headerReadFailures).toEqual([]);
   expect(evidence.stats.consoleErrors).toBe(0);
   expect(evidence.stats.pageErrors).toBe(0);
   expect(evidence.stats.forbiddenMatches).toBe(0);
@@ -133,6 +174,41 @@ const expectedPlans = [
   { name: "Balansert", total: "110,00 kr", totalOre: 11_000, stores: 2 },
   { name: "Mest spart", total: "100,00 kr", totalOre: 10_000, stores: 3 },
 ] as const;
+
+test("the leak detector sees authorization, cookie, and set-cookie values", async ({ context, page }) => {
+  const sentinel = process.env.HANDLEPLAN_E2E_SENTINEL;
+  expect(typeof sentinel === "string" && sentinel.length > 20).toBe(true);
+  if (!sentinel) throw new Error("Runtime leak sentinel was unavailable");
+
+  const probeServer = createServer((_request, response) => {
+    response.writeHead(200, {
+      "content-type": "application/json",
+      "set-cookie": `header-probe=${sentinel}; Path=/; HttpOnly`,
+    });
+    response.end("{}");
+  });
+  await new Promise<void>((resolve, reject) => {
+    probeServer.once("error", reject);
+    probeServer.listen(0, "127.0.0.1", resolve);
+  });
+
+  try {
+    const address = probeServer.address();
+    if (!address || typeof address === "string") throw new Error("Header probe address was unavailable");
+    await context.addCookies([{ name: "header-probe", value: sentinel, domain: "127.0.0.1", path: "/" }]);
+    await context.setExtraHTTPHeaders({ authorization: `Bearer ${sentinel}` });
+
+    const evidence = collectPublicEvidence(page);
+    await page.goto(`http://127.0.0.1:${address.port}/header-probe`);
+    await evidence.settle();
+
+    expect(evidence.stats.observedSensitiveHeaderNames).toEqual(["authorization", "cookie", "set-cookie"]);
+    expect(evidence.stats.forbiddenMatches).toBeGreaterThanOrEqual(3);
+    expect(evidence.stats.headerReadFailures).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve, reject) => probeServer.close((error) => error ? reject(error) : resolve()));
+  }
+});
 
 test("anonymous shopper approves matching and chooses every complete frontier plan", async ({ page }) => {
   const evidence = collectPublicEvidence(page);

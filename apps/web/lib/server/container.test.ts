@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
@@ -23,7 +24,7 @@ describe("fake server container", () => {
     const env = readServerEnv({
       NODE_ENV: "test",
       KASSAL_MODE: "fake",
-      KASSAL_API_KEY: "sentinel-review-only-7f42",
+      KASSAL_API_KEY: `runtime-${randomUUID()}`,
     });
 
     const container = createServerContainer(env);
