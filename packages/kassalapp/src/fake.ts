@@ -1,6 +1,6 @@
 import type { PriceObservation, Product } from "@handleplan/domain";
 
-import type { KassalappGateway } from "./client";
+import { KassalappGatewayError, type KassalappGateway } from "./client";
 
 export class FakeKassalappGateway implements KassalappGateway {
   constructor(
@@ -8,7 +8,8 @@ export class FakeKassalappGateway implements KassalappGateway {
     private readonly prices: readonly PriceObservation[],
   ) {}
 
-  async searchProducts(query: string, limit: number): Promise<Product[]> {
+  async searchProducts(query: string, limit: number, signal?: AbortSignal): Promise<Product[]> {
+    if (signal?.aborted) throw new KassalappGatewayError("CANCELLED");
     const normalizedQuery = query.trim().toLocaleLowerCase("nb-NO");
     return this.products
       .filter((product) => product.name.toLocaleLowerCase("nb-NO").includes(normalizedQuery))
@@ -16,7 +17,8 @@ export class FakeKassalappGateway implements KassalappGateway {
       .map((product) => ({ ...product }));
   }
 
-  async getBulkPrices(eans: string[]): Promise<PriceObservation[]> {
+  async getBulkPrices(eans: string[], signal?: AbortSignal): Promise<PriceObservation[]> {
+    if (signal?.aborted) throw new KassalappGatewayError("CANCELLED");
     const requested = new Set(eans);
     return this.prices
       .filter((price) => requested.has(price.ean))

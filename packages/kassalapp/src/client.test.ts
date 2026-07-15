@@ -58,17 +58,17 @@ describe("KassalappClient contract", () => {
 
     await expect(createClient(injectedFetch).getBulkPrices([EAN])).resolves.toEqual([
       {
-        amountOre: 2190,
-        chain: "extra",
-        ean: EAN,
-        observedAt: "2026-07-15T08:30:00.000Z",
-        source: "kassalapp",
-      },
-      {
         amountOre: 2240,
         chain: "rema-1000",
         ean: EAN,
         observedAt: "2026-07-15T08:45:00.000Z",
+        source: "kassalapp",
+      },
+      {
+        amountOre: 2190,
+        chain: "extra",
+        ean: EAN,
+        observedAt: "2026-07-15T08:30:00.000Z",
         source: "kassalapp",
       },
     ]);
@@ -149,9 +149,205 @@ describe("KassalappClient contract", () => {
     });
   });
 
+  it.each([
+    ["search envelope", { ...searchFixture, unknown_envelope_field: true }, "search"],
+    [
+      "nested product",
+      { data: [{ ...searchFixture.data[0], unknown_product_field: true }] },
+      "search",
+    ],
+    ["price envelope", { ...pricesFixture, unknown_envelope_field: true }, "prices"],
+    [
+      "nested price",
+      { data: [{ ...pricesFixture.data[0], unknown_price_field: true }] },
+      "prices",
+    ],
+  ] as const)("fails closed on an unknown field at the %s level", async (_name, body, method) => {
+    const injectedFetch: typeof fetch = async () => jsonResponse(body);
+    const client = createClient(injectedFetch);
+    const result =
+      method === "search"
+        ? client.searchProducts("melk", 10)
+        : client.getBulkPrices([EAN]);
+
+    await expect(result).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+
+  it("returns bulk rows in requested EAN, Phase 1 chain, then newest-observation order", async () => {
+    const eans = Array.from({ length: 101 }, (_, index) =>
+      String(1_000_000_000_000 + index),
+    );
+    const row = (
+      ean: string,
+      chain: "bunnpris" | "rema-1000" | "extra",
+      observedAt: string,
+      priceNok: number,
+    ) => ({ ean, chain, price_nok: priceNok, observed_at: observedAt });
+    const injectedFetch: typeof fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { eans: string[] };
+      if (body.eans.includes(eans[100]!)) {
+        return jsonResponse({
+          data: [row(eans[100]!, "extra", "2026-07-15T08:00:00Z", 30)],
+        });
+      }
+      return jsonResponse({
+        data: [
+          row(eans[1]!, "bunnpris", "2026-07-15T08:00:00Z", 25),
+          row(eans[0]!, "extra", "2026-07-14T08:00:00Z", 23),
+          row(eans[0]!, "extra", "2026-07-15T08:00:00Z", 21),
+          row(eans[0]!, "bunnpris", "2026-07-15T08:00:00Z", 24),
+          row(eans[0]!, "bunnpris", "2026-07-15T08:00:00Z", 22),
+        ],
+      });
+    };
+
+    const observations = await createClient(injectedFetch).getBulkPrices(eans);
+
+    expect(observations.map(({ ean, chain, amountOre }) => [ean, chain, amountOre])).toEqual([
+      [eans[0], "bunnpris", 2200],
+      [eans[0], "bunnpris", 2400],
+      [eans[0], "extra", 2100],
+      [eans[0], "extra", 2300],
+      [eans[1], "bunnpris", 2500],
+      [eans[100], "extra", 3000],
+    ]);
+  });
+
+  it("collapses duplicate requested EANs but preserves duplicate validated observations", async () => {
+    const requestBodies: string[][] = [];
+    const duplicate = pricesFixture.data[0];
+    const injectedFetch: typeof fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { eans: string[] };
+      requestBodies.push(body.eans);
+      return jsonResponse({ data: [duplicate, duplicate] });
+    };
+
+    const observations = await createClient(injectedFetch).getBulkPrices([EAN, EAN]);
+
+    expect(requestBodies).toEqual([[EAN]]);
+    expect(observations).toHaveLength(2);
+  });
+
+  it("rejects an invalid base URL with a fixed error that omits the input", () => {
+    const invalidUrl = `not-a-url-${API_KEY}`;
+
+    expect(() =>
+      new KassalappClient({ apiKey: API_KEY, baseUrl: invalidUrl, fetch }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "Ugyldig forespørsel til prisgrunnlaget.",
+      }),
+    );
+    try {
+      new KassalappClient({ apiKey: API_KEY, baseUrl: invalidUrl, fetch });
+    } catch (error) {
+      expect(String(error)).not.toContain(invalidUrl);
+      expect(String(error)).not.toContain(API_KEY);
+    }
+  });
+
+  it("returns a distinct sanitized cancellation before calling fetch", async () => {
+    const controller = new AbortController();
+    controller.abort(`private-reason-${API_KEY}`);
+    const injectedFetch = vi.fn<typeof fetch>();
+
+    const error = await createClient(injectedFetch)
+      .searchProducts("melk", 10, controller.signal)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: "CANCELLED",
+      message: "Forespørselen til prisgrunnlaget ble avbrutt.",
+    });
+    expect(String(error)).not.toContain(API_KEY);
+    expect(injectedFetch).not.toHaveBeenCalled();
+  });
+
+  it("honors an already-aborted bulk signal even when there are no EANs", async () => {
+    const caller = new AbortController();
+    caller.abort("stop empty request");
+    const injectedFetch = vi.fn<typeof fetch>();
+
+    await expect(createClient(injectedFetch).getBulkPrices([], caller.signal)).rejects.toMatchObject({
+      code: "CANCELLED",
+    });
+    expect(injectedFetch).not.toHaveBeenCalled();
+  });
+
+  it("cancels an active request without retry and cleans its timer and listener", async () => {
+    vi.useFakeTimers();
+    try {
+      const caller = new AbortController();
+      const addListener = vi.spyOn(caller.signal, "addEventListener");
+      const removeListener = vi.spyOn(caller.signal, "removeEventListener");
+      let attempts = 0;
+      const injectedFetch: typeof fetch = async (_input, init) => {
+        attempts += 1;
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("raw", "AbortError")));
+        });
+      };
+      const result = createClient(injectedFetch).searchProducts("melk", 10, caller.signal);
+      const rejection = expect(result).rejects.toMatchObject({ code: "CANCELLED" });
+
+      caller.abort(`private-reason-${API_KEY}`);
+      await vi.advanceTimersByTimeAsync(8_000);
+
+      await rejection;
+      expect(attempts).toBe(1);
+      expect(addListener).toHaveBeenCalledTimes(1);
+      expect(removeListener).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancellation after a retryable response prevents the second attempt", async () => {
+    const caller = new AbortController();
+    let attempts = 0;
+    const injectedFetch: typeof fetch = async () => {
+      attempts += 1;
+      caller.abort("stop before retry");
+      return jsonResponse({}, 429);
+    };
+
+    await expect(
+      createClient(injectedFetch).searchProducts("melk", 10, caller.signal),
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(attempts).toBe(1);
+  });
+
+  it("cleans the caller listener and timeout after success", async () => {
+    vi.useFakeTimers();
+    try {
+      const caller = new AbortController();
+      const addListener = vi.spyOn(caller.signal, "addEventListener");
+      const removeListener = vi.spyOn(caller.signal, "removeEventListener");
+
+      await expect(
+        createClient(async () => jsonResponse({ data: [] })).searchProducts(
+          "melk",
+          10,
+          caller.signal,
+        ),
+      ).resolves.toEqual([]);
+
+      expect(addListener).toHaveBeenCalledTimes(1);
+      expect(removeListener).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("aborts each attempt at eight seconds and does not retry a timeout", async () => {
     vi.useFakeTimers();
     try {
+      const caller = new AbortController();
+      const addListener = vi.spyOn(caller.signal, "addEventListener");
+      const removeListener = vi.spyOn(caller.signal, "removeEventListener");
       let attempts = 0;
       let suppliedSignal: AbortSignal | undefined;
       const injectedFetch: typeof fetch = async (_input, init) => {
@@ -164,7 +360,7 @@ describe("KassalappClient contract", () => {
         });
       };
 
-      const result = createClient(injectedFetch).searchProducts("melk", 10);
+      const result = createClient(injectedFetch).searchProducts("melk", 10, caller.signal);
       const rejection = expect(result).rejects.toMatchObject({ code: "TIMEOUT" });
       await vi.advanceTimersByTimeAsync(7_999);
       expect(suppliedSignal?.aborted).toBe(false);
@@ -172,6 +368,9 @@ describe("KassalappClient contract", () => {
       await rejection;
       expect(suppliedSignal?.aborted).toBe(true);
       expect(attempts).toBe(1);
+      expect(addListener).toHaveBeenCalledTimes(1);
+      expect(removeListener).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }

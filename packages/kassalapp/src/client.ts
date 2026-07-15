@@ -6,12 +6,18 @@ import { normalizeBulkPriceResponse, normalizeSearchResponse } from "./schemas";
 const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 const DEFAULT_TIMEOUT_MS = 8_000;
 const MAX_BULK_EANS = 100;
+const CHAIN_ORDER: Record<PriceObservation["chain"], number> = {
+  bunnpris: 0,
+  "rema-1000": 1,
+  extra: 2,
+};
 const eanSchema = z.string().regex(/^(?:\d{8}|\d{13})$/);
 
 export type KassalappGatewayErrorCode =
   | "INVALID_REQUEST"
   | "INVALID_RESPONSE"
   | "TIMEOUT"
+  | "CANCELLED"
   | "UPSTREAM_UNAVAILABLE";
 
 export class KassalappGatewayError extends Error {
@@ -22,8 +28,8 @@ export class KassalappGatewayError extends Error {
 }
 
 export interface KassalappGateway {
-  searchProducts(query: string, limit: number): Promise<Product[]>;
-  getBulkPrices(eans: string[]): Promise<PriceObservation[]>;
+  searchProducts(query: string, limit: number, signal?: AbortSignal): Promise<Product[]>;
+  getBulkPrices(eans: string[], signal?: AbortSignal): Promise<PriceObservation[]>;
 }
 
 export interface KassalappClientOptions {
@@ -38,6 +44,7 @@ interface AttemptResult {
 }
 
 class AttemptTimeoutError extends Error {}
+class AttemptCancelledError extends Error {}
 class InvalidResponseError extends Error {}
 
 function publicMessage(code: KassalappGatewayErrorCode): string {
@@ -48,9 +55,51 @@ function publicMessage(code: KassalappGatewayErrorCode): string {
       return "Prisgrunnlaget hadde et ukjent format.";
     case "TIMEOUT":
       return "Prisgrunnlaget svarte ikke i tide.";
+    case "CANCELLED":
+      return "Forespørselen til prisgrunnlaget ble avbrutt.";
     case "UPSTREAM_UNAVAILABLE":
       return "Prisgrunnlaget er midlertidig utilgjengelig.";
   }
+}
+
+function normalizeBaseUrl(input: string): string {
+  try {
+    const url = new URL(input);
+    if (
+      url.protocol !== "https:" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.search !== "" ||
+      url.hash !== ""
+    ) {
+      throw new Error("Invalid base URL");
+    }
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    throw new KassalappGatewayError("INVALID_REQUEST");
+  }
+}
+
+function sortBulkObservations(
+  observations: PriceObservation[],
+  requestedEans: readonly string[],
+): PriceObservation[] {
+  const eanOrder = new Map(requestedEans.map((ean, index) => [ean, index]));
+  return observations.sort((left, right) => {
+    const byEan =
+      (eanOrder.get(left.ean) ?? Number.MAX_SAFE_INTEGER) -
+      (eanOrder.get(right.ean) ?? Number.MAX_SAFE_INTEGER);
+    if (byEan !== 0) return byEan;
+
+    const byChain = CHAIN_ORDER[left.chain] - CHAIN_ORDER[right.chain];
+    if (byChain !== 0) return byChain;
+
+    const byObservedAt = right.observedAt.localeCompare(left.observedAt);
+    if (byObservedAt !== 0) return byObservedAt;
+
+    return left.amountOre - right.amountOre;
+  });
 }
 
 function toGatewayError(error: unknown): KassalappGatewayError {
@@ -64,10 +113,10 @@ export class KassalappClient implements KassalappGateway {
   private readonly baseUrl: string;
 
   constructor(private readonly options: KassalappClientOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
+    this.baseUrl = normalizeBaseUrl(options.baseUrl);
   }
 
-  async searchProducts(query: string, limit: number): Promise<Product[]> {
+  async searchProducts(query: string, limit: number, signal?: AbortSignal): Promise<Product[]> {
     const parsed = z
       .object({ query: z.string().trim().min(1), limit: z.number().int().min(1).max(100) })
       .safeParse({ query, limit });
@@ -80,16 +129,18 @@ export class KassalappClient implements KassalappGateway {
     url.searchParams.set("limit", String(parsed.data.limit));
 
     try {
-      return normalizeSearchResponse(await this.requestJson(url, { method: "GET" })).slice(
-        0,
-        parsed.data.limit,
-      );
+      return normalizeSearchResponse(
+        await this.requestJson(url, { method: "GET" }, signal),
+      ).slice(0, parsed.data.limit);
     } catch (error) {
       throw toGatewayError(error);
     }
   }
 
-  async getBulkPrices(eans: string[]): Promise<PriceObservation[]> {
+  async getBulkPrices(eans: string[], signal?: AbortSignal): Promise<PriceObservation[]> {
+    if (signal?.aborted) {
+      throw new KassalappGatewayError("CANCELLED");
+    }
     if (eans.length === 0) {
       return [];
     }
@@ -99,14 +150,21 @@ export class KassalappClient implements KassalappGateway {
       throw new KassalappGatewayError("INVALID_REQUEST");
     }
 
+    // Duplicate request EANs are collapsed at first occurrence. Every validated
+    // upstream observation row is preserved and canonicalized by the final sort.
+    const requestedEans = [...new Set(parsed.data)];
     const observations: PriceObservation[] = [];
-    for (let index = 0; index < parsed.data.length; index += MAX_BULK_EANS) {
-      const batch = parsed.data.slice(index, index + MAX_BULK_EANS);
+    for (let index = 0; index < requestedEans.length; index += MAX_BULK_EANS) {
+      const batch = requestedEans.slice(index, index + MAX_BULK_EANS);
       try {
-        const response = await this.requestJson(`${this.baseUrl}/products/prices-bulk`, {
-          body: JSON.stringify({ eans: batch }),
-          method: "POST",
-        });
+        const response = await this.requestJson(
+          `${this.baseUrl}/products/prices-bulk`,
+          {
+            body: JSON.stringify({ eans: batch }),
+            method: "POST",
+          },
+          signal,
+        );
         const normalized = normalizeBulkPriceResponse(response);
         const requested = new Set(batch);
         if (normalized.some((observation) => !requested.has(observation.ean))) {
@@ -118,12 +176,22 @@ export class KassalappClient implements KassalappGateway {
       }
     }
 
-    return observations;
+    return sortBulkObservations(observations, requestedEans);
   }
 
-  private async requestJson(input: string | URL, init: RequestInit): Promise<unknown> {
+  private async requestJson(
+    input: string | URL,
+    init: RequestInit,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const result = await this.attempt(input, init);
+      if (signal?.aborted) {
+        throw new KassalappGatewayError("CANCELLED");
+      }
+      const result = await this.attempt(input, init, signal);
+      if (signal?.aborted) {
+        throw new KassalappGatewayError("CANCELLED");
+      }
       if (result.response.ok) {
         return result.body;
       }
@@ -136,15 +204,37 @@ export class KassalappClient implements KassalappGateway {
     throw new KassalappGatewayError("UPSTREAM_UNAVAILABLE");
   }
 
-  private async attempt(input: string | URL, init: RequestInit): Promise<AttemptResult> {
+  private async attempt(
+    input: string | URL,
+    init: RequestInit,
+    callerSignal?: AbortSignal,
+  ): Promise<AttemptResult> {
+    if (callerSignal?.aborted) {
+      throw new KassalappGatewayError("CANCELLED");
+    }
+
     const controller = new AbortController();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    let cancelled = false;
+    let onCallerAbort: (() => void) | undefined;
 
     const timeout = new Promise<never>((_resolve, reject) => {
       timeoutId = setTimeout(() => {
+        timedOut = true;
         controller.abort();
         reject(new AttemptTimeoutError());
       }, DEFAULT_TIMEOUT_MS);
+    });
+
+    const cancellation = new Promise<never>((_resolve, reject) => {
+      if (callerSignal === undefined) return;
+      onCallerAbort = () => {
+        cancelled = true;
+        controller.abort();
+        reject(new AttemptCancelledError());
+      };
+      callerSignal.addEventListener("abort", onCallerAbort, { once: true });
     });
 
     const request = (async (): Promise<AttemptResult> => {
@@ -168,9 +258,12 @@ export class KassalappClient implements KassalappGateway {
     })();
 
     try {
-      return await Promise.race([request, timeout]);
+      return await Promise.race([request, timeout, cancellation]);
     } catch (error) {
-      if (error instanceof AttemptTimeoutError || controller.signal.aborted) {
+      if (error instanceof AttemptCancelledError || cancelled || callerSignal?.aborted) {
+        throw new KassalappGatewayError("CANCELLED");
+      }
+      if (error instanceof AttemptTimeoutError || timedOut) {
         throw new KassalappGatewayError("TIMEOUT");
       }
       if (error instanceof InvalidResponseError) {
@@ -179,6 +272,9 @@ export class KassalappClient implements KassalappGateway {
       throw new KassalappGatewayError("UPSTREAM_UNAVAILABLE");
     } finally {
       clearTimeout(timeoutId);
+      if (callerSignal !== undefined && onCallerAbort !== undefined) {
+        callerSignal.removeEventListener("abort", onCallerAbort);
+      }
     }
   }
 }

@@ -29,4 +29,17 @@ describe("FakeKassalappGateway", () => {
     expect(prices).toEqual([price]);
     expect(prices[0]).not.toBe(price);
   });
+
+  it("honors an already-aborted caller signal with the sanitized category", async () => {
+    const gateway = new FakeKassalappGateway([product], [price]);
+    const caller = new AbortController();
+    caller.abort("private fake reason");
+
+    await expect(gateway.searchProducts("melk", 10, caller.signal)).rejects.toMatchObject({
+      code: "CANCELLED",
+    });
+    await expect(gateway.getBulkPrices([product.ean], caller.signal)).rejects.toMatchObject({
+      code: "CANCELLED",
+    });
+  });
 });
