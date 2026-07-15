@@ -109,15 +109,27 @@ function isCompleteSafeResponse(response: ParsedResultResponse, basket: BrowserB
   });
 }
 
+async function cancelResponseBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
+  if (body === null) return;
+  try {
+    await body.cancel();
+  } catch {
+    // Cleanup is best effort and must not replace the sanitized UI state.
+  }
+}
+
 async function readSafeResponse(response: Response, basket: BrowserBasket): Promise<ResultResponse | undefined> {
   const contentType = response.headers.get("content-type") ?? "";
   const token = "[!#$%&'*+.^_`|~0-9A-Za-z-]+";
   const quotedString = '"(?:[^"\\\\\\r\\n]|\\\\[\\t\\x20-\\x7e])*"';
   const parameter = `(?:${token})\\s*=\\s*(?:${token}|${quotedString})`;
-  if (!new RegExp(`^application/json(?:\\s*;\\s*${parameter})*\\s*$`, "i").test(contentType)) return undefined;
+  if (!new RegExp(`^application/json(?:\\s*;\\s*${parameter})*\\s*$`, "i").test(contentType)) {
+    await cancelResponseBody(response.body);
+    return undefined;
+  }
   const contentLength = response.headers.get("content-length");
   if (contentLength !== null && /^\d+$/.test(contentLength) && Number(contentLength) > MAX_RESPONSE_BYTES) {
-    try { await response.body?.cancel(); } catch { /* Cleanup only. */ }
+    await cancelResponseBody(response.body);
     return undefined;
   }
   if (response.body === null) return undefined;
@@ -125,7 +137,7 @@ async function readSafeResponse(response: Response, basket: BrowserBasket): Prom
   try {
     reader = response.body.getReader();
   } catch {
-    try { await response.body.cancel(); } catch { /* Cleanup only. */ }
+    await cancelResponseBody(response.body);
     return undefined;
   }
   const decoder = new TextDecoder("utf-8", { fatal: true });

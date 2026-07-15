@@ -117,4 +117,50 @@ describe("PlanSelector", () => {
     expect(projected.at(-1)?.id).toBe(ordered.at(-1)?.id);
     expect(new Set(projected.map(({ id }) => id)).size).toBe(7);
   });
+
+  it("preserves a unique two-store compromise when uniform sampling would crowd it out", () => {
+    const oneStore = Array.from({ length: 10 }, (_, index) =>
+      plan(`one-${index}`, 30_000 - index * 100, ["extra"]),
+    );
+    const compromise = plan("only-two-store", 28_900, ["extra", "rema-1000"]);
+    const threeStore = Array.from({ length: 13 }, (_, index) =>
+      plan(`three-${index}`, 28_800 - index * 100, ["extra", "rema-1000", "bunnpris"]),
+    );
+    const plans = [...oneStore, compromise, ...threeStore];
+
+    const projected = projectPlanFrontier(plans);
+
+    expect(projected).toHaveLength(7);
+    expect(projected[0]?.id).toBe(orderPlanFrontier(plans)[0]?.id);
+    expect(projected.at(-1)?.id).toBe(orderPlanFrontier(plans).at(-1)?.id);
+    expect(projected.map(({ id }) => id)).toContain("only-two-store");
+    expect(new Set(projected.map(({ id }) => id)).size).toBe(projected.length);
+    expect(new Set(projected.map(({ chains }) => chains.length))).toEqual(new Set([1, 2, 3]));
+  });
+
+  it("selects repeated transition representatives deterministically across input permutations", () => {
+    const sharedEndpoint = plan("endpoint", 10_000, ["extra"], ["swap-a", "swap-b"]);
+    const plans = [
+      sharedEndpoint,
+      plan("two-a", 10_200, ["extra", "rema-1000"]),
+      plan("one-a", 10_300, ["extra"]),
+      plan("three-a", 10_400, ["extra", "rema-1000", "bunnpris"]),
+      plan("two-b", 10_500, ["extra", "rema-1000"]),
+      plan("one-b", 10_600, ["extra"]),
+      plan("three-b", 10_700, ["extra", "rema-1000", "bunnpris"]),
+      plan("two-c", 10_800, ["extra", "rema-1000"]),
+      plan("one-c", 10_900, ["extra"]),
+    ];
+
+    const projected = projectPlanFrontier(plans);
+    const reversed = projectPlanFrontier([...plans].reverse());
+
+    expect(projected).toHaveLength(7);
+    expect(projected.map(({ id }) => id)).toEqual(reversed.map(({ id }) => id));
+    expect(new Set(projected.map(({ chains }) => chains.length))).toEqual(new Set([1, 2, 3]));
+    expect(new Set(projected.map(({ id }) => id)).size).toBe(projected.length);
+    expect(projected.map(({ id }) => id)).toEqual(
+      orderPlanFrontier(plans).filter(({ id }) => projected.some((candidate) => candidate.id === id)).map(({ id }) => id),
+    );
+  });
 });

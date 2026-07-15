@@ -271,6 +271,32 @@ describe("Planlegg result workspace", () => {
     expect(await screen.findByRole("heading", { name: "Kunne ikke vise handleplanen" })).toBeVisible();
   });
 
+  it("cancels a never-ending response stream when the JSON media type is invalid", async () => {
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new Uint8Array([123])); },
+      cancel() { cancelled = true; },
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(stream, { headers: { "content-type": "application/jsonp" } })));
+    render(<ResultPage />);
+
+    expect(await screen.findByRole("heading", { name: "Kunne ikke vise handleplanen" })).toBeVisible();
+    expect(cancelled).toBe(true);
+  });
+
+  it.each([
+    ["synchronous", () => { throw new Error("sync cleanup failure"); }],
+    ["asynchronous", () => Promise.reject(new Error("async cleanup failure"))],
+  ])("swallows %s invalid-media cancellation errors", async (_label, cancel) => {
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    const stream = new ReadableStream<Uint8Array>({ cancel });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(stream, { headers: { "content-type": "text/plain" } })));
+    render(<ResultPage />);
+
+    expect(await screen.findByRole("heading", { name: "Kunne ikke vise handleplanen" })).toBeVisible();
+  });
+
   it("cancels an unbounded response stream after 128 KiB", async () => {
     localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
     let cancelled = false;

@@ -72,18 +72,59 @@ export function balancedPlanId(plans: readonly PlanResult[]): string | undefined
 
 export const FRONTIER_DISPLAY_MAX = 7;
 
-export function projectPlanFrontier(
-  plans: readonly PlanResult[],
-  maximum = FRONTIER_DISPLAY_MAX,
-): PlanResult[] {
+export function projectPlanFrontier(plans: readonly PlanResult[]): PlanResult[] {
+  const maximum = FRONTIER_DISPLAY_MAX;
   const ordered = orderPlanFrontier(plans);
-  if (ordered.length <= maximum || maximum < 2) return ordered.slice(0, Math.max(maximum, 0));
+  if (ordered.length <= maximum) return ordered;
   const indexes = new Set<number>();
-  for (let position = 0; position < maximum; position += 1) {
-    indexes.add(Math.round(position * (ordered.length - 1) / (maximum - 1)));
+
+  const convenience = [...ordered].sort(compareConvenience)[0]!;
+  const savings = [...ordered].sort(compareSavings)[0]!;
+  indexes.add(ordered.findIndex(({ id }) => id === convenience.id));
+  indexes.add(ordered.findIndex(({ id }) => id === savings.id));
+
+  const transitions = ordered.flatMap((candidate, index) => {
+    const next = ordered[index + 1];
+    return next && candidate.chains.length !== next.chains.length ? [[index, index + 1] as const] : [];
+  });
+  const transitionAdjacency = (index: number) => transitions.reduce(
+    (count, pair) => count + (pair.includes(index) ? 1 : 0),
+    0,
+  );
+
+  const chainCounts = [...new Set(ordered.map(({ chains }) => chains.length))].sort((left, right) => left - right);
+  for (const chainCount of chainCounts) {
+    if ([...indexes].some((index) => ordered[index]?.chains.length === chainCount)) continue;
+    const representative = ordered
+      .map((_candidate, index) => index)
+      .filter((index) => ordered[index]!.chains.length === chainCount)
+      .sort((left, right) => transitionAdjacency(right) - transitionAdjacency(left) || left - right)[0];
+    if (representative !== undefined && indexes.size < maximum) indexes.add(representative);
   }
-  for (let index = 0; indexes.size < maximum && index < ordered.length; index += 1) indexes.add(index);
-  return [...indexes].sort((left, right) => left - right).slice(0, maximum).map((index) => ordered[index]!);
+
+  for (const pair of transitions) {
+    const missing = pair.filter((index) => !indexes.has(index));
+    if (missing.length <= maximum - indexes.size) missing.forEach((index) => indexes.add(index));
+  }
+  for (const pair of transitions) {
+    for (const index of pair) {
+      if (indexes.size < maximum) indexes.add(index);
+    }
+  }
+
+  while (indexes.size < maximum) {
+    const remaining = ordered
+      .map((_candidate, index) => index)
+      .filter((index) => !indexes.has(index));
+    if (remaining.length === 0) break;
+    remaining.sort((left, right) => {
+      const leftDistance = Math.min(...[...indexes].map((index) => Math.abs(index - left)));
+      const rightDistance = Math.min(...[...indexes].map((index) => Math.abs(index - right)));
+      return rightDistance - leftDistance || left - right;
+    });
+    indexes.add(remaining[0]!);
+  }
+  return [...indexes].sort((left, right) => left - right).map((index) => ordered[index]!);
 }
 
 function equalObjective(plans: readonly PlanResult[]): boolean {
