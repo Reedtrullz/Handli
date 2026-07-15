@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/price-cache.ts"
+    ".": "./src/price-cache.ts",
+    "./client": "./src/client.ts"
   },
   "scripts": {
     "db:migrate": "drizzle-kit push",

@@ -10,6 +10,15 @@ importers:
 
   apps/web:
     dependencies:
+      '@handleplan/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@handleplan/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@handleplan/kassalapp':
+        specifier: workspace:*
+        version: link:../../packages/kassalapp
       next:
         specifier: 16.2.10
         version: 16.2.10(@babel/core@7.29.7)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
