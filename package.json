@@ -6,9 +6,15 @@
     "node": ">=22"
   },
   "scripts": {
+    "build": "pnpm --filter web build",
     "dev": "pnpm --filter web dev",
+    "e2e": "playwright test",
     "lint": "pnpm -r lint",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.11.0",
+    "@playwright/test": "1.58.0"
   }
 }

@@ -5,5 +5,7 @@
 .env*
 !.env.example
 .next/
+playwright-report/
+test-results/
 coverage/
 node_modules/

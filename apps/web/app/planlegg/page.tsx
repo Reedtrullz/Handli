@@ -1,5 +1,7 @@
 import { BasketWorkspace } from "../../components/planlegg/basket-workspace";
 
+export const metadata = { title: "Handleplan" };
+
 export default function PlanleggPage() {
   return (
     <div className="app-frame">

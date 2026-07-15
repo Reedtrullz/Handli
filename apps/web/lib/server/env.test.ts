@@ -28,10 +28,26 @@ describe("readServerEnv", () => {
         NEXT_PUBLIC_UNRELATED: "visible",
       }),
     ).toEqual({
+      mode: "real",
       KASSAL_API_KEY: "test-key",
       DATABASE_URL: "postgresql://localhost/handleplan",
       KASSAL_BASE_URL: "https://kassal.app/api/v1",
     });
+  });
+
+  it("allows an explicit fake mode without production credentials", () => {
+    expect(
+      readServerEnv({
+        KASSAL_MODE: "fake",
+        KASSAL_API_KEY: "must-not-be-read",
+        NEXT_PUBLIC_KASSAL_MODE: "fake",
+      }),
+    ).toEqual({ mode: "fake" });
+  });
+
+  it("rejects unsupported modes and keeps real mode strict", () => {
+    expect(() => readServerEnv({ KASSAL_MODE: "preview" })).toThrow(/KASSAL_MODE/);
+    expect(() => readServerEnv({ KASSAL_MODE: "real" })).toThrow(/KASSAL_API_KEY/);
   });
 
   it.each(["https://db.example/handleplan", "mysql://db.example/handleplan", "ftp://db.example/handleplan"])(
@@ -66,13 +82,13 @@ describe("readServerEnv", () => {
       "postgres://localhost/handleplan",
       "postgresql://localhost/handleplan",
     ]) {
-      expect(
-        readServerEnv({
-          KASSAL_API_KEY: "test-key",
-          DATABASE_URL,
-          KASSAL_BASE_URL: "https://kassal.app/api/v1",
-        }).DATABASE_URL,
-      ).toBe(DATABASE_URL);
+      const parsed = readServerEnv({
+        KASSAL_API_KEY: "test-key",
+        DATABASE_URL,
+        KASSAL_BASE_URL: "https://kassal.app/api/v1",
+      });
+      expect(parsed.mode).toBe("real");
+      if (parsed.mode === "real") expect(parsed.DATABASE_URL).toBe(DATABASE_URL);
     }
   });
 });

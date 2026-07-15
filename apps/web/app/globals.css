@@ -223,6 +223,7 @@ a { color: inherit; }
 .plan-option-heading > span { font: 650 13px var(--font-mono); }
 .plan-option-copy > span:nth-child(2) { font-family: var(--font-display); font-weight: 650; }
 .plan-option-copy small { color: var(--muted); font-size: 12px; }
+.plan-option.selected .plan-option-copy small { color: var(--forest-650); }
 .price-provenance { display: grid; gap: 12px; padding: 0 8px; }
 .price-provenance p { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; margin: 0; color: var(--muted); font-size: 12px; line-height: 17px; }
 .price-provenance span { color: var(--line-strong); }
