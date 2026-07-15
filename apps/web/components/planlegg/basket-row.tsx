@@ -3,6 +3,8 @@
 import type { MatchRule, Need, Product } from "@handleplan/domain";
 import { useState } from "react";
 
+import { BASKET_QUANTITY_MAX, BASKET_QUANTITY_MIN } from "../../lib/browser-basket";
+
 interface BasketRowProps {
   need: Need;
   rule: MatchRule;
@@ -31,7 +33,11 @@ export function BasketRow({
 
   function commitQuantity(): void {
     const quantity = Number(quantityDraft);
-    if (Number.isInteger(quantity) && quantity >= 1 && quantity <= 999) {
+    if (
+      Number.isSafeInteger(quantity) &&
+      quantity >= BASKET_QUANTITY_MIN &&
+      quantity <= BASKET_QUANTITY_MAX
+    ) {
       onQuantityChange(quantity);
     } else {
       setQuantityDraft(String(need.quantity));
@@ -43,8 +49,8 @@ export function BasketRow({
       <input
         className="row-quantity"
         type="number"
-        min="1"
-        max="999"
+        min={BASKET_QUANTITY_MIN}
+        max={BASKET_QUANTITY_MAX}
         step="1"
         inputMode="numeric"
         aria-label={`Antall ${label}`}

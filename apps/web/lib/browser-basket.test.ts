@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   BASKET_STORAGE_KEY,
+  BASKET_QUANTITY_MAX,
+  BASKET_QUANTITY_MIN,
   emptyBasketV1,
   loadBasket,
+  removeBasketNeed,
   saveBasket,
 } from "./browser-basket";
 
@@ -74,6 +77,63 @@ describe("browser basket persistence", () => {
     expect(loadBasket(memoryStorage(value))).toEqual(emptyBasketV1);
   });
 
+  it.each([
+    [BASKET_QUANTITY_MIN, true],
+    [BASKET_QUANTITY_MAX, true],
+    [BASKET_QUANTITY_MIN - 1, false],
+    [BASKET_QUANTITY_MAX + 1, false],
+  ])("enforces the shared quantity boundary for %s", (quantity, valid) => {
+    const stored = JSON.stringify({
+      ...populatedBasket,
+      needs: [{ ...populatedBasket.needs[0], quantity }],
+    });
+
+    expect(loadBasket(memoryStorage(stored))).toEqual(valid
+      ? { ...populatedBasket, needs: [{ ...populatedBasket.needs[0], quantity }] }
+      : emptyBasketV1);
+  });
+
+  it.each([
+    [
+      "duplicate rule IDs",
+      {
+        ...populatedBasket,
+        matchingRules: [
+          populatedBasket.matchingRules[0],
+          { ...populatedBasket.matchingRules[0] },
+        ],
+      },
+    ],
+    [
+      "an orphan rule",
+      {
+        ...populatedBasket,
+        matchingRules: [
+          populatedBasket.matchingRules[0],
+          {
+            id: "rule-orphan",
+            mode: "flexible",
+            productFamily: "ost",
+            userApproved: true,
+            explanation: "Samme type, valgfritt merke",
+          },
+        ],
+      },
+    ],
+    [
+      "a rule shared by two needs",
+      {
+        ...populatedBasket,
+        needs: [
+          populatedBasket.needs[0],
+          { ...populatedBasket.needs[0], id: "need-2" },
+        ],
+      },
+    ],
+  ])("resets stored state with %s", (_label, basket) => {
+    expect(loadBasket(memoryStorage(JSON.stringify(basket)))).toEqual(emptyBasketV1);
+  });
+
   it("round-trips only the strict safe basket shape and never an origin", () => {
     const storage = memoryStorage();
 
@@ -95,5 +155,20 @@ describe("browser basket persistence", () => {
 
     expect(loadBasket(unavailable)).toEqual(emptyBasketV1);
     expect(() => saveBasket(populatedBasket, unavailable)).not.toThrow();
+  });
+
+  it("preserves a rule and exact product still referenced by another need during defensive deletion", () => {
+    const sharedRuleBasket = {
+      ...populatedBasket,
+      needs: [
+        populatedBasket.needs[0],
+        { ...populatedBasket.needs[0], id: "need-2" },
+      ],
+    };
+
+    expect(removeBasketNeed(sharedRuleBasket, "need-1")).toEqual({
+      ...populatedBasket,
+      needs: [{ ...populatedBasket.needs[0], id: "need-2" }],
+    });
   });
 });

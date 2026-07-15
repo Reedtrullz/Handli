@@ -115,6 +115,7 @@ a { color: inherit; }
 .composer-add { height: 52px; padding-inline: 30px; }
 
 .search-popover { position: absolute; top: 126px; left: 0; right: 0; z-index: 10; padding: 8px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius); }
+.search-popover[hidden] { display: none; }
 .search-popover p { margin: 0; padding: 14px; color: var(--muted); }
 .search-popover [role="alert"] { color: var(--coral-600); }
 .search-popover ul { list-style: none; margin: 0; padding: 0; }
@@ -208,7 +209,7 @@ a { color: inherit; }
   .need-search-wrap { padding-left: 10px; }
   .composer-add { width: 100%; }
   .search-popover { top: 183px; }
-  .quantity-stepper button { width: 40px; }
+  .quantity-stepper button { width: 44px; }
   .brand-approval { grid-template-columns: 1fr; }
   .brand-approval label { grid-column: auto; }
   .basket-row { grid-template-columns: 50px minmax(0, 1fr) 44px; padding-left: 10px; }

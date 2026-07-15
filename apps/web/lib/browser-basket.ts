@@ -7,12 +7,14 @@ import {
 import { z } from "zod";
 
 export const BASKET_STORAGE_KEY = "handleplan:basket:v1";
+export const BASKET_QUANTITY_MIN = 1;
+export const BASKET_QUANTITY_MAX = 999;
 
 const browserNeedSchema = z
   .object({
     id: z.string().min(1),
     query: z.string().min(1),
-    quantity: z.number().int().positive(),
+    quantity: z.number().int().min(BASKET_QUANTITY_MIN).max(BASKET_QUANTITY_MAX).safe(),
     quantityUnit: z.enum(["each", "g", "ml"]),
     matchRuleId: z.string().min(1),
     required: z.boolean(),
@@ -45,9 +47,18 @@ export const browserBasketSchema = z
   })
   .strict()
   .superRefine(({ needs, matchingRules, products }, context) => {
-    const ruleIds = new Set(matchingRules.map(({ id }) => id));
+    const ruleIds = new Set<string>();
+    const ruleUsage = new Map<string, number>();
     const productEans = new Set(products.map(({ ean }) => ean));
     const ids = new Set<string>();
+
+    for (const rule of matchingRules) {
+      if (ruleIds.has(rule.id)) {
+        context.addIssue({ code: "custom", message: "Matching rule IDs must be unique" });
+      }
+      ruleIds.add(rule.id);
+      ruleUsage.set(rule.id, 0);
+    }
 
     for (const need of needs) {
       if (ids.has(need.id)) {
@@ -56,10 +67,18 @@ export const browserBasketSchema = z
       ids.add(need.id);
       if (!ruleIds.has(need.matchRuleId)) {
         context.addIssue({ code: "custom", message: "Need must reference an approved rule" });
+      } else {
+        ruleUsage.set(need.matchRuleId, (ruleUsage.get(need.matchRuleId) ?? 0) + 1);
       }
     }
 
     for (const rule of matchingRules) {
+      if (ruleUsage.get(rule.id) !== 1) {
+        context.addIssue({
+          code: "custom",
+          message: "Every matching rule must be referenced by exactly one need",
+        });
+      }
       if (rule.mode === "exact" && (!rule.exactEan || !productEans.has(rule.exactEan))) {
         context.addIssue({ code: "custom", message: "Exact rules must reference a stored product" });
       }
@@ -125,4 +144,22 @@ export function saveBasket(
   } catch {
     // Private mode, blocked storage, quota errors, and invalid state stay non-fatal.
   }
+}
+
+export function removeBasketNeed(basket: BrowserBasket, needId: string): BrowserBasket {
+  const needs = basket.needs.filter(({ id }) => id !== needId);
+  const referencedRuleIds = new Set(needs.map(({ matchRuleId }) => matchRuleId));
+  const matchingRules = basket.matchingRules.filter(({ id }) => referencedRuleIds.has(id));
+  const referencedExactEans = new Set(
+    matchingRules.flatMap((rule) =>
+      rule.mode === "exact" && rule.exactEan ? [rule.exactEan] : [],
+    ),
+  );
+
+  return {
+    ...basket,
+    needs,
+    matchingRules,
+    products: basket.products.filter(({ ean }) => referencedExactEans.has(ean)),
+  };
 }

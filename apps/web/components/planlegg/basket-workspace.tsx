@@ -5,6 +5,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 
 import {
   loadBasket,
+  removeBasketNeed,
   saveBasket,
   type BrowserBasket,
 } from "../../lib/browser-basket";
@@ -148,19 +149,8 @@ function BasketWorkspaceClient({
     setAllowedBrands("");
   }
 
-  function removeNeed(needId: string, ruleId: string): void {
-    setBasket((current) => {
-      const nextRules = current.matchingRules.filter(({ id }) => id !== ruleId);
-      const exactEans = new Set(
-        nextRules.flatMap((rule) => rule.mode === "exact" ? [rule.exactEan] : []),
-      );
-      return {
-        ...current,
-        needs: current.needs.filter(({ id }) => id !== needId),
-        matchingRules: nextRules,
-        products: current.products.filter(({ ean }) => exactEans.has(ean)),
-      };
-    });
+  function removeNeed(needId: string): void {
+    setBasket((current) => removeBasketNeed(current, needId));
   }
 
   const quantities = basket.needs.reduce((sum, need) => sum + need.quantity, 0);
@@ -255,7 +245,7 @@ function BasketWorkspaceClient({
                             candidate.id === need.id ? { ...candidate, quantity } : candidate,
                           ),
                         }))}
-                        onRemove={() => removeNeed(need.id, rule.id)}
+                        onRemove={() => removeNeed(need.id)}
                       />
                     );
                   })}
