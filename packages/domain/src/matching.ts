@@ -1,6 +1,7 @@
 import {
   matchRuleSchema,
   needSchema,
+  productSchema,
   type MatchRule,
   type Need,
   type Product,
@@ -76,7 +77,11 @@ export function matchProducts(
     return [];
   }
 
-  const matches = products
+  const validProducts = products.flatMap((product) => {
+    const parsedProduct = productSchema.safeParse(product);
+    return parsedProduct.success ? [parsedProduct.data] : [];
+  });
+  const matches = validProducts
     .filter((product) => matchesConstraints(product, parsedRule.data))
     .sort((left, right) => compareText(productKey(left), productKey(right)));
 

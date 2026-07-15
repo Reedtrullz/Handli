@@ -173,10 +173,6 @@ function planForSubset(
   };
 }
 
-function objectiveKey(plan: PlanResult): string {
-  return `${plan.totalOre}:${plan.chains.length}:${plan.substitutions.length}`;
-}
-
 function dominates(left: PlanResult, right: PlanResult): boolean {
   const noWorse =
     left.totalOre <= right.totalOre &&
@@ -244,14 +240,7 @@ export function calculatePlans(request: PlanRequest, now: Date): PlanResult[] {
     uniqueAssignments.set(planIdentity(plan.assignments), plan);
   }
 
-  const uniqueObjectives = new Map<string, PlanResult>();
-  for (const plan of [...uniqueAssignments.values()].sort(comparePlans)) {
-    if (!uniqueObjectives.has(objectiveKey(plan))) {
-      uniqueObjectives.set(objectiveKey(plan), plan);
-    }
-  }
-
-  const candidates = [...uniqueObjectives.values()];
+  const candidates = [...uniqueAssignments.values()];
   return candidates
     .filter((candidate) => !candidates.some((other) => other !== candidate && dominates(other, candidate)))
     .sort(comparePlans);

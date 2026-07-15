@@ -118,6 +118,23 @@ describe("matchProducts", () => {
     expect(matchProducts(need, malformedRule, products)).toEqual([]);
   });
 
+  it("ignores malformed runtime product rows", () => {
+    const rule: MatchRule = {
+      ...baseRule,
+      mode: "flexible",
+      productFamily: "milk",
+    };
+    const malformedProduct = {
+      ean: "not-an-ean",
+      name: "",
+      productFamily: "milk",
+    } as Product;
+
+    expect(matchProducts(need, rule, [malformedProduct, products[0]!])).toEqual([
+      products[0],
+    ]);
+  });
+
   it("returns matches in stable EAN order independent of product input order", () => {
     const rule: MatchRule = {
       ...baseRule,

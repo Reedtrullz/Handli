@@ -260,11 +260,12 @@ describe("calculatePlans", () => {
     expect(calculatePlans(request(), new Date("invalid"))).toEqual([]);
   });
 
-  it("deduplicates equal objective plans and is stable across input ordering", () => {
+  it("retains distinct equal-objective plans, deduplicates identities, and is stable", () => {
     const baseline = request({
       needs: [needs[0]!],
       matchingRules: [rules[0]!],
       prices: [
+        price("7038010000010", "extra", 1_000),
         price("7038010000010", "extra", 1_000),
         price("7038010000010", "rema-1000", 1_000),
       ],
@@ -280,8 +281,10 @@ describe("calculatePlans", () => {
     const first = calculatePlans(baseline, NOW);
     const second = calculatePlans(reordered, NOW);
 
-    expect(first).toHaveLength(1);
+    expect(first).toHaveLength(2);
     expect(second).toEqual(first);
-    expect(first[0]?.id).toBe(second[0]?.id);
+    expect(first.map(({ chains }) => chains)).toEqual([["extra"], ["rema-1000"]]);
+    expect(new Set(first.map(({ id }) => id)).size).toBe(first.length);
+    expect(first.every(({ totalOre, substitutions }) => totalOre === 2_000 && substitutions.length === 0)).toBe(true);
   });
 });
