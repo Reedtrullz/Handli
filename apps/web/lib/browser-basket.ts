@@ -9,6 +9,7 @@ import { z } from "zod";
 export const BASKET_STORAGE_KEY = "handleplan:basket:v1";
 export const BASKET_QUANTITY_MIN = 1;
 export const BASKET_QUANTITY_MAX = 999;
+export const BASKET_NEEDS_MAX = 50;
 
 const browserNeedSchema = z
   .object({
@@ -35,9 +36,10 @@ const browserProductSchema = z
 export const browserBasketSchema = z
   .object({
     version: z.literal(1),
-    needs: z.array(browserNeedSchema),
-    matchingRules: z.array(matchRuleSchema),
-    products: z.array(browserProductSchema),
+    needs: z.array(browserNeedSchema).max(BASKET_NEEDS_MAX),
+    matchingRules: z.array(matchRuleSchema).max(BASKET_NEEDS_MAX),
+    products: z.array(browserProductSchema).max(200),
+    selectedPlanId: z.string().min(1).max(200).optional(),
     travel: z
       .object({
         enabled: z.boolean(),
@@ -90,6 +92,7 @@ export interface BrowserBasket {
   needs: Need[];
   matchingRules: MatchRule[];
   products: Product[];
+  selectedPlanId?: string;
   travel: { enabled: boolean; mode: "car" | "bike" };
 }
 

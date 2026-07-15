@@ -143,6 +143,15 @@ describe("browser basket persistence", () => {
     expect(storage.getItem(BASKET_STORAGE_KEY)).not.toContain("origin");
   });
 
+  it("round-trips only the selected plan ID without changing basket relationships", () => {
+    const storage = memoryStorage();
+
+    saveBasket({ ...populatedBasket, selectedPlanId: "plan-balanced" }, storage);
+
+    expect(loadBasket(storage)).toEqual({ ...populatedBasket, selectedPlanId: "plan-balanced" });
+    expect(storage.getItem(BASKET_STORAGE_KEY)).not.toContain("origin");
+  });
+
   it("fails closed without throwing when browser storage is unavailable or full", () => {
     const unavailable = {
       getItem: () => {
