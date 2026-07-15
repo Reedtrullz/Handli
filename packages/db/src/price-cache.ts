@@ -1,13 +1,18 @@
 import { priceObservationSchema, type PriceObservation } from "@handleplan/domain";
-import { asc, inArray, sql } from "drizzle-orm";
+import { asc, inArray, lt, sql } from "drizzle-orm";
 
 import type { HandleplanDatabase } from "./client";
 import { priceCache, type NewPriceCacheRow, type PriceCacheRow } from "./schema";
 
 export interface PriceCache {
   getMany(eans: string[]): Promise<PriceObservation[]>;
-  putMany(rows: PriceObservation[]): Promise<void>;
+  putMany(rows: PriceObservation[], now?: Date): Promise<void>;
 }
+
+export const cacheReplacementCondition = lt(
+  priceCache.observedAt,
+  sql.raw('excluded."observed_at"'),
+);
 
 export function toPriceCacheRow(observation: PriceObservation): NewPriceCacheRow {
   return {
@@ -34,10 +39,26 @@ export function dedupePriceObservations(rows: PriceObservation[]): PriceObservat
   const byKey = new Map<string, PriceObservation>();
 
   for (const row of rows) {
-    byKey.set(`${row.ean}\u0000${row.chain}`, row);
+    const key = `${row.ean}\u0000${row.chain}`;
+    const previous = byKey.get(key);
+    // A batch keeps its last equal-timestamp input. Once persisted, the strict
+    // conflict condition below preserves the existing row on equal timestamps.
+    if (previous === undefined || row.observedAt >= previous.observedAt) {
+      byKey.set(key, row);
+    }
   }
 
   return [...byKey.values()];
+}
+
+export function filterCacheablePriceObservations(
+  rows: PriceObservation[],
+  now: Date,
+): PriceObservation[] {
+  if (!Number.isFinite(now.getTime())) {
+    throw new Error("A valid cache observation boundary is required");
+  }
+  return rows.filter((row) => new Date(row.observedAt).getTime() <= now.getTime());
 }
 
 export class PostgresPriceCache implements PriceCache {
@@ -56,8 +77,8 @@ export class PostgresPriceCache implements PriceCache {
     return rows.map(fromPriceCacheRow);
   }
 
-  async putMany(rows: PriceObservation[]): Promise<void> {
-    const dedupedRows = dedupePriceObservations(rows);
+  async putMany(rows: PriceObservation[], now: Date = new Date()): Promise<void> {
+    const dedupedRows = dedupePriceObservations(filterCacheablePriceObservations(rows, now));
     if (dedupedRows.length === 0) return;
 
     await this.db
@@ -70,6 +91,7 @@ export class PostgresPriceCache implements PriceCache {
           observedAt: sql`excluded.observed_at`,
           fetchedAt: sql`now()`,
         },
+        setWhere: cacheReplacementCondition,
       });
   }
 }

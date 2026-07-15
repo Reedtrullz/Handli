@@ -1,6 +1,7 @@
 import type { PriceCache } from "@handleplan/db";
 import {
   calculatePlans,
+  matchProducts,
   type MatchRule,
   type Need,
   type PlanResult,
@@ -101,6 +102,21 @@ export const planApiRequestSchema = z
     if (!needs.some(({ required }) => required)) {
       context.addIssue({ code: "custom", message: "At least one need must be required" });
     }
+    const rulesById = new Map(matchingRules.map((rule) => [rule.id, rule]));
+    needs.forEach((need, index) => {
+      if (!need.required) return;
+      const rule = rulesById.get(need.matchRuleId);
+      if (
+        rule !== undefined &&
+        matchProducts(need as Need, rule as MatchRule, products as Product[]).length === 0
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Every required need must have an approved catalog candidate",
+          path: ["needs", index],
+        });
+      }
+    });
   });
 
 export type PlanApiRequest = z.infer<typeof planApiRequestSchema>;
@@ -134,13 +150,17 @@ export class PlanRequestCancelledError extends Error {
   }
 }
 
-function normalizePrices(rows: PriceObservation[]): PriceObservation[] {
+function normalizePrices(rows: PriceObservation[], now: Date): PriceObservation[] {
   if (rows.length > MAX_PRICE_OBSERVATIONS) {
+    throw new KassalappGatewayError("INVALID_RESPONSE");
+  }
+  if (!Number.isFinite(now.getTime())) {
     throw new KassalappGatewayError("INVALID_RESPONSE");
   }
 
   const latest = new Map<string, PriceObservation>();
   for (const row of rows) {
+    if (new Date(row.observedAt).getTime() > now.getTime()) continue;
     const key = `${row.ean}\u0000${row.chain}`;
     const previous = latest.get(key);
     if (
@@ -157,6 +177,24 @@ function normalizePrices(rows: PriceObservation[]): PriceObservation[] {
       left.chain.localeCompare(right.chain) ||
       right.observedAt.localeCompare(left.observedAt),
   );
+}
+
+function requiredCandidateEans(request: PlanApiRequest): string[] {
+  const rulesById = new Map(request.matchingRules.map((rule) => [rule.id, rule]));
+  const candidates = new Set<string>();
+  for (const need of request.needs) {
+    if (!need.required) continue;
+    const rule = rulesById.get(need.matchRuleId);
+    if (rule === undefined) continue;
+    for (const product of matchProducts(
+      need as Need,
+      rule as MatchRule,
+      request.products as Product[],
+    )) {
+      candidates.add(product.ean);
+    }
+  }
+  return [...candidates].sort();
 }
 
 function toPlannerRequest(request: PlanApiRequest, prices: PriceObservation[]) {
@@ -182,15 +220,16 @@ export class PlanService implements PlanServiceContract {
       throw new PriceDataUnavailableError();
     }
     const input = parsed.data;
-    const eans = [...new Set(input.products.map(({ ean: productEan }) => productEan))];
+    const eans = requiredCandidateEans(input);
     const now = this.now();
 
     try {
       const prices = normalizePrices(
         await this.dependencies.gateway.getBulkPrices(eans, signal),
+        now,
       );
       try {
-        await this.dependencies.cache.putMany(prices);
+        await this.dependencies.cache.putMany(prices, now);
       } catch {
         // A cache write is best-effort; fresh validated upstream data is still usable.
       }
@@ -203,7 +242,7 @@ export class PlanService implements PlanServiceContract {
         throw new PlanRequestCancelledError();
       }
       try {
-        const cached = normalizePrices(await this.dependencies.cache.getMany(eans));
+        const cached = normalizePrices(await this.dependencies.cache.getMany(eans), now);
         const plans = calculatePlans(toPlannerRequest(input, cached), now);
         if (plans.length > 0) {
           return { plans, status: "cache" };

@@ -63,6 +63,33 @@ function request(
   });
 }
 
+function streamingRequest(
+  chunks: Uint8Array[],
+  onCancel?: (reason: unknown) => void,
+  keepOpen = false,
+): Request {
+  let index = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    cancel: onCancel,
+    pull(controller) {
+      const chunk = chunks[index];
+      if (chunk === undefined) {
+        if (!keepOpen) controller.close();
+        return;
+      }
+      controller.enqueue(chunk);
+      index += 1;
+      if (!keepOpen && index === chunks.length) controller.close();
+    },
+  });
+  return new Request("https://handleplan.no/api/plans", {
+    body: stream,
+    headers: { "content-type": "application/json" },
+    method: "POST",
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+}
+
 describe("POST /api/plans", () => {
   it("returns complete plans, canonical UTC time, and the mandatory Norwegian caveats", async () => {
     const service: PlanServiceContract = {
@@ -110,6 +137,65 @@ describe("POST /api/plans", () => {
     expect(service.calculate).not.toHaveBeenCalled();
   });
 
+  it("stops an oversized stream without trusting Content-Length", async () => {
+    const service: PlanServiceContract = { calculate: vi.fn() };
+    const cancelled = vi.fn();
+    const response = await createPlansHandler(() => service)(
+      streamingRequest([
+        new Uint8Array(64 * 1024).fill(0x20),
+        new Uint8Array([0x20]),
+      ], cancelled, true),
+    );
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ code: "REQUEST_TOO_LARGE" });
+    expect(cancelled).toHaveBeenCalledOnce();
+    expect(service.calculate).not.toHaveBeenCalled();
+  });
+
+  it("decodes UTF-8 split across stream chunks", async () => {
+    const encoded = new TextEncoder().encode(
+      JSON.stringify({
+        ...body,
+        products: [{ ...body.products[0], name: "Melk 🥛" }],
+      }),
+    );
+    const emojiStart = encoded.findIndex((byte) => byte === 0xf0);
+    const chunks = [encoded.slice(0, emojiStart + 2), encoded.slice(emojiStart + 2)];
+    let seenName: string | undefined;
+    const service: PlanServiceContract = {
+      calculate: async (value) => {
+        seenName = value.products[0]?.name;
+        return { plans: [], status: "upstream" };
+      },
+    };
+
+    const response = await createPlansHandler(() => service)(streamingRequest(chunks));
+
+    expect(response.status).toBe(200);
+    expect(seenName).toBe("Melk 🥛");
+  });
+
+  it.each([
+    ["missing body", undefined],
+    ["malformed UTF-8", new Uint8Array([0xff])],
+  ] as const)("rejects %s with a sanitized response", async (_label, bytes) => {
+    const service: PlanServiceContract = { calculate: vi.fn() };
+    const incoming =
+      bytes === undefined
+        ? new Request("https://handleplan.no/api/plans", {
+            headers: { "content-type": "application/json" },
+            method: "POST",
+          })
+        : streamingRequest([bytes]);
+
+    const response = await createPlansHandler(() => service)(incoming);
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ code: "INVALID_REQUEST" });
+    expect(service.calculate).not.toHaveBeenCalled();
+  });
+
   it("rejects invalid public bodies without returning raw Zod details", async () => {
     const service: PlanServiceContract = { calculate: vi.fn() };
     const response = await createPlansHandler(() => service)(request({ ...body, maxStores: 4 }));
@@ -134,7 +220,7 @@ describe("POST /api/plans", () => {
     expect(await response.json()).toEqual({ code: "PRICE_DATA_UNAVAILABLE" });
   });
 
-  it("maps cancellation to a sanitized client-closed response", async () => {
+  it("maps cancellation to a sanitized best-effort client-closed response", async () => {
     const service: PlanServiceContract = {
       calculate: async () => {
         throw new PlanRequestCancelledError();

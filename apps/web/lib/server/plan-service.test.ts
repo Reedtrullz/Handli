@@ -94,6 +94,98 @@ describe("PlanService", () => {
     expect(seenSignal).toBe(signal);
   });
 
+  it("fetches only unique candidates for required approved matches", async () => {
+    const constrainedProduct = {
+      brand: "Tine",
+      ean: "7038010000020",
+      name: "Tine Helmelk",
+      productFamily: "melk",
+    } satisfies Product;
+    const flexibleProduct = {
+      ean: "7038010000037",
+      name: "Havregryn",
+      productFamily: "havregryn",
+    } satisfies Product;
+    const unrelatedProduct = {
+      ean: "7038010000044",
+      name: "Taco",
+      productFamily: "taco",
+    } satisfies Product;
+    const optionalProduct = {
+      ean: "7038010000051",
+      name: "Kaffe",
+    } satisfies Product;
+    const candidateRequest = planApiRequestSchema.parse({
+      matchingRules: [
+        {
+          allowedBrands: ["Tine"],
+          explanation: "Tine melk",
+          id: "milk-rule",
+          mode: "constrained",
+          productFamily: "melk",
+          userApproved: true,
+        },
+        {
+          explanation: "Alle havregryn",
+          id: "oats-rule",
+          mode: "flexible",
+          productFamily: "havregryn",
+          userApproved: true,
+        },
+        {
+          exactEan: optionalProduct.ean,
+          explanation: "Nøyaktig kaffe",
+          id: "coffee-rule",
+          mode: "exact",
+          userApproved: true,
+        },
+      ],
+      maxStores: 3,
+      needs: [
+        { ...need, id: "milk", matchRuleId: "milk-rule" },
+        { ...need, id: "oats", matchRuleId: "oats-rule", query: "havregryn" },
+        {
+          ...need,
+          id: "coffee",
+          matchRuleId: "coffee-rule",
+          query: "kaffe",
+          required: false,
+        },
+      ],
+      products: [constrainedProduct, flexibleProduct, unrelatedProduct, optionalProduct],
+    });
+    let requestedEans: string[] = [];
+    const gateway = new FakeKassalappGateway([], []);
+    gateway.getBulkPrices = async (eans) => {
+      requestedEans = eans;
+      return [];
+    };
+
+    const result = await new PlanService({
+      cache: new MemoryCache(),
+      gateway,
+      now: () => NOW,
+    }).calculate(candidateRequest);
+
+    expect(requestedEans).toEqual([constrainedProduct.ean, flexibleProduct.ean]);
+    expect(result).toEqual({ plans: [], status: "upstream" });
+  });
+
+  it("drops future-invalid rows before planning and cache persistence", async () => {
+    const cache = new MemoryCache();
+    const current = price();
+    const future = { ...price("2026-07-15T12:00:00.001Z"), amountOre: 1000 as PriceObservation["amountOre"] };
+
+    const result = await new PlanService({
+      cache,
+      gateway: new FakeKassalappGateway([product], [current, future]),
+      now: () => NOW,
+    }).calculate(request);
+
+    expect(result.plans).toHaveLength(1);
+    expect(cache.writes).toEqual([[current]]);
+  });
+
   it("uses eligible cache only when it forms a complete required-item plan", async () => {
     const gateway = new FakeKassalappGateway([], []);
     gateway.getBulkPrices = async () => {
@@ -183,5 +275,40 @@ describe("planApiRequestSchema", () => {
       }).success,
     ).toBe(false);
     expect(planApiRequestSchema.safeParse({ ...request, prices: [price()] }).success).toBe(false);
+  });
+
+  it("rejects exact, constrained, and flexible required rules with no catalog candidate", () => {
+    const missingExact = {
+      ...request,
+      matchingRules: [{ ...rule, exactEan: "7038010000990" }],
+    };
+    const missingConstrained = {
+      ...request,
+      matchingRules: [
+        {
+          allowedBrands: ["Q"],
+          explanation: "Bare Q",
+          id: rule.id,
+          mode: "constrained",
+          userApproved: true,
+        },
+      ],
+    };
+    const missingFlexible = {
+      ...request,
+      matchingRules: [
+        {
+          explanation: "Havregryn",
+          id: rule.id,
+          mode: "flexible",
+          productFamily: "havregryn",
+          userApproved: true,
+        },
+      ],
+    };
+
+    expect(planApiRequestSchema.safeParse(missingExact).success).toBe(false);
+    expect(planApiRequestSchema.safeParse(missingConstrained).success).toBe(false);
+    expect(planApiRequestSchema.safeParse(missingFlexible).success).toBe(false);
   });
 });

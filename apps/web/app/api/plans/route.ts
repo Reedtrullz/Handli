@@ -31,17 +31,32 @@ async function readJsonBody(request: Request): Promise<
     return { ok: false, response: errorResponse("REQUEST_TOO_LARGE", 413) };
   }
 
-  let text: string;
-  try {
-    text = await request.text();
-  } catch {
+  if (request.body === null) {
     return { ok: false, response: errorResponse("INVALID_REQUEST", 400) };
   }
-  if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES) {
-    return { ok: false, response: errorResponse("REQUEST_TOO_LARGE", 413) };
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const fragments: string[] = [];
+  let bytesRead = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytesRead += value.byteLength;
+      if (bytesRead > MAX_BODY_BYTES) {
+        void reader.cancel().catch(() => undefined);
+        return { ok: false, response: errorResponse("REQUEST_TOO_LARGE", 413) };
+      }
+      fragments.push(decoder.decode(value, { stream: true }));
+    }
+    fragments.push(decoder.decode());
+  } catch {
+    void reader.cancel().catch(() => undefined);
+    return { ok: false, response: errorResponse("INVALID_REQUEST", 400) };
   }
   try {
-    return { ok: true, value: JSON.parse(text) as unknown };
+    return { ok: true, value: JSON.parse(fragments.join("")) as unknown };
   } catch {
     return { ok: false, response: errorResponse("INVALID_REQUEST", 400) };
   }
@@ -67,6 +82,7 @@ export function createPlansHandler(
       });
     } catch (error) {
       if (error instanceof PlanRequestCancelledError) {
+        // Non-standard, best-effort status: a disconnected client may never receive it.
         return errorResponse("REQUEST_CANCELLED", 499);
       }
       if (error instanceof PriceDataUnavailableError) {
