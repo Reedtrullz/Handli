@@ -42,6 +42,8 @@ const plan = planResultSchema.parse({
       ean: "7038010000013",
       needId: "melk",
       quantity: 1,
+      observedAt: "2026-07-15T11:00:00.000Z",
+      source: "kassalapp",
     },
   ],
   chains: ["extra"],
@@ -96,7 +98,7 @@ describe("POST /api/plans", () => {
       calculate: async () => ({
         generatedAt: "2026-07-15T12:00:00.000Z",
         plans: [plan],
-        status: "upstream",
+        priceDataSource: "upstream",
       }),
     };
 
@@ -109,6 +111,7 @@ describe("POST /api/plans", () => {
         "Medlemspriser og kundeavis-tilbud er ikke med i denne beregningen.",
       ],
       generatedAt: "2026-07-15T12:00:00.000Z",
+      priceDataSource: "upstream",
       plans: [plan],
     });
   });
@@ -137,6 +140,30 @@ describe("POST /api/plans", () => {
     expect(malformed.status).toBe(400);
     expect(oversized.status).toBe(413);
     expect(service.calculate).not.toHaveBeenCalled();
+  });
+
+  it.each(["g", "ml"] as const)("rejects required %s quantities before planning", async (quantityUnit) => {
+    const service: PlanServiceContract = { calculate: vi.fn() };
+    const response = await createPlansHandler(() => service)(request({
+      ...body,
+      needs: [{ ...body.needs[0], quantity: 500, quantityUnit }],
+    }));
+
+    expect(response.status).toBe(400);
+    expect(service.calculate).not.toHaveBeenCalled();
+  });
+
+  it("accepts a generic-only basket when its approved family has a catalog candidate", async () => {
+    const calculate = vi.fn(async () => ({ generatedAt: "2026-07-15T12:00:00.000Z", plans: [plan], priceDataSource: "upstream" as const }));
+    const response = await createPlansHandler(() => ({ calculate }))(request({
+      ...body,
+      needs: [{ ...body.needs[0], query: "lettmelk", matchRuleId: "melk-flex" }],
+      matchingRules: [{ id: "melk-flex", mode: "flexible", productFamily: "lettmelk", userApproved: true, explanation: "Samme type" }],
+      products: [{ ...body.products[0], productFamily: "lettmelk" }],
+    }));
+
+    expect(response.status).toBe(200);
+    expect(calculate).toHaveBeenCalledOnce();
   });
 
   it("stops an oversized stream without trusting Content-Length", async () => {
@@ -171,7 +198,7 @@ describe("POST /api/plans", () => {
         return {
           generatedAt: "2026-07-15T12:00:00.000Z",
           plans: [],
-          status: "upstream",
+          priceDataSource: "upstream",
         };
       },
     };
@@ -283,7 +310,7 @@ describe("POST /api/plans", () => {
         return {
           generatedAt: "2026-07-15T12:00:00.000Z",
           plans: [],
-          status: "upstream",
+          priceDataSource: "upstream",
         };
       },
     };

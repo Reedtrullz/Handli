@@ -13,7 +13,7 @@ export default function PlanleggPage() {
           </a>
           <nav aria-label="Hovedmeny">
             <a className="active" href="/planlegg" aria-current="page">Planlegg</a>
-            <a href="/oppdag">Oppdag</a>
+            <span>Oppdag kommer senere</span>
           </nav>
         </div>
       </header>
@@ -23,10 +23,7 @@ export default function PlanleggPage() {
       <footer className="site-footer">
         <div>
           <p>© 2026 Handleplan • Uavhengig prissammenligning</p>
-          <nav aria-label="Bunnmeny">
-            <a href="#feedback">Gi tilbakemelding</a>
-            <a href="#privacy">Personvern</a>
-          </nav>
+          <p>Tilbakemelding og personverninformasjon kommer senere.</p>
         </div>
       </footer>
     </div>

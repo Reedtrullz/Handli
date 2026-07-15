@@ -165,14 +165,13 @@ async function addExactProduct(page: Page, query: string, productName: RegExp): 
 const expectedCoverage = [
   "Bakehuset · Dekker «Norsk grovbrød 750 g»",
   "Evergood · Dekker «Evergood Kaffe 500 g»",
-  "TINE · Dekker «TINE Lettmelk 1 % 1 l»",
   "TINE · Dekker «lettmelk»",
 ].sort();
 
 const expectedPlans = [
-  { name: "Enklest", total: "124,00 kr", totalOre: 12_400, stores: 1 },
-  { name: "Balansert", total: "110,00 kr", totalOre: 11_000, stores: 2 },
-  { name: "Mest spart", total: "100,00 kr", totalOre: 10_000, stores: 3 },
+  { name: "Enklest", total: "98,00 kr", totalOre: 9_800, stores: 1 },
+  { name: "Balansert", total: "85,00 kr", totalOre: 8_500, stores: 2 },
+  { name: "Mest spart", total: "80,00 kr", totalOre: 8_000, stores: 3 },
 ] as const;
 
 test("the leak detector sees authorization, cookie, and set-cookie values", async ({ context, page }) => {
@@ -226,17 +225,20 @@ test("anonymous shopper approves matching and chooses every complete frontier pl
   await page.getByRole("button", { name: "Samme type, valgfritt merke" }).click();
   await expect(page.getByText("Samme type, valgfritt merke").last()).toBeVisible();
 
-  await addExactProduct(page, "lettmelk", /TINE Lettmelk/);
   await addExactProduct(page, "kaffe", /Evergood Kaffe/);
   await addExactProduct(page, "brød", /Norsk grovbrød/);
 
   const storedBeforeResult = await page.evaluate(() => JSON.stringify(localStorage));
   expect(storedBeforeResult).not.toContain("origin");
+  expect(JSON.parse(JSON.parse(storedBeforeResult)["handleplan:basket:v1"])).toMatchObject({
+    needs: [{ query: "lettmelk" }, { query: "Evergood Kaffe 500 g" }, { query: "Norsk grovbrød 750 g" }],
+    products: expect.arrayContaining([expect.objectContaining({ ean: "7038010000013", productFamily: "lettmelk" })]),
+  });
   await page.getByRole("link", { name: /Finn beste handleplan/ }).click();
 
   await expect(page).toHaveTitle("Resultat | Handleplan");
-  await expect(page.getByRole("heading", { name: "Handleliste fordelt på rute" })).toBeVisible();
-  await expect(page.getByText(/Komplett kurv basert på 4 nødvendige varer/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Handleliste fordelt på butikker" })).toBeVisible();
+  await expect(page.getByText(/Komplett kurv basert på 3 nødvendige varer/)).toBeVisible();
   await expect(page.getByText(/logg inn|opprett konto/i)).toHaveCount(0);
 
   const radios = page.getByRole("radio");
@@ -249,7 +251,7 @@ test("anonymous shopper approves matching and chooses every complete frontier pl
     await radio.check();
     await expect(page.locator(".result-total")).toHaveText(plan.total);
     await expect(page.locator(".result-store")).toHaveCount(plan.stores);
-    await expect(page.locator(".result-store-row")).toHaveCount(4);
+    await expect(page.locator(".result-store-row")).toHaveCount(3);
     const coverage = (await page.locator(".result-store-row small").allTextContents()).sort();
     expect(coverage).toEqual(expectedCoverage);
   }

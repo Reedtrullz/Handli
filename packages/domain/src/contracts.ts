@@ -57,6 +57,8 @@ export interface PlanResult {
     chain: PriceObservation["chain"];
     quantity: number;
     costOre: MoneyOre;
+    observedAt: string;
+    source: PriceObservation["source"];
   }>;
   totalOre: MoneyOre;
   chains: PriceObservation["chain"][];
@@ -166,6 +168,8 @@ export const planResultSchema: z.ZodType<PlanResult> = z.object({
       chain: chainSchema,
       quantity: z.number().positive(),
       costOre: moneyOreSchema,
+      observedAt: z.iso.datetime({ offset: false, precision: 3 }),
+      source: z.literal("kassalapp"),
     }),
   ),
   totalOre: moneyOreSchema,

@@ -15,7 +15,6 @@ type Assignment = PlanResult["assignments"][number];
 
 interface AssignmentCandidate {
   assignment: Assignment;
-  observedAt: string;
 }
 
 const CHAIN_ORDER: readonly Chain[] = ["bunnpris", "extra", "rema-1000"];
@@ -60,7 +59,7 @@ function compareCandidates(left: AssignmentCandidate, right: AssignmentCandidate
     left.assignment.costOre - right.assignment.costOre ||
     compareText(left.assignment.ean, right.assignment.ean) ||
     compareChains(left.assignment.chain, right.assignment.chain) ||
-    compareText(right.observedAt, left.observedAt)
+    compareText(right.assignment.observedAt, left.assignment.observedAt)
   );
 }
 
@@ -71,6 +70,8 @@ function assignmentKey(assignment: Assignment): string {
     assignment.chain,
     assignment.quantity,
     assignment.costOre,
+    assignment.observedAt,
+    assignment.source,
   ].join(":");
 }
 
@@ -131,8 +132,9 @@ function planForSubset(
           chain: observation.chain,
           quantity: need.quantity,
           costOre: cost as MoneyOre,
+          observedAt: observation.observedAt,
+          source: observation.source,
         },
-        observedAt: observation.observedAt,
       });
     }
 
@@ -209,7 +211,7 @@ export function calculatePlans(request: PlanRequest, now: Date): PlanResult[] {
   if (
     !hasUniqueIds(validated.needs) ||
     !hasUniqueIds(validated.matchingRules) ||
-    validated.needs.some(({ quantity }) => !Number.isSafeInteger(quantity))
+    validated.needs.some(({ quantity, quantityUnit, required }) => !Number.isSafeInteger(quantity) || (required && quantityUnit !== "each"))
   ) {
     return [];
   }

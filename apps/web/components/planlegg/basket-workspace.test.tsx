@@ -72,12 +72,13 @@ describe("Planlegg basket workspace", () => {
     render(
       <BasketWorkspace
         createId={idFactory()}
-        searchProducts={async () => []}
+        searchProducts={async () => [{ ...milk, name: "Havregryn", productFamily: "havregryn" }]}
         searchDelayMs={0}
       />,
     );
 
     await user.type(screen.getByLabelText("Hva skal du handle?"), "havregryn");
+    await screen.findByRole("option", { name: /Havregryn/ });
     await user.click(screen.getByRole("button", { name: "Legg til" }));
     expect(screen.queryByRole("listitem", { name: /havregryn/i })).not.toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Godkjenn treff for havregryn" })).toBeVisible();
@@ -90,6 +91,7 @@ describe("Planlegg basket workspace", () => {
       matchingRules: [
         { mode: "flexible", productFamily: "havregryn", userApproved: true },
       ],
+      products: [expect.objectContaining({ productFamily: "havregryn" })],
     });
   });
 
@@ -98,12 +100,13 @@ describe("Planlegg basket workspace", () => {
     render(
       <BasketWorkspace
         createId={idFactory()}
-        searchProducts={async () => []}
+        searchProducts={async () => [{ ...milk, name: "Tacoskjell", brand: "Old El Paso", productFamily: "tacoskjell" }]}
         searchDelayMs={0}
       />,
     );
 
     await user.type(screen.getByLabelText("Hva skal du handle?"), "tacoskjell");
+    await screen.findByRole("option", { name: /Tacoskjell/ });
     await user.click(screen.getByRole("button", { name: "Legg til" }));
     await user.click(screen.getByRole("button", { name: "Begrens merker" }));
     const approve = screen.getByRole("button", { name: "Godkjenn begrensning" });
@@ -120,7 +123,23 @@ describe("Planlegg basket workspace", () => {
           userApproved: true,
         },
       ],
+      products: [expect.objectContaining({ brand: "Old El Paso", productFamily: "tacoskjell" })],
     });
+  });
+
+  it("keeps generic approval disabled for ambiguous or family-less candidates", async () => {
+    const user = userEvent.setup();
+    render(<BasketWorkspace
+      createId={idFactory()}
+      searchProducts={async () => [milk, cheese]}
+      searchDelayMs={0}
+    />);
+
+    await user.type(screen.getByLabelText("Hva skal du handle?"), "mat");
+    await screen.findByRole("option", { name: /TINE Lettmelk/ });
+    expect(screen.getByRole("button", { name: "Legg til" })).toBeDisabled();
+    expect(screen.getByText(/flere eller ukjente varetyper/)).toBeVisible();
+    expect(screen.queryByRole("group", { name: /Godkjenn treff/ })).not.toBeInTheDocument();
   });
 
   it("ignores stale results even when an older request does not honor abort", async () => {
@@ -358,6 +377,24 @@ describe("Planlegg basket workspace", () => {
     expect(increment).toBeDisabled();
     await user.click(increment);
     expect(screen.getByText(String(BASKET_QUANTITY_MAX), { selector: "output" })).toBeVisible();
+  });
+
+  it("disables creation visibly when the basket already has 50 needs", () => {
+    const needs = Array.from({ length: 50 }, (_, index) => ({
+      id: `need-${index}`, query: milk.name, quantity: 1, quantityUnit: "each", matchRuleId: `rule-${index}`, required: true,
+    }));
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify({
+      version: 1,
+      needs,
+      matchingRules: needs.map((_, index) => ({ id: `rule-${index}`, mode: "exact", exactEan: milk.ean, userApproved: true, explanation: "Eksakt produkt" })),
+      products: [milk],
+      travel: { enabled: false, mode: "car" },
+    }));
+
+    render(<BasketWorkspace createId={idFactory()} searchProducts={async () => [milk]} searchDelayMs={0} />);
+
+    expect(screen.getByRole("combobox", { name: "Hva skal du handle?" })).toBeDisabled();
+    expect(screen.getByText(/maksimalt 50 varebehov/)).toBeVisible();
   });
 
   it("edits integer quantity, deletes, and restores the basket after reload", async () => {

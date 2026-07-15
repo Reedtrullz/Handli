@@ -35,7 +35,7 @@ export function StoreAssignment({
   const productsByEan = new Map(products.map((product) => [product.ean, product]));
 
   return (
-    <section className="result-store" aria-label={`Stopp ${order}: ${CHAIN_NAMES[chain]}`}>
+    <section className="result-store" aria-label={`Butikk ${order}: ${CHAIN_NAMES[chain]}`}>
       <header className="result-store-header">
         <div>
           <span className="route-number" aria-hidden="true">{order}</span>

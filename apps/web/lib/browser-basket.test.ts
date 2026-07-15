@@ -180,4 +180,20 @@ describe("browser basket persistence", () => {
       needs: [{ ...populatedBasket.needs[0], id: "need-2" }],
     });
   });
+
+  it("retains a product matched by a remaining flexible need after its exact need is removed", () => {
+    const basket = {
+      ...populatedBasket,
+      needs: [
+        populatedBasket.needs[0],
+        { ...populatedBasket.needs[0], id: "need-generic", query: "lettmelk", matchRuleId: "rule-generic" },
+      ],
+      matchingRules: [
+        populatedBasket.matchingRules[0],
+        { id: "rule-generic", mode: "flexible" as const, productFamily: "lettmelk", userApproved: true as const, explanation: "Samme type" },
+      ],
+    };
+
+    expect(removeBasketNeed(basket, "need-1").products).toEqual(populatedBasket.products);
+  });
 });

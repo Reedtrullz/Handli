@@ -20,10 +20,11 @@ export async function searchProductsFromApi(
 }
 
 interface NeedComposerProps {
-  onGenericNeed: (query: string, quantity: number) => void;
+  onGenericNeed: (query: string, quantity: number, candidates: Product[]) => void;
   onProduct: (product: Product, quantity: number) => void;
   searchProducts: ProductSearch;
   searchDelayMs?: number;
+  disabled?: boolean;
 }
 
 type SearchState = "idle" | "loading" | "ready" | "empty" | "error";
@@ -35,11 +36,19 @@ function optionLabel(product: Product): string {
   return `${product.name}${amount}`;
 }
 
+export function genericCandidateFamily(query: string, products: readonly Product[]): string | undefined {
+  const normalizedQuery = query.trim().toLocaleLowerCase("nb-NO");
+  const families = [...new Set(products.flatMap(({ productFamily }) => productFamily ? [productFamily] : []))];
+  return families.find((family) => family.toLocaleLowerCase("nb-NO") === normalizedQuery)
+    ?? (families.length === 1 ? families[0] : undefined);
+}
+
 export function NeedComposer({
   onGenericNeed,
   onProduct,
   searchProducts,
   searchDelayMs = 250,
+  disabled = false,
 }: NeedComposerProps) {
   const listId = useId();
   const [query, setQuery] = useState("");
@@ -132,8 +141,8 @@ export function NeedComposer({
 
   function addGeneric(): void {
     const trimmed = query.trim();
-    if (!trimmed) return;
-    onGenericNeed(trimmed, quantity);
+    if (!trimmed || genericCandidateFamily(trimmed, products) === undefined || searchState !== "ready" || disabled) return;
+    onGenericNeed(trimmed, quantity, products);
     reset();
   }
 
@@ -160,6 +169,7 @@ export function NeedComposer({
   const activeOptionId = open && activeIndex >= 0
     ? `${listId}-option-${activeIndex}`
     : undefined;
+  const genericFamily = genericCandidateFamily(query, products);
 
   return (
     <section className="need-composer-section">
@@ -177,6 +187,7 @@ export function NeedComposer({
             aria-activedescendant={activeOptionId}
             autoComplete="off"
             placeholder="F.eks. Norvegia eller bare 'ost'..."
+            disabled={disabled}
             value={query}
             onChange={(event) => {
               const nextQuery = event.target.value;
@@ -209,10 +220,12 @@ export function NeedComposer({
             >+</button>
           </div>
         </div>
-        <button className="primary-button composer-add" type="button" onClick={addGeneric} disabled={!query.trim()}>
+        <button className="primary-button composer-add" type="button" onMouseDown={(event) => event.preventDefault()} onClick={addGeneric} disabled={disabled || !query.trim() || searchState !== "ready" || genericFamily === undefined}>
           Legg til
         </button>
       </div>
+      {disabled ? <p role="status">Handlekurven kan inneholde maksimalt 50 varebehov.</p> : null}
+      {!disabled && searchState === "ready" && genericFamily === undefined ? <p role="status">Velg et eksakt produkt; forslagene tilhører flere eller ukjente varetyper.</p> : null}
       <div ref={popup} className="search-popover" hidden={!open}>
         {open ? (
           <>

@@ -194,8 +194,8 @@ function subsets(maximum: number): Chain[][] {
 }
 
 function assignmentIdentity(assignments: PlanResult["assignments"]): string {
-  return JSON.stringify(assignments.map(({ needId, ean: productEan, chain, quantity, costOre }) =>
-    [needId, productEan, chain, quantity, costOre]));
+  return JSON.stringify(assignments.map(({ needId, ean: productEan, chain, quantity, costOre, observedAt, source }) =>
+    [needId, productEan, chain, quantity, costOre, observedAt, source]));
 }
 
 type OraclePlan = Omit<PlanResult, "id" | "freshness">;
@@ -224,6 +224,7 @@ function oraclePlans(request: PlanRequest): OraclePlan[] {
           quantity: need.quantity,
           costOre: (row.amountOre * need.quantity) as MoneyOre,
           observedAt: row.observedAt,
+          source: row.source,
         }))
         .sort((left, right) =>
           left.costOre - right.costOre ||
@@ -232,8 +233,7 @@ function oraclePlans(request: PlanRequest): OraclePlan[] {
           (left.observedAt > right.observedAt ? -1 : left.observedAt < right.observedAt ? 1 : 0));
       const selected = candidates[0];
       if (selected === undefined) { complete = false; break; }
-      const { observedAt: _observedAt, ...assignment } = selected;
-      assignments.push(assignment);
+      assignments.push(selected);
       if (rule.mode !== "exact") substitutions.push(need.id);
     }
 

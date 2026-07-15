@@ -8,7 +8,7 @@ import { PlanSummary } from "./plan-summary";
 
 function summary(totalOre: number) {
   const plan = { id: "plan", assignments: [], totalOre: totalOre as MoneyOre, chains: ["extra"], substitutions: [], coverage: 1, freshness: {} } satisfies PlanResult;
-  return <PlanSummary plan={plan} convenienceTotalOre={10_000} requiredItems={1} travelRequested={false} />;
+  return <PlanSummary plan={plan} convenienceTotalOre={10_000} requiredItems={1}  />;
 }
 
 describe("PlanSummary price comparison", () => {

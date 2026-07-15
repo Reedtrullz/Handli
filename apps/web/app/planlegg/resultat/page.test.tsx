@@ -30,12 +30,13 @@ const basket = {
 } as const;
 
 function assignment(needId: string, ean: string, chain: string, costOre: number) {
-  return { needId, ean, chain, quantity: 1, costOre };
+  return { needId, ean, chain, quantity: 1, costOre, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" };
 }
 
 function resultResponse() {
   return {
     generatedAt: "2026-07-15T07:12:00.000Z",
+    priceDataSource: "upstream",
     caveats: [
       "Kjedepris betyr ikke at varen er på lager eller har samme hyllepris i din butikk.",
       "Medlemspriser og kundeavis-tilbud er ikke med i denne beregningen.",
@@ -106,13 +107,15 @@ describe("Planlegg result workspace", () => {
 
     expect(screen.getByText("Beregner komplette handleplaner …")).toBeVisible();
     expect(await screen.findByRole("radio", { name: /Balansert/ })).toBeChecked();
-    expect(screen.getByRole("heading", { name: "Handleliste fordelt på rute" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Handleliste fordelt på butikker" })).toBeVisible();
     expect(screen.getByText("824,60 kr", { selector: ".result-total" })).toBeVisible();
     expect(screen.getByText(/Alle 3 nødvendige varer er med/)).toBeVisible();
     expect(screen.getByText(/garanterer ikke lagerstatus/i)).toBeVisible();
     expect(screen.getByText(/Kjedepriser/)).toBeVisible();
     expect(screen.getByText(/15\. juli 2026 kl\. 09:12/)).toBeVisible();
-    expect(screen.getByText(/Reisetid er ikke beregnet/)).toBeVisible();
+    expect(screen.getByText(/Hentet direkte fra Kassalapp/)).toBeVisible();
+    expect(screen.getByText(/observert 15\. juli 2026 kl\. 08:12/)).toBeVisible();
+    expect(screen.queryByText(/Reisetid/)).not.toBeInTheDocument();
     expect(screen.queryByText(/konto/i)).not.toBeInTheDocument();
 
     const request = fetch.mock.calls[0]?.[1] as RequestInit;
@@ -124,8 +127,17 @@ describe("Planlegg result workspace", () => {
     });
     expect(String(request.body)).not.toMatch(/KASSAL_API_KEY|origin|selectedPlanId/);
 
-    const extra = screen.getByRole("region", { name: /Stopp 1: Extra/ });
+    const extra = screen.getByRole("region", { name: /Butikk 1: Extra/ });
     expect(within(extra).getByText("524,60 kr")).toBeVisible();
+  });
+
+  it("labels fallback cache separately from calculation and observation time", async () => {
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    vi.stubGlobal("fetch", okFetch({ ...resultResponse(), priceDataSource: "cache" }));
+    render(<ResultPage />);
+
+    expect(await screen.findByText(/Hentet fra lokal reservebuffer/)).toBeVisible();
+    expect(screen.getByText(/Beregnet 15\. juli 2026 kl\. 09:12/)).toBeVisible();
   });
 
   it("changes selection, saves it safely, and restores only a still-returned plan", async () => {
@@ -156,10 +168,10 @@ describe("Planlegg result workspace", () => {
 
     await user.click(await screen.findByRole("radio", { name: /Enklest/ }));
     expect(screen.getByText("Samme pris")).toBeVisible();
-    expect(screen.getAllByRole("region", { name: /Stopp/ })).toHaveLength(1);
+    expect(screen.getAllByRole("region", { name: /Butikk/ })).toHaveLength(1);
 
     await user.click(screen.getByRole("radio", { name: /Mest spart/ }));
-    expect(screen.getAllByRole("region", { name: /Stopp/ })).toHaveLength(3);
+    expect(screen.getAllByRole("region", { name: /Butikk/ })).toHaveLength(3);
     expect(screen.getByText("793,20 kr", { selector: ".result-total" })).toBeVisible();
   });
 
@@ -230,6 +242,10 @@ describe("Planlegg result workspace", () => {
     ["dominated pair", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: [...body.plans, { ...body.plans[0]!, id: "dominated", totalOre: 83_460, assignments: body.plans[0]!.assignments.map((row, index) => index === 0 ? { ...row, costOre: row.costOre + 1_000 } : row) }] })],
     ["overlong plan ID", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: body.plans.map((plan, index) => index === 0 ? { ...plan, id: "x".repeat(201) } : plan) })],
     ["duplicate plan ID", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: body.plans.map((plan, index) => index === 1 ? { ...plan, id: body.plans[0]!.id } : plan) })],
+    ["future observation", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: body.plans.map((plan) => ({ ...plan, assignments: plan.assignments.map((row) => ({ ...row, observedAt: "2026-07-15T08:12:00.000Z" })) })) })],
+    ["stale observation", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: body.plans.map((plan) => ({ ...plan, assignments: plan.assignments.map((row) => ({ ...row, observedAt: "2026-07-12T07:11:59.999Z" })) })) })],
+    ["unknown price source", (body: ReturnType<typeof resultResponse>) => ({ ...body, plans: body.plans.map((plan) => ({ ...plan, assignments: plan.assignments.map((row) => ({ ...row, source: "unknown" })) })) })],
+    ["unknown data source status", (body: ReturnType<typeof resultResponse>) => ({ ...body, priceDataSource: "database" })],
   ])("rejects deep plan inconsistency: %s", async (_label, mutate) => {
     localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
     vi.stubGlobal("fetch", okFetch(mutate(resultResponse())));

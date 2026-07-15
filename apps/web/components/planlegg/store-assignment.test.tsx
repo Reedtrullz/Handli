@@ -22,7 +22,7 @@ describe("StoreAssignment quantities", () => {
       <StoreAssignment
         chain="extra"
         order={1}
-        assignments={[{ needId: "need", ean: product.ean, chain: "extra", quantity, costOre: 1_000 as MoneyOre }]}
+        assignments={[{ needId: "need", ean: product.ean, chain: "extra", quantity, costOre: 1_000 as MoneyOre, observedAt: "2026-07-15T10:00:00.000Z", source: "kassalapp" }]}
         needs={[need]}
         products={[product]}
       />,

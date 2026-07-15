@@ -6,6 +6,7 @@ import { normalizeBulkPriceResponse, normalizeSearchResponse } from "./schemas";
 const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 const DEFAULT_TIMEOUT_MS = 8_000;
 const MAX_BULK_EANS = 100;
+const MAX_RESPONSE_BYTES = 512 * 1024;
 const CHAIN_ORDER: Record<PriceObservation["chain"], number> = {
   bunnpris: 0,
   "rema-1000": 1,
@@ -46,6 +47,49 @@ interface AttemptResult {
 class AttemptTimeoutError extends Error {}
 class AttemptCancelledError extends Error {}
 class InvalidResponseError extends Error {}
+
+async function cancelBody(response: Response): Promise<void> {
+  try { await response.body?.cancel(); } catch { /* Cleanup only. */ }
+}
+
+async function readBoundedJson(response: Response): Promise<unknown> {
+  const contentType = response.headers.get("content-type") ?? "";
+  const token = "[!#$%&'*+.^_`|~0-9A-Za-z-]+";
+  const quotedString = '"(?:[^"\\\\\\r\\n]|\\\\[\\t\\x20-\\x7e])*"';
+  const parameter = `(?:${token})\\s*=\\s*(?:${token}|${quotedString})`;
+  if (!new RegExp(`^application/json(?:\\s*;\\s*${parameter})*\\s*$`, "i").test(contentType)) {
+    await cancelBody(response);
+    throw new InvalidResponseError();
+  }
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null && /^\d+$/.test(contentLength) && Number(contentLength) > MAX_RESPONSE_BYTES) {
+    await cancelBody(response);
+    throw new InvalidResponseError();
+  }
+  if (response.body === null) throw new InvalidResponseError();
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const fragments: string[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new InvalidResponseError();
+      }
+      fragments.push(decoder.decode(value, { stream: true }));
+    }
+    fragments.push(decoder.decode());
+    return JSON.parse(fragments.join("")) as unknown;
+  } catch (error) {
+    try { await reader.cancel(); } catch { /* Cleanup only. */ }
+    if (error instanceof InvalidResponseError) throw error;
+    throw new InvalidResponseError();
+  }
+}
 
 function publicMessage(code: KassalappGatewayErrorCode): string {
   switch (code) {
@@ -248,10 +292,11 @@ export class KassalappClient implements KassalappGateway {
         signal: controller.signal,
       });
       if (!response.ok) {
+        await cancelBody(response);
         return { response };
       }
       try {
-        return { body: await response.json(), response };
+        return { body: await readBoundedJson(response), response };
       } catch {
         throw new InvalidResponseError();
       }

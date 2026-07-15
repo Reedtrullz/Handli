@@ -102,6 +102,15 @@ export const planApiRequestSchema = z
     if (!needs.some(({ required }) => required)) {
       context.addIssue({ code: "custom", message: "At least one need must be required" });
     }
+    needs.forEach((need, index) => {
+      if (need.required && need.quantityUnit !== "each") {
+        context.addIssue({
+          code: "custom",
+          message: "Required needs must use package counts in Phase 1",
+          path: ["needs", index, "quantityUnit"],
+        });
+      }
+    });
     const rulesById = new Map(matchingRules.map((rule) => [rule.id, rule]));
     needs.forEach((need, index) => {
       if (!need.required) return;
@@ -124,7 +133,7 @@ export type PlanApiRequest = z.infer<typeof planApiRequestSchema>;
 export interface PlanServiceResult {
   generatedAt: string;
   plans: PlanResult[];
-  status: "upstream" | "cache";
+  priceDataSource: "upstream" | "cache";
 }
 
 export interface PlanServiceContract {
@@ -238,7 +247,7 @@ export class PlanService implements PlanServiceContract {
       return {
         generatedAt: evaluationNow.toISOString(),
         plans: calculatePlans(toPlannerRequest(input, prices), evaluationNow),
-        status: "upstream",
+        priceDataSource: "upstream",
       };
     } catch (error) {
       if (error instanceof KassalappGatewayError && error.code === "CANCELLED") {
@@ -255,7 +264,7 @@ export class PlanService implements PlanServiceContract {
           return {
             generatedAt: fallbackNow.toISOString(),
             plans,
-            status: "cache",
+            priceDataSource: "cache",
           };
         }
       } catch {

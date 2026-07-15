@@ -26,6 +26,8 @@ function plan(
         chain: chains[0]!,
         quantity: 1,
         costOre: money(totalOre),
+        observedAt: "2026-07-15T10:00:00.000Z",
+        source: "kassalapp",
       },
     ],
     totalOre: money(totalOre),

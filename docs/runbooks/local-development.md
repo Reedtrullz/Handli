@@ -56,4 +56,15 @@ For the real environment, activate the 1Password Developer Environment named `Cl
 
 ## Anonymous privacy
 
-The basket, explicit match approvals, coarse travel preference, and selected plan ID are stored under `handleplan:basket:v1` in local storage. A precise origin is component-local and transient. Core use has no account or consent wall.
+The basket, explicit match approvals, disabled travel-compatibility field, and selected plan ID are stored under `handleplan:basket:v1` in local storage. Phase 1 exposes no location or travel control. Core use has no account or consent wall.
+
+## Phase 1 quantity limitation
+
+Public plan requests and the domain planner accept required needs only in purchasable package counts (`each`). Required `g` and `ml` needs are rejected rather than multiplying a package price by a weight or volume. Package/unit normalization is a release prerequisite before those units can be planned.
+
+## Public-release gates
+
+- Distributed rate limiting shared across every application instance and region.
+- Real migration execution and live PostgreSQL cache coverage in CI.
+- Sanitized contract reconciliation against the current live Kassalapp API.
+- Production security headers, audit/alerting, metrics, error budgets, and operational observability.

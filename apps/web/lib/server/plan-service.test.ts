@@ -89,7 +89,7 @@ describe("PlanService", () => {
       signal,
     );
 
-    expect(result.status).toBe("upstream");
+    expect(result.priceDataSource).toBe("upstream");
     expect(result.plans).toHaveLength(1);
     expect(result.plans[0]).toMatchObject({ coverage: 1, chains: ["extra"] });
     expect(cache.writes).toEqual([[price()]]);
@@ -191,7 +191,7 @@ describe("PlanService", () => {
     }).calculate(candidateRequest);
 
     expect(requestedEans).toEqual([constrainedProduct.ean, flexibleProduct.ean]);
-    expect(result).toMatchObject({ plans: [], status: "upstream" });
+    expect(result).toMatchObject({ plans: [], priceDataSource: "upstream" });
   });
 
   it("drops future-invalid rows before planning and cache persistence", async () => {
@@ -221,7 +221,7 @@ describe("PlanService", () => {
       now: () => NOW,
     }).calculate(request);
 
-    expect(result.status).toBe("cache");
+    expect(result.priceDataSource).toBe("cache");
     expect(result.plans).toHaveLength(1);
   });
 
@@ -293,7 +293,7 @@ describe("PlanService", () => {
       now: () => NOW,
     }).calculate(request);
 
-    expect(result).toMatchObject({ plans: [], status: "upstream" });
+    expect(result).toMatchObject({ plans: [], priceDataSource: "upstream" });
   });
 });
 

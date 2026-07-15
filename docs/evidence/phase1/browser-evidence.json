@@ -1,0 +1,65 @@
+[
+  {
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "scope": "identifier-only visual capture; no runtime credential canary seeded",
+    "collector": "async allHeaders, headersArray, same-origin bodies, URLs, postData, console",
+    "requestsObserved": 50,
+    "responsesObserved": 49,
+    "requestHeadersRead": 50,
+    "responseHeadersRead": 49,
+    "sameOriginBodiesInspected": 24,
+    "bodylessSameOriginResponses": 17,
+    "crossOriginBodiesNotInspected": 8,
+    "forbiddenIdentifierMatches": 0,
+    "consoleErrors": 0,
+    "pageErrors": 0,
+    "headerReadFailures": [],
+    "bodyReadFailures": [],
+    "localStorageContainsPreciseOrigin": false
+  },
+  {
+    "viewport": {
+      "width": 768,
+      "height": 900
+    },
+    "scope": "identifier-only visual capture; no runtime credential canary seeded",
+    "collector": "async allHeaders, headersArray, same-origin bodies, URLs, postData, console",
+    "requestsObserved": 50,
+    "responsesObserved": 49,
+    "requestHeadersRead": 50,
+    "responseHeadersRead": 49,
+    "sameOriginBodiesInspected": 24,
+    "bodylessSameOriginResponses": 17,
+    "crossOriginBodiesNotInspected": 8,
+    "forbiddenIdentifierMatches": 0,
+    "consoleErrors": 0,
+    "pageErrors": 0,
+    "headerReadFailures": [],
+    "bodyReadFailures": [],
+    "localStorageContainsPreciseOrigin": false
+  },
+  {
+    "viewport": {
+      "width": 320,
+      "height": 800
+    },
+    "scope": "identifier-only visual capture; no runtime credential canary seeded",
+    "collector": "async allHeaders, headersArray, same-origin bodies, URLs, postData, console",
+    "requestsObserved": 50,
+    "responsesObserved": 49,
+    "requestHeadersRead": 50,
+    "responseHeadersRead": 49,
+    "sameOriginBodiesInspected": 24,
+    "bodylessSameOriginResponses": 17,
+    "crossOriginBodiesNotInspected": 8,
+    "forbiddenIdentifierMatches": 0,
+    "consoleErrors": 0,
+    "pageErrors": 0,
+    "headerReadFailures": [],
+    "bodyReadFailures": [],
+    "localStorageContainsPreciseOrigin": false
+  }
+]

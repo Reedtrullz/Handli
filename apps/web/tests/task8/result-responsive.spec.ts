@@ -22,11 +22,12 @@ const basket = {
 
 const response = {
   generatedAt: "2026-07-15T07:12:00.000Z",
+  priceDataSource: "upstream",
   caveats: ["Kjedepris betyr ikke at varen er på lager eller har samme hyllepris i din butikk."],
   plans: [
-    { id: "plan-balanced", assignments: [{ needId: "milk", ean: "7038010000013", chain: "rema-1000", quantity: 1, costOre: 30_000 }, { needId: "cheese", ean: "7038010000020", chain: "extra", quantity: 1, costOre: 20_000 }, { needId: "soap", ean: "7038010000037", chain: "extra", quantity: 1, costOre: 32_460 }], totalOre: 82_460, chains: ["extra", "rema-1000"], substitutions: [], coverage: 1, freshness: { milk: "eligible", cheese: "eligible", soap: "eligible" } },
-    { id: "plan-savings", assignments: [{ needId: "milk", ean: "7038010000013", chain: "bunnpris", quantity: 1, costOre: 30_000 }, { needId: "cheese", ean: "7038010000020", chain: "rema-1000", quantity: 1, costOre: 20_000 }, { needId: "soap", ean: "7038010000037", chain: "extra", quantity: 1, costOre: 29_320 }], totalOre: 79_320, chains: ["bunnpris", "extra", "rema-1000"], substitutions: [], coverage: 1, freshness: { milk: "eligible", cheese: "eligible", soap: "eligible" } },
-    { id: "plan-convenience", assignments: [{ needId: "milk", ean: "7038010000013", chain: "extra", quantity: 1, costOre: 30_000 }, { needId: "cheese", ean: "7038010000020", chain: "extra", quantity: 1, costOre: 30_000 }, { needId: "soap", ean: "7038010000037", chain: "extra", quantity: 1, costOre: 35_060 }], totalOre: 95_060, chains: ["extra"], substitutions: [], coverage: 1, freshness: { milk: "eligible", cheese: "eligible", soap: "eligible" } },
+    { id: "plan-balanced", assignments: [{ needId: "milk", ean: "7038010000013", chain: "rema-1000", quantity: 1, costOre: 30_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "cheese", ean: "7038010000020", chain: "extra", quantity: 1, costOre: 20_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "soap", ean: "7038010000037", chain: "extra", quantity: 1, costOre: 32_460, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }], totalOre: 82_460, chains: ["extra", "rema-1000"], substitutions: [], coverage: 1, freshness: { milk: "eligible", cheese: "eligible", soap: "eligible" } },
+    { id: "plan-savings", assignments: [{ needId: "milk", ean: "7038010000013", chain: "bunnpris", quantity: 1, costOre: 30_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "cheese", ean: "7038010000020", chain: "rema-1000", quantity: 1, costOre: 20_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "soap", ean: "7038010000037", chain: "extra", quantity: 1, costOre: 29_320, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }], totalOre: 79_320, chains: ["bunnpris", "extra", "rema-1000"], substitutions: [], coverage: 1, freshness: { milk: "eligible", cheese: "eligible", soap: "eligible" } },
+    { id: "plan-convenience", assignments: [{ needId: "milk", ean: "7038010000013", chain: "extra", quantity: 1, costOre: 30_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "cheese", ean: "7038010000020", chain: "extra", quantity: 1, costOre: 30_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "soap", ean: "7038010000037", chain: "extra", quantity: 1, costOre: 35_060, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }], totalOre: 95_060, chains: ["extra"], substitutions: [], coverage: 1, freshness: { milk: "eligible", cheese: "eligible", soap: "eligible" } },
   ],
 };
 
@@ -46,7 +47,7 @@ for (const viewport of viewports) {
     await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important}html,body,button,input{font-family:Arial,sans-serif!important}.font-mono,.result-total{font-family:monospace!important}nextjs-portal{display:none!important}" });
 
     await expect(page).toHaveTitle("Resultat | Handleplan");
-    await expect(page.getByRole("heading", { name: "Handleliste fordelt på rute" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Handleliste fordelt på butikker" })).toBeVisible();
     await expect(page.getByRole("radio", { name: /Balansert/ })).toBeChecked();
     await expect(page.locator(".result-total")).toHaveText("824,60 kr");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -72,6 +73,6 @@ for (const viewport of viewports) {
     await page.keyboard.press("ArrowDown");
     await expect(page.getByRole("radio", { name: /Mest spart/ })).toBeChecked();
     await expect(page.locator(".result-total")).toHaveText("793,20 kr");
-    await expect(page.getByRole("region", { name: /Stopp 3: REMA 1000/ })).toBeVisible();
+    await expect(page.getByRole("region", { name: /Butikk 3: REMA 1000/ })).toBeVisible();
   });
 }

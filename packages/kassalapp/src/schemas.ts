@@ -21,7 +21,7 @@ const upstreamProductSchema = z
 
 const upstreamSearchResponseSchema = z
   .object({
-    data: z.array(upstreamProductSchema),
+    data: z.array(upstreamProductSchema).max(100),
   })
   .strict();
 
@@ -42,7 +42,7 @@ const upstreamPriceSchema = z
 
 const upstreamBulkPriceResponseSchema = z
   .object({
-    data: z.array(upstreamPriceSchema),
+    data: z.array(upstreamPriceSchema).max(300),
   })
   .strict();
 

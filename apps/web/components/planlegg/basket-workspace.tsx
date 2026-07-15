@@ -12,15 +12,17 @@ import {
 import { BasketRow } from "./basket-row";
 import {
   NeedComposer,
+  genericCandidateFamily,
   searchProductsFromApi,
   type ProductSearch,
 } from "./need-composer";
-import { TravelPreference } from "./travel-preference";
 
 interface PendingGenericNeed {
   query: string;
   quantity: number;
   constrained: boolean;
+  productFamily: string;
+  candidates: Product[];
 }
 
 interface BasketWorkspaceProps {
@@ -85,7 +87,7 @@ function BasketWorkspaceClient({
     query: string,
     quantity: number,
     rule: Omit<MatchRule, "id">,
-    product?: Product,
+    products: Product[] = [],
   ): void {
     const needId = createId();
     const ruleId = createId();
@@ -103,9 +105,9 @@ function BasketWorkspaceClient({
         },
       ],
       matchingRules: [...current.matchingRules, { ...rule, id: ruleId } as MatchRule],
-      products: product && !current.products.some(({ ean }) => ean === product.ean)
-        ? [...current.products, safeProduct(product)]
-        : current.products,
+      products: [...new Map(
+        [...current.products, ...products.map(safeProduct)].map((candidate) => [candidate.ean, candidate]),
+      ).values()],
     }));
   }
 
@@ -119,7 +121,7 @@ function BasketWorkspaceClient({
         userApproved: true,
         explanation: "Eksakt produkt",
       },
-      product,
+      [product],
     );
   }
 
@@ -127,10 +129,10 @@ function BasketWorkspaceClient({
     if (!pending) return;
     addApprovedNeed(pending.query, pending.quantity, {
       mode: "flexible",
-      productFamily: pending.query.toLocaleLowerCase("nb-NO"),
+      productFamily: pending.productFamily,
       userApproved: true,
       explanation: "Samme type, valgfritt merke",
-    });
+    }, pending.candidates.filter(({ productFamily }) => productFamily === pending.productFamily));
     setPending(null);
   }
 
@@ -138,13 +140,20 @@ function BasketWorkspaceClient({
     if (!pending) return;
     const brands = allowedBrands.split(",").map((brand) => brand.trim()).filter(Boolean);
     if (brands.length === 0) return;
+    const allowed = new Set(brands.map((brand) => brand.toLocaleLowerCase("nb-NO")));
+    const candidates = pending.candidates.filter((product) =>
+      product.productFamily === pending.productFamily &&
+      product.brand !== undefined &&
+      allowed.has(product.brand.toLocaleLowerCase("nb-NO")),
+    );
+    if (candidates.length === 0) return;
     addApprovedNeed(pending.query, pending.quantity, {
       mode: "constrained",
-      productFamily: pending.query.toLocaleLowerCase("nb-NO"),
+      productFamily: pending.productFamily,
       allowedBrands: brands,
       userApproved: true,
       explanation: brands.join(" eller "),
-    });
+    }, candidates);
     setPending(null);
     setAllowedBrands("");
   }
@@ -160,13 +169,16 @@ function BasketWorkspaceClient({
       <div className="planner-grid">
         <div className="basket-column">
             <NeedComposer
-              onGenericNeed={(query, quantity) => {
+              onGenericNeed={(query, quantity, candidates) => {
+                const productFamily = genericCandidateFamily(query, candidates);
+                if (!productFamily) return;
                 setAllowedBrands("");
-                setPending({ query, quantity, constrained: false });
+                setPending({ query, quantity, constrained: false, productFamily, candidates });
               }}
               onProduct={addExactProduct}
               searchProducts={searchProducts}
               searchDelayMs={searchDelayMs}
+              disabled={basket.needs.length >= 50}
             />
 
             {pending ? (
@@ -197,7 +209,10 @@ function BasketWorkspaceClient({
                     <button
                       className="primary-button"
                       type="button"
-                      disabled={allowedBrands.split(",").every((brand) => !brand.trim())}
+                    disabled={allowedBrands.split(",").every((brand) => !brand.trim()) || !pending.candidates.some((product) => {
+                      const allowed = new Set(allowedBrands.split(",").map((brand) => brand.trim().toLocaleLowerCase("nb-NO")).filter(Boolean));
+                      return product.productFamily === pending.productFamily && product.brand !== undefined && allowed.has(product.brand.toLocaleLowerCase("nb-NO"));
+                    })}
                       onClick={approveConstrained}
                     >
                       Godkjenn begrensning
@@ -261,11 +276,6 @@ function BasketWorkspaceClient({
                 <div><dt>Varer i kurv</dt><dd>{quantities} stk</dd></div>
                 <div><dt>Status på treff</dt><dd>{basket.needs.length > 0 ? "Alle klare" : "Ingen varer"}</dd></div>
               </dl>
-              <TravelPreference
-                enabled={basket.travel.enabled}
-                mode={basket.travel.mode}
-                onChange={(travel) => setBasket((current) => ({ ...current, travel }))}
-              />
               <a
                 className={`primary-button find-plan${basket.needs.length === 0 ? " disabled" : ""}`}
                 href={basket.needs.length > 0 ? "/planlegg/resultat" : undefined}

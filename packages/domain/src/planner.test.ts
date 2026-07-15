@@ -113,9 +113,22 @@ describe("calculatePlans", () => {
         chain: "extra",
         quantity: 2,
         costOre: 2_598,
+        observedAt: "2026-07-15T11:00:00.000Z",
+        source: "kassalapp",
       },
     ]);
     expect(plan?.totalOre).toBe(2_598);
+  });
+
+  it.each(["g", "ml"] as const)("fails closed for required %s quantities until package normalization exists", (quantityUnit) => {
+    const result = calculatePlans(request({
+      needs: [{ ...needs[0]!, quantity: 500, quantityUnit }],
+      matchingRules: [rules[0]!],
+      prices: [price("7038010000010", "extra", 1_299)],
+      maxStores: 1,
+    }), NOW);
+
+    expect(result).toEqual([]);
   });
 
   it("returns the non-dominated convenience and savings plans", () => {
@@ -199,6 +212,8 @@ describe("calculatePlans", () => {
       ean: "7038010000010",
       chain: "extra",
       costOre: 1_600,
+      observedAt: "2026-07-15T11:00:00.000Z",
+      source: "kassalapp",
     });
     expect(result[0]?.substitutions).toEqual(["milk"]);
   });

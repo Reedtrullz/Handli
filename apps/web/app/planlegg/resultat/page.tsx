@@ -29,6 +29,8 @@ const assignment = z.object({
   chain,
   quantity: z.number().int().positive().safe().max(10_000),
   costOre: moneyOre,
+  observedAt: z.iso.datetime({ offset: false, precision: 3 }),
+  source: z.literal("kassalapp"),
 }).strict();
 const plan = z.object({
   id: planId,
@@ -42,6 +44,7 @@ const plan = z.object({
 const responseSchema = z.object({
   caveats: z.array(publicText).max(10),
   generatedAt: z.iso.datetime({ offset: false, precision: 3 }),
+  priceDataSource: z.enum(["upstream", "cache"]),
   plans: z.array(plan).max(MAX_PLANS),
 }).strict();
 
@@ -65,7 +68,7 @@ function sameMembers(left: readonly string[], right: readonly string[]): boolean
 function assignmentIdentity(candidate: ParsedResultResponse["plans"][number]): string {
   return [...candidate.assignments]
     .sort((left, right) => left.needId.localeCompare(right.needId))
-    .map((row) => `${row.needId}\0${row.ean}\0${row.chain}\0${row.quantity}\0${row.costOre}`)
+    .map((row) => `${row.needId}\0${row.ean}\0${row.chain}\0${row.quantity}\0${row.costOre}\0${row.observedAt}\0${row.source}`)
     .join("\u0001");
 }
 
@@ -86,6 +89,8 @@ function isCompleteSafeResponse(response: ParsedResultResponse, basket: BrowserB
   const productsByEan = new Map(basket.products.map((product) => [product.ean, product]));
   const rulesById = new Map(basket.matchingRules.map((rule) => [rule.id, rule]));
   const needsById = new Map(requiredNeeds.map((need) => [need.id, need]));
+  const generatedAt = new Date(response.generatedAt).getTime();
+  if (!Number.isFinite(generatedAt)) return false;
 
   return response.plans.every((candidate) => {
     if (!sameMembers(candidate.assignments.map(({ needId }) => needId), requiredIds)) return false;
@@ -103,7 +108,9 @@ function isCompleteSafeResponse(response: ParsedResultResponse, basket: BrowserB
       const need = needsById.get(row.needId);
       const product = productsByEan.get(row.ean);
       const rule = need ? rulesById.get(need.matchRuleId) : undefined;
-      if (!need || !product || !rule || row.quantity !== need.quantity) return false;
+      const observedAt = new Date(row.observedAt).getTime();
+      if (!need || !product || !rule || row.quantity !== need.quantity || row.source !== "kassalapp") return false;
+      if (!Number.isFinite(observedAt) || observedAt > generatedAt || generatedAt - observedAt > 72 * 60 * 60 * 1000) return false;
       return matchProducts(need as Need, rule as MatchRule, [product as Product]).length === 1;
     });
   });
@@ -288,8 +295,8 @@ function ResultWorkspaceClient() {
       <div className="result-grid">
         <div className="result-assignments">
           <header className="result-heading">
-            <p>Ruteplanlegging</p>
-            <h1>Handleliste fordelt på rute</h1>
+            <p>Handleplan</p>
+            <h1>Handleliste fordelt på butikker</h1>
             <span>Komplett kurv basert på {requiredItems} nødvendige varer.</span>
           </header>
           {selected.chains.map((selectedChain, index) => (
@@ -308,12 +315,13 @@ function ResultWorkspaceClient() {
             plan={selected as PlanResult}
             convenienceTotalOre={convenience.totalOre}
             requiredItems={requiredItems}
-            travelRequested={basket.travel.enabled}
           />
           <PlanSelector plans={ordered as PlanResult[]} selectedPlanId={selected.id} onSelect={selectPlan} />
           <PriceProvenance
             generatedAt={state.response.generatedAt}
             caveats={state.response.caveats}
+            assignments={selected.assignments}
+            priceDataSource={state.response.priceDataSource}
           />
         </aside>
       </div>
@@ -350,7 +358,7 @@ export default function ResultPage() {
           </a>
           <nav aria-label="Hovedmeny">
             <a className="active" href="/planlegg" aria-current="page">Planlegg</a>
-            <a href="/oppdag">Oppdag</a>
+            <span>Oppdag kommer senere</span>
           </nav>
         </div>
       </header>

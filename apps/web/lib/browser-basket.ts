@@ -1,4 +1,5 @@
 import {
+  matchProducts,
   matchRuleSchema,
   type MatchRule,
   type Need,
@@ -154,16 +155,16 @@ export function removeBasketNeed(basket: BrowserBasket, needId: string): Browser
   const needs = basket.needs.filter(({ id }) => id !== needId);
   const referencedRuleIds = new Set(needs.map(({ matchRuleId }) => matchRuleId));
   const matchingRules = basket.matchingRules.filter(({ id }) => referencedRuleIds.has(id));
-  const referencedExactEans = new Set(
-    matchingRules.flatMap((rule) =>
-      rule.mode === "exact" && rule.exactEan ? [rule.exactEan] : [],
-    ),
-  );
+  const rulesById = new Map(matchingRules.map((rule) => [rule.id, rule]));
+  const referencedEans = new Set(needs.flatMap((need) => {
+    const rule = rulesById.get(need.matchRuleId);
+    return rule ? matchProducts(need, rule, basket.products).map(({ ean }) => ean) : [];
+  }));
 
   return {
     ...basket,
     needs,
     matchingRules,
-    products: basket.products.filter(({ ean }) => referencedExactEans.has(ean)),
+    products: basket.products.filter(({ ean }) => referencedEans.has(ean)),
   };
 }

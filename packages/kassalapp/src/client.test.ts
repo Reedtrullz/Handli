@@ -117,6 +117,43 @@ describe("KassalappClient contract", () => {
     expect(String(error)).not.toContain(API_KEY);
   });
 
+  it("bounds a no-content-length streaming response and cancels cleanup without leaking the key", async () => {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new Uint8Array(64 * 1024).fill(120)); },
+      cancel() { cancelled = true; },
+    });
+    const injectedFetch: typeof fetch = async () => new Response(stream, {
+      headers: { "content-type": "application/json" },
+    });
+
+    const error = await createClient(injectedFetch).searchProducts("melk", 10).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: "INVALID_RESPONSE" });
+    expect(cancelled).toBe(true);
+    expect(String(error)).not.toContain(API_KEY);
+  });
+
+  it("rejects malformed UTF-8 and an unexpected content type", async () => {
+    const malformedUtf8: typeof fetch = async () => new Response(new Uint8Array([0xc3, 0x28]), {
+      headers: { "content-type": "application/json" },
+    });
+    const wrongType: typeof fetch = async () => new Response(JSON.stringify(searchFixture), {
+      headers: { "content-type": "text/plain" },
+    });
+
+    await expect(createClient(malformedUtf8).searchProducts("melk", 10)).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    await expect(createClient(wrongType).searchProducts("melk", 10)).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+
+  it("rejects upstream envelopes beyond request-derived safe maxima", async () => {
+    const overproduced = Array.from({ length: 101 }, (_, index) => ({
+      ...searchFixture.data[0],
+      ean: String(1_000_000_000_000 + index),
+    }));
+    await expect(createClient(async () => jsonResponse({ data: overproduced })).searchProducts("melk", 100)).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+
   it("fails closed when a normalized observation would violate the domain timestamp", async () => {
     const injectedFetch: typeof fetch = async () =>
       jsonResponse({

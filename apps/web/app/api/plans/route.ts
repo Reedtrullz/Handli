@@ -97,6 +97,7 @@ export function createPlansHandler(
         caveats: PLAN_CAVEATS,
         generatedAt: result.generatedAt,
         plans: result.plans,
+        priceDataSource: result.priceDataSource,
       });
     } catch (error) {
       if (error instanceof PlanRequestCancelledError) {
