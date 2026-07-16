@@ -48,11 +48,7 @@ for (const viewport of viewports) {
 
     await expect(page).toHaveTitle("Resultat | Handleplan");
     await expect(page.getByRole("heading", { name: "Handleliste fordelt på butikker" })).toBeVisible();
-    if (viewport.width <= 480) {
-      await expect(page.getByText("Oppdag kommer senere")).toBeHidden();
-    } else {
-      await expect(page.getByText("Oppdag kommer senere")).toBeVisible();
-    }
+    await expect(page.getByRole("link", { name: "Oppdag" })).toBeVisible();
     await expect(page.getByRole("radio", { name: /Balansert/ })).toBeChecked();
     await expect(page.locator(".result-total")).toHaveText("824,60 kr");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

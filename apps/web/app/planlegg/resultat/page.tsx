@@ -358,7 +358,7 @@ export default function ResultPage() {
           </a>
           <nav aria-label="Hovedmeny">
             <a className="active" href="/planlegg" aria-current="page">Planlegg</a>
-            <span className="coming-later">Oppdag kommer senere</span>
+            <a href="/oppdag">Oppdag</a>
           </nav>
         </div>
       </header>

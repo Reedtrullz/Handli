@@ -318,3 +318,31 @@ test("an intentionally stale fixture cannot produce a recommendation", async ({ 
   await expectWcag22AandAA(page);
   await expectCleanPublicEvidence(evidence);
 });
+
+test("a shopper discovers a fresh price and carries the exact product into Planlegg", async ({ page }) => {
+  const evidence = collectPublicEvidence(page);
+  await page.goto("/oppdag");
+
+  await expect(page).toHaveTitle("Oppdag | Handleplan");
+  await expect(page.getByRole("heading", { name: "Oppdag" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "TINE Lettmelk 1 % 1 l" })).toBeVisible();
+  await expect(page.getByText("lavest hos Bunnpris")).toBeVisible();
+  await expect(page.getByText(/Kassalapp direkte/)).toBeVisible();
+  await expectWcag22AandAA(page);
+
+  const milkCard = page.getByRole("heading", { name: "TINE Lettmelk 1 % 1 l" }).locator("xpath=ancestor::article");
+  await milkCard.getByRole("button", { name: "Legg til i handlelisten" }).click();
+  await expect(milkCard.getByRole("button", { name: "I handlelisten" })).toBeDisabled();
+  await expect(page.getByText("1 vare")).toBeVisible();
+
+  await page.getByRole("link", { name: /Gå til Planlegg/ }).click();
+  await expect(page).toHaveURL(`${BASE_ORIGIN}/planlegg`);
+  await expect(page.getByRole("listitem", { name: /TINE Lettmelk 1 % 1 l/ })).toBeVisible();
+  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem("handleplan:basket:v1") ?? "{}"));
+  expect(persisted).toMatchObject({
+    needs: [{ query: "TINE Lettmelk 1 % 1 l" }],
+    matchingRules: [{ mode: "exact", exactEan: "7038010000013" }],
+  });
+
+  await expectCleanPublicEvidence(evidence);
+});

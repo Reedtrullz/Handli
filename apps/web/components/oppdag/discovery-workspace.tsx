@@ -1,0 +1,270 @@
+"use client";
+
+import {
+  priceObservationSchema,
+  productSchema,
+  type PriceObservation,
+  type Product,
+} from "@handleplan/domain";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { z } from "zod";
+
+import {
+  addExactProductToBasket,
+  loadBasket,
+  saveBasket,
+  type BrowserBasket,
+} from "../../lib/browser-basket";
+
+const discoveryResponseSchema = z.object({
+  generatedAt: z.iso.datetime({ offset: false, precision: 3 }),
+  opportunities: z.array(z.object({
+    product: productSchema,
+    prices: z.array(priceObservationSchema).min(1).max(3),
+  }).strict()).max(12),
+  priceDataSource: z.enum(["upstream", "cache"]),
+}).strict();
+
+type DiscoveryResponse = z.infer<typeof discoveryResponseSchema>;
+type Chain = PriceObservation["chain"];
+type ChainFilter = "all" | Chain;
+export type DiscoverySearch = (query: string, signal: AbortSignal) => Promise<DiscoveryResponse>;
+
+const chainLabels: Record<Chain, string> = {
+  bunnpris: "Bunnpris",
+  extra: "Extra",
+  "rema-1000": "REMA 1000",
+};
+const suggestions = ["melk", "kaffe", "brød", "ost"];
+const subscribeToClient = () => () => {};
+
+async function searchDiscoveryFromApi(query: string, signal: AbortSignal): Promise<DiscoveryResponse> {
+  const response = await fetch(`/api/discovery/search?q=${encodeURIComponent(query)}`, { signal });
+  if (!response.ok) throw new Error("DISCOVERY_SEARCH_FAILED");
+  return discoveryResponseSchema.parse(await response.json());
+}
+
+function formatNok(amountOre: number): string {
+  return new Intl.NumberFormat("nb-NO", { style: "currency", currency: "NOK" }).format(amountOre / 100);
+}
+
+function formatObservedAt(value: string): string {
+  return new Intl.DateTimeFormat("nb-NO", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
+}
+
+function unitPrice(product: Product, amountOre: number): string | undefined {
+  if (!product.packageQuantity || !product.packageUnit) return undefined;
+  if (product.packageUnit === "g") {
+    return `${formatNok(amountOre / (product.packageQuantity / 1000))} / kg`;
+  }
+  if (product.packageUnit === "ml") {
+    return `${formatNok(amountOre / (product.packageQuantity / 1000))} / l`;
+  }
+  if (product.packageUnit === "each" && product.packageQuantity > 1) {
+    return `${formatNok(amountOre / product.packageQuantity)} / stk`;
+  }
+  return undefined;
+}
+
+interface DiscoveryWorkspaceProps {
+  createId?: () => string;
+  searchDiscovery?: DiscoverySearch;
+  storage?: Storage;
+}
+
+export function DiscoveryWorkspace(props: DiscoveryWorkspaceProps) {
+  const isClient = useSyncExternalStore(subscribeToClient, () => true, () => false);
+  if (!isClient) return null;
+  return <DiscoveryWorkspaceClient {...props} />;
+}
+
+function DiscoveryWorkspaceClient({
+  createId = () => globalThis.crypto.randomUUID(),
+  searchDiscovery = searchDiscoveryFromApi,
+  storage,
+}: DiscoveryWorkspaceProps) {
+  const [basket, setBasket] = useState<BrowserBasket>(() => loadBasket(storage));
+  const [query, setQuery] = useState("melk");
+  const [submittedQuery, setSubmittedQuery] = useState("melk");
+  const [searchRevision, setSearchRevision] = useState(0);
+  const [chain, setChain] = useState<ChainFilter>("all");
+  const [result, setResult] = useState<DiscoveryResponse | null>(null);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const controller = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    const nextController = new AbortController();
+    controller.current?.abort();
+    controller.current = nextController;
+    void searchDiscovery(submittedQuery, nextController.signal)
+      .then((nextResult) => {
+        if (nextController.signal.aborted) return;
+        setResult(nextResult);
+        setStatus("ready");
+      })
+      .catch((error: unknown) => {
+        if (nextController.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
+        setResult(null);
+        setStatus("error");
+      });
+    return () => nextController.abort();
+  }, [searchDiscovery, searchRevision, submittedQuery]);
+
+  const visible = useMemo(() => (result?.opportunities ?? []).flatMap((opportunity) => {
+    const prices = chain === "all"
+      ? opportunity.prices
+      : opportunity.prices.filter((price) => price.chain === chain);
+    return prices.length > 0 ? [{ ...opportunity, prices }] : [];
+  }), [chain, result]);
+  const basketEans = new Set(basket.matchingRules.flatMap((rule) =>
+    rule.mode === "exact" && rule.exactEan ? [rule.exactEan] : [],
+  ));
+  const quantity = basket.needs.reduce((sum, need) => sum + need.quantity, 0);
+
+  function submitSearch(nextQuery = query): void {
+    const trimmed = nextQuery.trim();
+    if (trimmed.length < 2) return;
+    setStatus("loading");
+    setQuery(trimmed);
+    setSubmittedQuery(trimmed);
+    setSearchRevision((current) => current + 1);
+  }
+
+  function addProduct(product: Product): void {
+    setBasket((current) => {
+      const next = addExactProductToBasket(current, product, createId);
+      saveBasket(next, storage);
+      return next;
+    });
+  }
+
+  return (
+    <main className="oppdag-main">
+      <section className="oppdag-heading" aria-labelledby="oppdag-title">
+        <div>
+          <p>Live kjedepriser</p>
+          <h1 id="oppdag-title">Oppdag</h1>
+          <span>Finn varer, sammenlign ferske prisobservasjoner og legg dem rett i handlelisten.</span>
+        </div>
+        <span className="discovery-badge">Ikke sponset</span>
+      </section>
+
+      <div className="oppdag-grid">
+        <div className="discovery-column">
+          <section className="discovery-controls" aria-label="Finn prisfunn">
+            <form onSubmit={(event) => { event.preventDefault(); submitSearch(); }}>
+              <label htmlFor="discovery-query">Hva vil du utforske?</label>
+              <div className="discovery-search-row">
+                <input
+                  id="discovery-query"
+                  value={query}
+                  minLength={2}
+                  maxLength={80}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Søk etter melk, kaffe eller ost"
+                />
+                <button className="primary-button" type="submit" disabled={query.trim().length < 2}>Finn priser</button>
+              </div>
+            </form>
+            <div className="discovery-suggestions" aria-label="Forslag">
+              {suggestions.map((suggestion) => (
+                <button key={suggestion} type="button" onClick={() => submitSearch(suggestion)}>{suggestion}</button>
+              ))}
+            </div>
+            <label className="chain-filter">
+              Vis kjede
+              <select value={chain} onChange={(event) => setChain(event.target.value as ChainFilter)}>
+                <option value="all">Alle kjeder</option>
+                <option value="bunnpris">Bunnpris</option>
+                <option value="rema-1000">REMA 1000</option>
+                <option value="extra">Extra</option>
+              </select>
+            </label>
+          </section>
+
+          <section className="discovery-results" aria-labelledby="discovery-results-title" aria-live="polite">
+            <div className="discovery-section-heading">
+              <div>
+                <h2 id="discovery-results-title">Aktuelle prisfunn for «{submittedQuery}»</h2>
+                <p>Ferske kjedepriser observert av Kassalapp de siste 72 timene.</p>
+              </div>
+              {status === "ready" ? <span>{visible.length} funn</span> : null}
+            </div>
+
+            {status === "loading" ? <div className="discovery-message" role="status">Henter ferske prisfunn …</div> : null}
+            {status === "error" ? (
+              <div className="discovery-message" role="alert">
+                <strong>Kunne ikke hente priser akkurat nå.</strong>
+                <button className="secondary-button" type="button" onClick={() => submitSearch(submittedQuery)}>Prøv igjen</button>
+              </div>
+            ) : null}
+            {status === "ready" && visible.length === 0 ? (
+              <div className="discovery-message">Ingen ferske priser hos valgt kjede. Prøv et annet søk eller vis alle kjeder.</div>
+            ) : null}
+            {status === "ready" && visible.length > 0 ? (
+              <div className="opportunity-list">
+                {visible.map(({ product, prices }) => {
+                  const best = [...prices].sort((left, right) => left.amountOre - right.amountOre)[0]!;
+                  const added = basketEans.has(product.ean);
+                  return (
+                    <article className="opportunity-card" key={product.ean}>
+                      <div className="opportunity-mark" aria-hidden="true">{product.name.slice(0, 1).toLocaleUpperCase("nb-NO")}</div>
+                      <div className="opportunity-copy">
+                        <div className="opportunity-title-row">
+                          <div>
+                            <h3>{product.name}</h3>
+                            <p>{product.brand ?? "Merke ikke oppgitt"}{product.packageQuantity ? ` • ${product.packageQuantity} ${product.packageUnit ?? ""}` : ""}</p>
+                          </div>
+                          <div className="opportunity-best-price">
+                            <strong>{formatNok(best.amountOre)}</strong>
+                            <span>lavest hos {chainLabels[best.chain]}</span>
+                          </div>
+                        </div>
+                        <ul className="chain-price-list" aria-label={`Priser for ${product.name}`}>
+                          {prices.map((price) => (
+                            <li key={price.chain}>
+                              <span>{chainLabels[price.chain]}</span>
+                              <strong>{formatNok(price.amountOre)}</strong>
+                              <small>{formatObservedAt(price.observedAt)}</small>
+                            </li>
+                          ))}
+                        </ul>
+                        <div className="opportunity-action-row">
+                          <p>{unitPrice(product, best.amountOre) ?? "Pakningsstørrelse mangler – enhetspris kan ikke beregnes."}</p>
+                          <button
+                            className={added ? "secondary-button added" : "primary-button"}
+                            type="button"
+                            disabled={added || basket.needs.length >= 50}
+                            onClick={() => addProduct(product)}
+                          >{added ? "I handlelisten" : "Legg til i handlelisten"}</button>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : null}
+          </section>
+        </div>
+
+        <aside className="discovery-rail" aria-labelledby="discovery-basket-title">
+          <div className="discovery-basket-card">
+            <p>Felles med Planlegg</p>
+            <h2 id="discovery-basket-title">Din handleliste</h2>
+            <strong>{quantity} {quantity === 1 ? "vare" : "varer"}</strong>
+            <span>{basket.needs.length === 0
+              ? "Legg til et prisfunn for å starte listen."
+              : "Nye varer lagres lokalt og tas med i neste beregning."}</span>
+            <a className="primary-button" href="/planlegg">Gå til Planlegg <span aria-hidden="true">→</span></a>
+          </div>
+          <div className="discovery-trust-card">
+            <h2>Hva betyr et prisfunn?</h2>
+            <p>Dette er observerte kjedepriser, ikke et løfte om lager eller hyllepris i en bestemt butikk.</p>
+            <p>Historiske prisfall, medlemspriser og kundeavistilbud vises først når Handleplan har et verifisert datagrunnlag.</p>
+            {result ? <small>Datakilde: {result.priceDataSource === "upstream" ? "Kassalapp direkte" : "lokal reservebuffer"} • beregnet {formatObservedAt(result.generatedAt)}</small> : null}
+          </div>
+        </aside>
+      </div>
+    </main>
+  );
+}

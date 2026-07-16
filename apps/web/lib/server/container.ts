@@ -6,9 +6,11 @@ import type { PriceObservation, Product } from "@handleplan/domain";
 import { FakeKassalappGateway, KassalappClient, type KassalappGateway } from "@handleplan/kassalapp";
 
 import { readServerEnv, type ServerEnv } from "./env";
+import { DiscoveryService, type DiscoveryServiceContract } from "./discovery-service";
 import { PlanService, type PlanServiceContract } from "./plan-service";
 
 export interface ServerContainer {
+  discoveryService: DiscoveryServiceContract;
   gateway: KassalappGateway;
   planService: PlanServiceContract;
 }
@@ -79,6 +81,7 @@ export function createServerContainer(env: ServerEnv): ServerContainer {
     }
     const gateway = new FakeKassalappGateway(fakeProducts, fakePrices);
     return {
+      discoveryService: new DiscoveryService({ cache: new InMemoryPriceCache(), gateway, now: () => new Date(FAKE_EVALUATION_TIME) }),
       gateway,
       planService: new PlanService({
         cache: new InMemoryPriceCache(),
@@ -94,10 +97,12 @@ export function createServerContainer(env: ServerEnv): ServerContainer {
     baseUrl: env.KASSAL_BASE_URL,
     fetch,
   });
+  const cache = new PostgresPriceCache(connection.db);
   return {
+    discoveryService: new DiscoveryService({ cache, gateway }),
     gateway,
     planService: new PlanService({
-      cache: new PostgresPriceCache(connection.db),
+      cache,
       gateway,
     }),
   };

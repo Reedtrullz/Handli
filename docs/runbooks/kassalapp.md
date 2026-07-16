@@ -9,6 +9,10 @@ The 1Password Developer Environment is named `Clankus`. Use the variable names a
 ## Adapter behavior
 
 - Search input is bounded and URL-encoded by the server route.
+- `GET /api/discovery/search?q=...` combines bounded product search with bulk
+  prices, returns at most 12 products, and includes only observations no older
+  than 72 hours. If upstream prices fail, only still-fresh validated cache rows
+  may be returned.
 - Product search uses `GET /api/v1/products` with `search`, `size`, `unique=1`,
   and `exclude_without_ean=1`.
 - Bulk price requests are validated and split into at most 100 EANs.
@@ -28,6 +32,6 @@ are never committed.
 
 ## Price meaning and non-claims
 
-Kassalapp observations are chain-level price evidence. They do not prove branch inventory or a branch-specific shelf price. Phase 1 excludes member-only prices and flyer offers. A plan is returned only when eligible evidence covers every required basket item, and never uses more than three chains.
+Kassalapp observations are chain-level price evidence. They do not prove branch inventory or a branch-specific shelf price. Oppdag therefore labels them as current price observations, not discounts or historical price falls. Member-only prices, flyer offers, and inferred plan impact remain excluded. A plan is returned only when eligible evidence covers every required basket item, and never uses more than three chains.
 
 Every selected assignment carries its canonical observation timestamp and Kassalapp source into the public result. The response separately identifies whether those validated observations came directly from upstream or from the fallback cache; calculation time is never labeled as observation time.

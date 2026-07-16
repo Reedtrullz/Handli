@@ -1,8 +1,8 @@
-import { BasketWorkspace } from "../../components/planlegg/basket-workspace";
+import { DiscoveryWorkspace } from "../../components/oppdag/discovery-workspace";
 
-export const metadata = { title: "Handleplan" };
+export const metadata = { title: "Oppdag | Handleplan" };
 
-export default function PlanleggPage() {
+export default function OppdagPage() {
   return (
     <div className="app-frame">
       <header className="site-header">
@@ -12,13 +12,13 @@ export default function PlanleggPage() {
             Handleplan
           </a>
           <nav aria-label="Hovedmeny">
-            <a className="active" href="/planlegg" aria-current="page">Planlegg</a>
-            <a href="/oppdag">Oppdag</a>
+            <a href="/planlegg">Planlegg</a>
+            <a className="active" href="/oppdag" aria-current="page">Oppdag</a>
           </nav>
         </div>
       </header>
 
-      <BasketWorkspace />
+      <DiscoveryWorkspace />
 
       <footer className="site-footer">
         <div>

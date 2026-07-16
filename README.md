@@ -1,6 +1,6 @@
 # Handleplan
 
-Handleplan is an anonymous-first Norwegian grocery planner. Phase 1 lets a shopper build an explicitly matched basket and compare complete, non-dominated plans across at most three chains: Bunnpris, REMA 1000, and Extra.
+Handleplan is an anonymous-first Norwegian grocery planner. A shopper can discover fresh current prices, add an exact product to a shared basket, and compare complete, non-dominated plans across at most three chains: Bunnpris, REMA 1000, and Extra.
 
 ## Quick start with deterministic data
 
@@ -42,7 +42,7 @@ Actions secrets and must never be committed or printed.
 
 ## Scope
 
-Phase 1 does not claim branch inventory, branch-specific shelf prices, member prices, flyer offers, travel-time routing, Oppdag, or public-release readiness. The current VPS deployment is an owner-only protected preview. Anonymous basket, matching preferences, and selected plan stay in local browser storage; volunteered origin is transient and is not persisted.
+Oppdag searches live Kassalapp observations, compares current prices across the three supported chains, and can add an exact product to the same local basket used by Planlegg. It does not claim historical price drops, branch inventory, branch-specific shelf prices, member prices, flyer offers, travel-time routing, or plan impact. The current VPS deployment is an owner-only protected preview. Anonymous basket, matching preferences, and selected plan stay in local browser storage; volunteered origin is transient and is not persisted.
 
 Required quantities are package counts (`each`) in Phase 1. Gram and millilitre needs fail closed until package-size normalization can prove how many purchasable packages are required.
 

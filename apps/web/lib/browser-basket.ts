@@ -166,6 +166,43 @@ export function saveBasket(
   }
 }
 
+export function addExactProductToBasket(
+  basket: BrowserBasket,
+  product: Product,
+  createId: () => string = () => globalThis.crypto.randomUUID(),
+): BrowserBasket {
+  if (
+    basket.needs.length >= BASKET_NEEDS_MAX ||
+    basket.matchingRules.some((rule) => rule.mode === "exact" && rule.exactEan === product.ean)
+  ) {
+    return basket;
+  }
+  const safeProduct = browserProductSchema.parse(product);
+  const needId = createId();
+  const ruleId = createId();
+  const current = { ...basket };
+  delete current.selectedPlanId;
+  return {
+    ...current,
+    needs: [...basket.needs, {
+      id: needId,
+      matchRuleId: ruleId,
+      query: safeProduct.name,
+      quantity: 1,
+      quantityUnit: "each",
+      required: true,
+    }],
+    matchingRules: [...basket.matchingRules, {
+      exactEan: safeProduct.ean,
+      explanation: "Eksakt produkt fra Oppdag",
+      id: ruleId,
+      mode: "exact",
+      userApproved: true,
+    }],
+    products: [...new Map([...basket.products, safeProduct].map((candidate) => [candidate.ean, candidate])).values()],
+  };
+}
+
 export function removeBasketNeed(basket: BrowserBasket, needId: string): BrowserBasket {
   const needs = basket.needs.filter(({ id }) => id !== needId);
   const referencedRuleIds = new Set(needs.map(({ matchRuleId }) => matchRuleId));

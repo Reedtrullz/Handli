@@ -4,6 +4,7 @@ import {
   BASKET_STORAGE_KEY,
   BASKET_QUANTITY_MAX,
   BASKET_QUANTITY_MIN,
+  addExactProductToBasket,
   emptyBasketV1,
   loadBasket,
   removeBasketNeed,
@@ -165,6 +166,22 @@ describe("browser basket persistence", () => {
 
     expect(loadBasket(storage)).toEqual({ ...populatedBasket, selectedPlanId: "plan-balanced" });
     expect(storage.getItem(BASKET_STORAGE_KEY)).not.toContain("origin");
+  });
+
+  it("adds a discovered product as an exact need, deduplicates it, and invalidates the selected plan", () => {
+    const ids = ["need-discovered", "rule-discovered"];
+    const discovered = { ean: "7038010000020", name: "Ny vare", brand: "Test" };
+    const basket = addExactProductToBasket(
+      { ...populatedBasket, selectedPlanId: "old-plan" },
+      discovered,
+      () => ids.shift()!,
+    );
+
+    expect(basket.selectedPlanId).toBeUndefined();
+    expect(basket.needs.at(-1)).toMatchObject({ id: "need-discovered", query: "Ny vare", matchRuleId: "rule-discovered" });
+    expect(basket.matchingRules.at(-1)).toMatchObject({ mode: "exact", exactEan: discovered.ean });
+    expect(basket.products.at(-1)).toEqual(discovered);
+    expect(addExactProductToBasket(basket, discovered, () => "unused")).toBe(basket);
   });
 
   it("fails closed without throwing when browser storage is unavailable or full", () => {
