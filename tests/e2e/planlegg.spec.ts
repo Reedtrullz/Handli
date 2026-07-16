@@ -181,10 +181,10 @@ async function addExactProduct(page: Page, query: string, productName: RegExp): 
   await page.getByRole("option", { name: productName }).click();
 }
 
-const expectedCoverage = [
-  "Bakehuset · Dekker «Norsk grovbrød 750 g»",
-  "Evergood · Dekker «Evergood Kaffe 500 g»",
-  "TINE · Dekker «TINE Lettmelk 1 % 1 l»",
+const expectedPackages = [
+  "Bakehuset · 750 g per pakke",
+  "Evergood · 500 g per pakke",
+  "TINE · 1 000 ml per pakke",
 ].sort();
 
 const expectedPlans = [
@@ -300,8 +300,10 @@ test("anonymous shopper approves matching and chooses every complete frontier pl
     await expect(page.locator(".result-total")).toHaveText(plan.total);
     await expect(page.locator(".result-store")).toHaveCount(plan.stores);
     await expect(page.locator(".result-store-row")).toHaveCount(3);
-    const coverage = (await page.locator(".result-store-row small").allTextContents()).sort();
-    expect(coverage).toEqual(expectedCoverage);
+    const packages = (await page.locator(".result-store-row > div > small:first-of-type").allTextContents())
+      .map((value) => value.replace(/\s+/g, " "))
+      .sort();
+    expect(packages).toEqual(expectedPackages);
   }
 
   for (const left of expectedPlans) {
