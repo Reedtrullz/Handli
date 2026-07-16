@@ -10,7 +10,10 @@ release certificate and not proof of permission to activate a grocery source.
 - Foundation commits: `66970c4af647db3818eceaf7b754d2294e00454b`,
   `fa6e08dae1f5beeb2f063a6d7ea96d5a0865d96a`
 - Implementation branch: `codex/v1-evidence-planner-worker`
-- Candidate commit, immutable image digest, CI run, and VPS readback: pending
+- Milestone implementation commit: `94c51078dfa2c86de2158b53940a65b7d5fcb71e`
+- Verified browser-fix candidate: `47c0d8a6cb0e5c6b7dd769ba899279ff598891ea`
+- Exact-SHA CI: [run 29538677629](https://github.com/Reedtrullz/Handli/actions/runs/29538677629), all 19 verification steps passed
+- Immutable promoted image digest and VPS readback: pending
 - Runtime: Node.js `22.22.3`, Corepack pnpm `10.34.5`
 
 ## Implemented boundary
@@ -50,17 +53,16 @@ release certificate and not proof of permission to activate a grocery source.
 | Normal workspace tests | passed | Domain 164/164; Kassalapp 102/102; database 124/124 with 38 live cases intentionally gated and separately proven 162/162; worker 110/110; web 216/216. |
 | Production web build | passed | Next.js compiled and generated 15 public/API routes. |
 | Production offline journey | 1/1 passed | Start a strict trip, disconnect, reload Handlemodus, and retain checklist state. |
+| Browser acceptance | 5/5 passed in exact-SHA CI | Leak detector, 320 px reflow, three complete frontier choices, stale-evidence rejection, and Oppdag-to-Planlegg exact-product journey. |
 | Shell/YAML/static deploy checks | passed | Shell syntax, deployment-state behavior, YAML value parsing, exact worker readback assertions, and `git diff --check`. |
 | Independent P1 review | passed | No remaining P0/P1 in catalog publication, per-attempt authorization, ingestion provenance, worker promotion, or safe-degraded rollback. |
 
-The ordinary Playwright suite was run after the architecture change and exposed
-two stale test assumptions: a generic need was submitted through the new
-exact-only public planning contract, and Oppdag asserted its previous heading.
-Those assertions were updated to the current exact identity and catalog wording,
-but the local rerun was blocked when the desktop approval service reached its
-usage limit for loopback server execution. The candidate must therefore obtain
-a green 5/5 browser run in GitHub Actions (or a later authorized local rerun)
-before this milestone can be promoted or deployed.
+The first CI browser pass exposed one remaining stale selector: it collected both
+package and fulfilment helper lines after the result UI began showing whole-package
+arithmetic. Commit `47c0d8a` narrowed the assertion to the exact package line;
+the replacement exact-SHA run then passed all five browser journeys. This is a
+test-alignment correction, not a reduction in asserted product, price, plan,
+accessibility, or secret-leak behavior.
 
 Docker Compose rendering is also not claimed locally because the installed
 Compose plugin is unavailable. No VPS deploy or rollback drill has been run for
