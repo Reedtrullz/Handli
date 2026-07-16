@@ -17,6 +17,7 @@ interface PublicEvidence {
     consoleErrors: number;
     crossOriginBodiesNotInspected: number;
     forbiddenMatches: number;
+    frameworkFontBodiesNotInspected: number;
     headerReadFailures: Array<{ sameOrigin: boolean; surface: "request" | "response" }>;
     pageErrors: number;
     sameOriginBodiesInspected: number;
@@ -32,6 +33,7 @@ function collectPublicEvidence(page: Page): PublicEvidence {
     consoleErrors: 0,
     crossOriginBodiesNotInspected: 0,
     forbiddenMatches: 0,
+    frameworkFontBodiesNotInspected: 0,
     headerReadFailures: [],
     pageErrors: 0,
     sameOriginBodiesInspected: 0,
@@ -76,6 +78,19 @@ function collectPublicEvidence(page: Page): PublicEvidence {
     }
     if (!sameOrigin) {
       stats.crossOriginBodiesNotInspected += 1;
+      return;
+    }
+    const responseUrl = new URL(response.url());
+    const contentType = response.headers()["content-type"]?.split(";", 1)[0]?.toLowerCase();
+    if (
+      response.request().resourceType() === "font" &&
+      contentType === "font/woff2" &&
+      /^\/__nextjs_font\/[^/]+\.woff2$/.test(responseUrl.pathname)
+    ) {
+      // Chromium on Linux does not expose Next's virtual development font body
+      // through Network.getResponseBody. Its URL and complete headers are still
+      // inspected above; application, script, RSC, and API bodies remain required.
+      stats.frameworkFontBodiesNotInspected += 1;
       return;
     }
     if (BODYLESS_STATUSES.has(response.status())) {
