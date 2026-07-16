@@ -62,7 +62,7 @@ describe("official offer and historical comparison contracts", () => {
       windowStartsAt: "2026-06-16T12:00:00.000Z",
       windowEndsAt: "2026-07-16T12:00:00.000Z",
       derivedAt: "2026-07-16T12:00:00.000Z",
-      sourceEvidenceIds: ["price:1", "price:2"],
+      sourceEvidenceIds: Array.from({ length: 7 }, (_, index) => `price:${index + 1}`),
     };
 
     expect(historicalComparisonSchema.safeParse(history).success).toBe(true);
@@ -165,7 +165,7 @@ describe("official offer and historical comparison contracts", () => {
         windowStartsAt: "2026-06-16T12:00:00.000Z",
         windowEndsAt: "2026-07-16T12:00:00.000Z",
         derivedAt: "2026-07-16T12:00:00.000Z",
-        sourceEvidenceIds: ["price:1", "price:2"],
+        sourceEvidenceIds: Array.from({ length: 7 }, (_, index) => `price:${index + 1}`),
       }).success,
     ).toBe(false);
   });
@@ -180,5 +180,20 @@ describe("official offer and historical comparison contracts", () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("requires explicit public or membership eligibility", () => {
+    expect(officialOfferSchema.safeParse({ ...offer, conditions: [] }).success).toBe(false);
+    expect(officialOfferSchema.safeParse({
+      ...offer,
+      conditions: [{ kind: "minimum-quantity", quantity: 2 }],
+    }).success).toBe(false);
+    expect(officialOfferSchema.safeParse({
+      ...offer,
+      conditions: [
+        { kind: "public" },
+        { kind: "minimum-quantity", quantity: 2 },
+      ],
+    }).success).toBe(true);
   });
 });

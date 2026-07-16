@@ -38,6 +38,7 @@ services:
       APP_DATABASE_PASSWORD: ${APP_DATABASE_PASSWORD:?APP_DATABASE_PASSWORD is required}
       DATABASE_MIGRATION_URL: postgresql://handleplan:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/handleplan
       NODE_ENV: production
+      WEB_DATABASE_PASSWORD: ${WEB_DATABASE_PASSWORD:?WEB_DATABASE_PASSWORD is required}
     networks:
       - database
 
@@ -60,15 +61,11 @@ services:
         condition: service_completed_successfully
     environment:
       APP_COMMIT_SHA: ${APP_COMMIT_SHA:?APP_COMMIT_SHA is required}
-      DATABASE_URL: postgresql://handleplan_app:${APP_DATABASE_PASSWORD:?APP_DATABASE_PASSWORD is required}@postgres:5432/handleplan
-      KASSAL_API_KEY: ${KASSAL_API_KEY:?KASSAL_API_KEY is required}
-      KASSAL_BASE_URL: https://kassal.app/api/v1
-      KASSAL_MODE: real
-      PRICE_EVIDENCE_READ_MODEL: ${PRICE_EVIDENCE_READ_MODEL:-legacy}
+      DATABASE_URL: postgresql://handleplan_web:${WEB_DATABASE_PASSWORD:?WEB_DATABASE_PASSWORD is required}@postgres:5432/handleplan
       NEXT_TELEMETRY_DISABLED: "1"
       NODE_ENV: production
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health | grep -q '\"status\":\"ok\"'"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/ready | grep -q '\"status\":\"ok\"'"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -78,6 +75,48 @@ services:
       - frontend
     ports:
       - "127.0.0.1:3004:3000"
+
+  worker:
+    image: ${HANDLEPLAN_IMAGE:?HANDLEPLAN_IMAGE is required}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    entrypoint:
+      - node
+      - /app/apps/worker/dist/main.mjs
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_COMMIT_SHA: ${APP_COMMIT_SHA:?APP_COMMIT_SHA is required}
+      DATABASE_URL: postgresql://handleplan_app:${APP_DATABASE_PASSWORD:?APP_DATABASE_PASSWORD is required}@postgres:5432/handleplan
+      KASSAL_API_KEY: ${KASSAL_API_KEY:-}
+      KASSAL_BASE_URL: https://kassal.app/api/v1
+      KASSAL_SOURCE_ACCESS: ${KASSAL_SOURCE_ACCESS:-conditional}
+      NODE_ENV: production
+      WORKER_CYCLE_INTERVAL_MS: ${WORKER_CYCLE_INTERVAL_MS:-30000}
+      WORKER_LEASE_TTL_MS: ${WORKER_LEASE_TTL_MS:-120000}
+      WORKER_REQUEST_BUDGET_LIMIT: ${WORKER_REQUEST_BUDGET_LIMIT:-60}
+      WORKER_REQUEST_BUDGET_MAX_WAIT_MS: ${WORKER_REQUEST_BUDGET_MAX_WAIT_MS:-65000}
+      WORKER_REQUEST_BUDGET_WINDOW_MS: ${WORKER_REQUEST_BUDGET_WINDOW_MS:-60000}
+      WORKER_SHUTDOWN_GRACE_MS: ${WORKER_SHUTDOWN_GRACE_MS:-30000}
+      WORKER_TARGET_LIMIT: ${WORKER_TARGET_LIMIT:-500}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3005/health | grep -q '\"ready\":true'"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    networks:
+      - database
+      - frontend
+    stop_grace_period: 45s
 
 networks:
   database:

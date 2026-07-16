@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import categoriesFixture from "../test/fixtures/v1/categories.json";
 import labelsFixture from "../test/fixtures/v1/labels.json";
@@ -6,7 +6,7 @@ import physicalStoresFixture from "../test/fixtures/v1/physical-stores.json";
 import pricesFixture from "../test/fixtures/v1/prices-bulk.json";
 import productByEanFixture from "../test/fixtures/v1/product-by-ean.json";
 import productByIdFixture from "../test/fixtures/v1/product-by-id.json";
-import { KassalappClient } from "./client";
+import { KassalappClient, type KassalappRequestAttemptAuthorizer } from "./client";
 
 const NOW = new Date("2026-07-16T12:00:00.000Z");
 const API_KEY = "synthetic-test-key";
@@ -26,6 +26,98 @@ function gtin13(sequence: number): string {
 }
 
 describe("KassalappClient ingestion gateway", () => {
+  it("rechecks authorization after Retry-After and suppresses a revoked retry", async () => {
+    const events: string[] = [];
+    const authorizeRequestAttempt = vi.fn(async ({ attempt, scope }) => {
+      events.push(`authorize:${scope}:${attempt}`);
+      if (attempt === 2) throw new Error("private revoked policy detail");
+    });
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => {
+      events.push("fetch");
+      return new Response(null, {
+        headers: { "retry-after": "0" },
+        status: 503,
+      });
+    });
+    const client = new KassalappClient({
+      apiKey: API_KEY,
+      authorizeRequestAttempt,
+      baseUrl: "https://fixture.invalid/api/v1",
+      fetch,
+      now: () => NOW,
+    });
+
+    await expect(client.getSourceProductByEan("7038010000010")).rejects.toMatchObject({
+      code: "UPSTREAM_UNAVAILABLE",
+    });
+    expect(events).toEqual([
+      "authorize:catalog:1",
+      "fetch",
+      "authorize:catalog:2",
+    ]);
+    expect(authorizeRequestAttempt).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks authorization before every physical-store chain request", async () => {
+    let checks = 0;
+    const authorizeRequestAttempt = vi.fn<KassalappRequestAttemptAuthorizer>(async () => {
+      checks += 1;
+      if (checks > 1) throw new Error("private revoked policy detail");
+    });
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => jsonResponse({
+      data: [physicalStoresFixture.data[0]],
+    }));
+    const client = new KassalappClient({
+      apiKey: API_KEY,
+      authorizeRequestAttempt,
+      baseUrl: "https://fixture.invalid/api/v1",
+      fetch,
+      now: () => NOW,
+    });
+
+    const result = await client.getSourcePhysicalStores();
+
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(authorizeRequestAttempt).toHaveBeenCalledTimes(3);
+    expect(authorizeRequestAttempt.mock.calls.map(([context]) => context)).toEqual([
+      { attempt: 1, scope: "physical-store" },
+      { attempt: 1, scope: "physical-store" },
+      { attempt: 1, scope: "physical-store" },
+    ]);
+    expect(result.coverage).toEqual([
+      expect.objectContaining({ chainCode: "BUNNPRIS", state: "complete" }),
+      expect.objectContaining({ chainCode: "REMA_1000", reason: "REQUEST_FAILED", state: "unknown" }),
+      expect.objectContaining({ chainCode: "COOP_EXTRA", reason: "REQUEST_FAILED", state: "unknown" }),
+    ]);
+  });
+
+  it("discovers a bounded source-normalized catalog page", async () => {
+    const urls: string[] = [];
+    const client = new KassalappClient({
+      apiKey: API_KEY,
+      baseUrl: "https://fixture.invalid/api/v1",
+      fetch: async (input) => {
+        urls.push(String(input));
+        return jsonResponse({ data: [productByIdFixture.data] });
+      },
+      now: () => NOW,
+    });
+
+    await expect(client.getSourceCatalogProducts(1, 100)).resolves.toEqual([
+      expect.objectContaining({
+        state: "accepted",
+        record: expect.objectContaining({ ean: "7038010000010", sourceRecordId: "117" }),
+      }),
+    ]);
+    expect(urls).toEqual([
+      "https://fixture.invalid/api/v1/products?page=1&size=100&sort=date_desc&unique=1&exclude_without_ean=1",
+    ]);
+    await expect(client.getSourceCatalogProducts(1, 101)).rejects.toMatchObject({
+      code: "INVALID_REQUEST",
+    });
+  });
+
   it("preserves every retailer product from the official EAN comparison response", async () => {
     const urls: string[] = [];
     const client = new KassalappClient({
@@ -99,6 +191,7 @@ describe("KassalappClient ingestion gateway", () => {
     });
 
     await expect(client.getSourceProductByEan("7038010000010")).resolves.toEqual([{
+      ean: "7038010000010",
       state: "unknown",
       sourceRecordId: "7038010000010",
       reason: "NOT_FOUND",
@@ -238,11 +331,11 @@ describe("KassalappClient ingestion gateway", () => {
     });
 
     const result = await client.getSourcePhysicalStores();
-    expect(result.outcomes).toContainEqual({
+    expect(result.outcomes).toContainEqual(expect.objectContaining({
       state: "quarantined",
       sourceRecordId: "501",
       reason: "DUPLICATE_IDENTITY",
-    });
+    }));
     expect(result.coverage).toEqual([
       {
         chainCode: "BUNNPRIS",
@@ -285,11 +378,11 @@ describe("KassalappClient ingestion gateway", () => {
     });
 
     const result = await client.getSourcePhysicalStores();
-    expect(result.outcomes).toContainEqual({
+    expect(result.outcomes).toContainEqual(expect.objectContaining({
       state: "quarantined",
       sourceRecordId: "501",
       reason: "DUPLICATE_IDENTITY",
-    });
+    }));
     expect(result.coverage).toContainEqual({
       chainCode: "BUNNPRIS",
       chainId: "bunnpris",
@@ -313,6 +406,30 @@ describe("KassalappClient ingestion gateway", () => {
       expect.objectContaining({ state: "unknown", reason: "MISSING_PRICE" }),
       expect.objectContaining({ state: "unknown", reason: "MISSING_SUPPORTED_CHAIN" }),
     ]));
+  });
+
+  it("fetches historical observations separately from current observations", async () => {
+    const client = new KassalappClient({
+      apiKey: API_KEY,
+      baseUrl: "https://fixture.invalid/api/v1",
+      fetch: async () => jsonResponse(pricesFixture),
+      now: () => NOW,
+    });
+
+    const outcomes = await client.getSourceHistoricalPrices(["7038010000010"]);
+    expect(outcomes).toEqual([
+      expect.objectContaining({
+        state: "accepted",
+        record: expect.objectContaining({
+          amountOre: 2190,
+          ean: "7038010000010",
+          observationKind: "historical",
+        }),
+      }),
+    ]);
+    expect(outcomes.some((outcome) =>
+      outcome.state === "accepted" && outcome.record.observationKind === "current"))
+      .toBe(false);
   });
 
   it("bounds the total source bulk workload before making a request", async () => {
@@ -357,6 +474,7 @@ describe("KassalappClient ingestion gateway", () => {
       record: expect.objectContaining({ ean: eans[0] }),
     }));
     expect(outcomes).toContainEqual({
+      ean: eans[100],
       state: "unknown",
       sourceRecordId: eans[100],
       reason: "BATCH_FAILED",

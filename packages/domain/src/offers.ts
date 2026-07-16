@@ -90,6 +90,13 @@ export const officialOfferSchema = z
     }
     const hasPublicCondition = offer.conditions.some(({ kind }) => kind === "public");
     const hasMemberCondition = offer.conditions.some(({ kind }) => kind === "member");
+    if (!hasPublicCondition && !hasMemberCondition) {
+      context.addIssue({
+        code: "custom",
+        message: "An offer must explicitly declare public or member eligibility",
+        path: ["conditions"],
+      });
+    }
     if (hasPublicCondition && hasMemberCondition) {
       context.addIssue({
         code: "custom",

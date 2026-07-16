@@ -11,7 +11,7 @@ Requirements: Node.js 22 and Corepack pnpm 10.
 ```bash
 corepack enable
 corepack pnpm install --frozen-lockfile
-KASSAL_MODE=fake corepack pnpm dev
+HANDLEPLAN_MODE=fake corepack pnpm dev
 ```
 
 Open `http://localhost:3000/planlegg`. Fake mode is explicit, server-only, fixed-clock, makes no Kassalapp or PostgreSQL network request, and does not need credentials or PostgreSQL.
@@ -34,14 +34,14 @@ See [local development](docs/runbooks/local-development.md) and the [Kassalapp b
 Production deployment assets live under `deploy/`. The app runs as a non-root
 standalone Next.js container on loopback port 3004 with a dedicated PostgreSQL
 service, an owner-only one-shot migrator, a least-privilege `handleplan_app`
-runtime role, checksum-verified forward migrations, immutable commit-tagged
+worker role plus a distinct read-only `handleplan_web` role, checksum-verified forward migrations, immutable commit-tagged
 images, health-gated startup, and rollback to the previous local image when
 startup fails. `deploy/Caddyfile.handleplan` rejects direct-origin traffic and
 requires Cloudflare Access before proxying the preview.
 
-`KASSAL_API_KEY`, `POSTGRES_PASSWORD`, and the distinct
-`APP_DATABASE_PASSWORD` belong only in
-`/opt/apps/handleplan/shared/production.env` on the VPS. Both database
+`KASSAL_API_KEY`, `POSTGRES_PASSWORD`, and the pairwise-distinct
+`APP_DATABASE_PASSWORD` and `WEB_DATABASE_PASSWORD` belong only in
+`/opt/apps/handleplan/shared/production.env` on the VPS. All three database
 passwords must be independently generated, URL-safe 32-128 character secrets.
 They are not GitHub Actions secrets and must never be committed or printed.
 
@@ -49,7 +49,7 @@ They are not GitHub Actions secrets and must never be committed or printed.
 
 Oppdag browses eligible Kassalapp observations without requiring a search, shows the prices actually returned for the intended chains, supports optional product filtering, and can add an exact product to the same local basket used by Planlegg. Coverage can be incomplete. Cross-chain differences are not retailer discounts, and a previous observation is not an official before-price. The alpha does not claim complete three-chain coverage, official offers, branch inventory, branch-specific shelf prices, travel-time routing, or plan impact. The current VPS deployment is an owner-only protected preview. Anonymous basket, matching preferences, and selected plan stay in local browser storage; future volunteered origin is required to remain transient and unpersisted.
 
-Required quantities are package counts (`each`) in Phase 1. Gram and millilitre needs fail closed until package-size normalization can prove how many purchasable packages are required.
+Exact required quantities support packages, grams, and millilitres. The server uses approved package measures, buys whole packages, and shows surplus; flexible family matching still requires a reviewed taxonomy before it can re-enter the strict public contract.
 
 ## Public-release gates
 

@@ -8,7 +8,98 @@ import postgres from "postgres";
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
 const migrationRunner = resolve(root, "deploy/migrate.mjs");
-const runtimeRole = "handleplan_app";
+const workerRole = "handleplan_app";
+const runtimeRole = workerRole;
+const webRole = "handleplan_web";
+const webTableSelects = [
+  "catalog_observations",
+  "canonical_products",
+  "geographic_scope_regions",
+  "geographic_scope_stores",
+  "geographic_scopes",
+  "handleplan_schema_migrations",
+  "ingestion_runs",
+  "latest_price_evidence",
+  "physical_stores",
+  "price_cache",
+  "price_coverage_checks",
+  "price_observations",
+  "product_identifiers",
+];
+const workerReadOnlyTables = [
+  "data_sources",
+  "geographic_scopes",
+  "handleplan_schema_migrations",
+  "source_permissions",
+];
+const workerAppendTables = [
+  "catalog_observations",
+  "price_coverage_checks",
+  "price_observations",
+  "source_record_outcomes",
+  "worker_job_results",
+];
+const workerInsertUpdateTables = [
+  "canonical_products",
+  "ingestion_runs",
+  "physical_stores",
+  "price_cache",
+  "product_identifiers",
+  "source_products",
+];
+const workerSequenceUsage = [
+  "canonical_products_id_seq",
+  "catalog_observations_id_seq",
+  "ingestion_runs_id_seq",
+  "physical_stores_id_seq",
+  "price_coverage_checks_id_seq",
+  "price_observations_id_seq",
+  "product_identifiers_id_seq",
+  "source_record_outcomes_id_seq",
+  "worker_job_results_id_seq",
+];
+const webColumnSelects = {
+  data_sources: [
+    "created_at",
+    "display_name",
+    "id",
+    "permission_expires_at",
+    "permission_reviewed_at",
+    "public_reference_url",
+    "runtime_state",
+    "source_kind",
+    "updated_at",
+  ],
+  source_health_snapshots: [
+    "geographic_scope_id",
+    "id",
+    "last_capture_success_at",
+    "last_discovery_success_at",
+    "last_publish_success_at",
+    "newest_eligible_evidence_at",
+    "recorded_at",
+    "source_id",
+    "status",
+  ],
+  source_permissions: [
+    "created_at",
+    "decision",
+    "id",
+    "permissions",
+    "reviewed_at",
+    "source_id",
+    "valid_until",
+  ],
+  source_products: [
+    "canonical_product_id",
+    "external_id",
+    "first_seen_at",
+    "last_seen_at",
+    "match_state",
+    "raw_record_hash",
+    "source_id",
+  ],
+};
 
 assert.equal(process.env.CI, "true", "runtime-role proof requires CI=true");
 assert.ok(process.env.DATABASE_ADMIN_URL, "DATABASE_ADMIN_URL is required");
@@ -17,6 +108,17 @@ assert.match(
   process.env.APP_DATABASE_PASSWORD,
   /^[A-Za-z0-9_-]{32,128}$/,
   "APP_DATABASE_PASSWORD must be a 32-128 character URL-safe secret",
+);
+assert.ok(process.env.WEB_DATABASE_PASSWORD, "WEB_DATABASE_PASSWORD is required");
+assert.match(
+  process.env.WEB_DATABASE_PASSWORD,
+  /^[A-Za-z0-9_-]{32,128}$/,
+  "WEB_DATABASE_PASSWORD must be a 32-128 character URL-safe secret",
+);
+assert.notEqual(
+  process.env.APP_DATABASE_PASSWORD,
+  process.env.WEB_DATABASE_PASSWORD,
+  "worker and web credentials must differ",
 );
 assert.ok(process.env.MIGRATIONS_DIR, "MIGRATIONS_DIR is required");
 assert.ok(isAbsolute(process.env.MIGRATIONS_DIR), "MIGRATIONS_DIR must be absolute");
@@ -48,6 +150,11 @@ assert.notEqual(
   process.env.APP_DATABASE_PASSWORD,
   "runtime and migration credentials must differ",
 );
+assert.notEqual(
+  decodeURIComponent(adminUrl.password),
+  process.env.WEB_DATABASE_PASSWORD,
+  "web and migration credentials must differ",
+);
 
 function urlForDatabase(database) {
   assert.equal(database, proofDatabase, "refusing an unapproved proof database name");
@@ -60,6 +167,13 @@ function runtimeUrlForDatabase(database) {
   const url = new URL(urlForDatabase(database));
   url.username = runtimeRole;
   url.password = process.env.APP_DATABASE_PASSWORD;
+  return url.toString();
+}
+
+function webUrlForDatabase(database) {
+  const url = new URL(urlForDatabase(database));
+  url.username = webRole;
+  url.password = process.env.WEB_DATABASE_PASSWORD;
   return url.toString();
 }
 
@@ -110,13 +224,99 @@ async function dropProofDatabase(sql) {
 async function expectDenied(operation, label) {
   await assert.rejects(
     operation,
-    /permission denied|must be owner|must be superuser|not permitted|append-only/i,
+    /permission denied|must be owner|must be superuser|not permitted|append-only|lifecycle/i,
     label,
+  );
+}
+
+function expectedTableGrants(role) {
+  const grants = new Set();
+  const add = (table, privileges) => {
+    for (const privilege of privileges) grants.add(`${table}:${privilege}`);
+  };
+  if (role === webRole) {
+    for (const table of webTableSelects) add(table, ["SELECT"]);
+  } else {
+    for (const table of workerReadOnlyTables) add(table, ["SELECT"]);
+    for (const table of workerAppendTables) add(table, ["SELECT", "INSERT"]);
+    for (const table of workerInsertUpdateTables) {
+      add(table, ["SELECT", "INSERT", "UPDATE"]);
+    }
+    add("worker_leases", ["SELECT", "INSERT", "UPDATE", "DELETE"]);
+    add("provider_request_budget_events", ["SELECT", "INSERT", "DELETE"]);
+  }
+  return [...grants].sort();
+}
+
+async function assertExactTableGrants(client, role) {
+  const rows = await client`
+    select table_name, privilege_type
+    from information_schema.role_table_grants
+    where grantee = ${role}
+      and table_schema = 'public'
+    order by table_name, privilege_type
+  `;
+  assert.deepEqual(
+    rows.map(({ table_name: table, privilege_type: privilege }) => `${table}:${privilege}`).sort(),
+    expectedTableGrants(role),
+    `${role} table grants must match the explicit allowlist exactly`,
+  );
+}
+
+async function assertExactWebColumnGrants(client) {
+  const tableNames = Object.keys(webColumnSelects);
+  const rows = await client`
+    select table_name, column_name, privilege_type
+    from information_schema.role_column_grants
+    where grantee = ${webRole}
+      and table_schema = 'public'
+      and table_name = any(${client.array(tableNames)}::text[])
+    order by table_name, column_name, privilege_type
+  `;
+  const expected = Object.entries(webColumnSelects)
+    .flatMap(([table, columns]) => columns.map((column) => `${table}:${column}:SELECT`))
+    .sort();
+  assert.deepEqual(
+    rows.map(({ table_name: table, column_name: column, privilege_type: privilege }) =>
+      `${table}:${column}:${privilege}`).sort(),
+    expected,
+    "handleplan_web column grants must exclude private source and status fields",
+  );
+}
+
+async function assertExactSequenceAndFunctionGrants(client, role) {
+  const sequences = await client`
+    select relation.relname as sequence_name
+    from pg_class relation
+    join pg_namespace namespace on namespace.oid = relation.relnamespace
+    where namespace.nspname = 'public'
+      and relation.relkind = 'S'
+      and has_sequence_privilege(current_user, relation.oid, 'USAGE')
+    order by relation.relname
+  `;
+  assert.deepEqual(
+    sequences.map(({ sequence_name: sequence }) => sequence),
+    role === workerRole ? workerSequenceUsage : [],
+    `${role} sequence usage must match the explicit allowlist exactly`,
+  );
+
+  const functions = await client`
+    select p.oid
+    from pg_proc p
+    join pg_namespace namespace on namespace.oid = p.pronamespace
+    where namespace.nspname = 'public'
+      and has_function_privilege(current_user, p.oid, 'EXECUTE')
+  `;
+  assert.equal(
+    functions.length,
+    0,
+    `${role} must not execute any function in the public schema`,
   );
 }
 
 let admin;
 let runtime;
+let web;
 let createdDatabase = false;
 let proofError;
 let proofResult;
@@ -136,12 +336,45 @@ try {
   await admin.unsafe(`create database "${proofDatabase}"`);
   createdDatabase = true;
 
-  await run(process.execPath, [migrationRunner], {
+  const migrationEnvironment = {
     ...process.env,
     DATABASE_MIGRATION_URL: urlForDatabase(proofDatabase),
     APP_DATABASE_PASSWORD: process.env.APP_DATABASE_PASSWORD,
     MIGRATIONS_DIR: process.env.MIGRATIONS_DIR,
+    WEB_DATABASE_PASSWORD: process.env.WEB_DATABASE_PASSWORD,
+  };
+  await run(process.execPath, [migrationRunner], migrationEnvironment);
+
+  const ownershipAdmin = postgres(urlForDatabase(proofDatabase), {
+    connect_timeout: 10,
+    idle_timeout: 5,
+    max: 1,
+    onnotice: () => {},
   });
+  try {
+    await ownershipAdmin.unsafe(
+      "create table worker_owned_migration_probe (id integer primary key)",
+    );
+    await ownershipAdmin.unsafe(
+      "create table web_owned_migration_probe (id integer primary key)",
+    );
+    await ownershipAdmin.unsafe(
+      `alter table worker_owned_migration_probe owner to ${workerRole}`,
+    );
+    await ownershipAdmin.unsafe(
+      `alter table web_owned_migration_probe owner to ${webRole}`,
+    );
+    await assert.rejects(
+      () => run(process.execPath, [migrationRunner], migrationEnvironment),
+      /Runtime roles must not own database objects/,
+      "migration hardening must fail closed instead of silently reassigning runtime ownership",
+    );
+  } finally {
+    await ownershipAdmin.unsafe("drop table if exists worker_owned_migration_probe");
+    await ownershipAdmin.unsafe("drop table if exists web_owned_migration_probe");
+    await ownershipAdmin.end({ timeout: 5 });
+  }
+  await run(process.execPath, [migrationRunner], migrationEnvironment);
 
   runtime = postgres(runtimeUrlForDatabase(proofDatabase), {
     connect_timeout: 10,
@@ -149,6 +382,18 @@ try {
     max: 1,
     onnotice: () => {},
   });
+  web = postgres(webUrlForDatabase(proofDatabase), {
+    connect_timeout: 10,
+    idle_timeout: 5,
+    max: 1,
+    onnotice: () => {},
+  });
+
+  await assertExactTableGrants(runtime, workerRole);
+  await assertExactTableGrants(web, webRole);
+  await assertExactWebColumnGrants(web);
+  await assertExactSequenceAndFunctionGrants(runtime, workerRole);
+  await assertExactSequenceAndFunctionGrants(web, webRole);
 
   const [capabilities] = await runtime`
     select
@@ -156,6 +401,11 @@ try {
       has_database_privilege(current_user, current_database(), 'CREATE') as database_create,
       has_database_privilege(current_user, current_database(), 'TEMPORARY') as database_temp,
       has_schema_privilege(current_user, 'public', 'CREATE') as schema_create,
+      has_table_privilege(
+        current_user,
+        'handleplan_schema_migrations',
+        'SELECT'
+      ) as migration_select,
       has_table_privilege(current_user, 'source_permissions', 'SELECT') as protected_select,
       has_table_privilege(current_user, 'source_permissions', 'INSERT') as permission_insert,
       has_table_privilege(current_user, 'source_permissions', 'UPDATE') as protected_update,
@@ -169,6 +419,14 @@ try {
         as evidence_update,
       has_table_privilege(current_user, 'price_observations', 'DELETE')
         as evidence_delete,
+      has_table_privilege(current_user, 'catalog_observations', 'SELECT')
+        as catalog_observation_select,
+      has_table_privilege(current_user, 'catalog_observations', 'INSERT')
+        as catalog_observation_insert,
+      has_table_privilege(current_user, 'catalog_observations', 'UPDATE')
+        as catalog_observation_update,
+      has_table_privilege(current_user, 'catalog_observations', 'DELETE')
+        as catalog_observation_delete,
       has_table_privilege(
         current_user,
         'worker_leases',
@@ -179,6 +437,21 @@ try {
         'source_health_snapshots',
         'SELECT, INSERT'
       ) as source_health_append,
+      has_table_privilege(
+        current_user,
+        'publication_captures',
+        'SELECT, INSERT'
+      ) as private_pipeline_access,
+      has_table_privilege(
+        current_user,
+        'worker_job_results',
+        'SELECT, INSERT'
+      ) as worker_results_append,
+      has_table_privilege(
+        current_user,
+        'worker_job_results',
+        'UPDATE, DELETE'
+      ) as worker_results_rewrite,
       has_table_privilege(
         current_user,
         'provider_request_budget_events',
@@ -222,6 +495,7 @@ try {
     database_create: false,
     database_temp: false,
     schema_create: false,
+    migration_select: true,
     protected_select: true,
     permission_insert: false,
     protected_update: false,
@@ -231,8 +505,15 @@ try {
     evidence_insert: true,
     evidence_update: false,
     evidence_delete: false,
+    catalog_observation_select: true,
+    catalog_observation_insert: true,
+    catalog_observation_update: false,
+    catalog_observation_delete: false,
     worker_lease_write: true,
-    source_health_append: true,
+    source_health_append: false,
+    private_pipeline_access: false,
+    worker_results_append: true,
+    worker_results_rewrite: false,
     budget_select: true,
     budget_insert: true,
     budget_delete: true,
@@ -242,8 +523,16 @@ try {
     owned_relations: 0,
     elevated_role: false,
   });
+  const rollbackReadiness = await runtime`
+    select id from handleplan_schema_migrations where id = '011_catalog_observations.sql'
+  `;
+  assert.equal(
+    rollbackReadiness.length,
+    1,
+    "legacy rollback role must retain migration-ledger readiness reads",
+  );
 
-  const ean = "7044710999991";
+  const ean = "7044710999998";
   await runtime`
     insert into price_cache (ean, chain, amount_ore, observed_at, fetched_at)
     values (${ean}, 'extra', 3190, now() - interval '1 minute', now())
@@ -283,24 +572,48 @@ try {
   assert.equal(leaseRows[0]?.owner_id, "runtime-role-proof-worker");
   await runtime`delete from worker_leases where lease_key = 'runtime-role-proof'`;
 
-  const [health] = await runtime`
-    insert into source_health_snapshots (
+  const workerJobId = "runtime-role-proof:catalog-refresh:2026-07-16T12:00:00.000Z";
+  await runtime`
+    insert into worker_job_results (
+      job_id,
       source_id,
+      job_kind,
+      scheduled_at,
+      run_id,
       status,
-      details,
-      recorded_at
+      started_at,
+      completed_at,
+      counts,
+      result_hash
     ) values (
+      ${workerJobId},
       'kassalapp',
-      'healthy',
-      '{"proof":true}'::jsonb,
-      now()
+      'catalog-refresh',
+      '2026-07-16T12:00:00Z',
+      'runtime-role-proof-run',
+      'failed',
+      '2026-07-16T12:00:01Z',
+      '2026-07-16T12:00:02Z',
+      '{"accepted":0,"failed":1,"fetched":0,"persisted":0,"quarantined":0,"unknown":0}'::jsonb,
+      ${"d".repeat(64)}
     )
-    returning id
   `;
-  const healthRows = await runtime`
-    select status from source_health_snapshots where id = ${health.id}
+  const workerResultRows = await runtime`
+    select status from worker_job_results where job_id = ${workerJobId}
   `;
-  assert.equal(healthRows[0]?.status, "healthy");
+  assert.equal(workerResultRows[0]?.status, "failed");
+  await expectDenied(
+    () => runtime`
+      update worker_job_results
+      set status = 'succeeded'
+      where job_id = ${workerJobId}
+    `,
+    "runtime role must not rewrite worker schedule results",
+  );
+  await expectDenied(
+    () => runtime`delete from worker_job_results where job_id = ${workerJobId}`,
+    "runtime role must not delete worker schedule results",
+  );
 
   const [budgetEvent] = await runtime`
     insert into provider_request_budget_events (provider_key)
@@ -339,11 +652,11 @@ try {
       counts
     ) values (
       'kassalapp',
-      'runtime_role_proof',
-      'completed',
+      'catalog',
+      'running',
       now() - interval '1 minute',
-      now(),
-      '{"observations":1}'::jsonb
+      null,
+      '{}'::jsonb
     )
     returning id
   `;
@@ -411,6 +724,343 @@ try {
     select amount_ore from price_observations where id = ${observation.id}
   `;
   assert.equal(protectedRows[0]?.amount_ore, 3190);
+  const [catalogObservation] = await runtime`
+    insert into catalog_observations (
+      ingestion_run_id,
+      source_record_id,
+      canonical_product_id,
+      gtin,
+      display_name,
+      brand,
+      package_amount,
+      package_unit,
+      units_per_pack,
+      retrieved_at,
+      source_updated_at,
+      raw_record_hash
+    ) values (
+      ${ingestionRun.id},
+      'runtime-role-proof-catalog',
+      ${product.id},
+      '7038010000010',
+      'Runtime observed catalog payload',
+      'Runtime observed brand',
+      1000,
+      'g',
+      1,
+      now() - interval '30 seconds',
+      now() - interval '2 minutes',
+      ${"a".repeat(64)}
+    )
+    returning id
+  `;
+  const catalogRows = await runtime`
+    select display_name, source_updated_at, retrieved_at
+    from catalog_observations
+    where id = ${catalogObservation.id}
+  `;
+  assert.equal(catalogRows[0]?.display_name, "Runtime observed catalog payload");
+  assert.ok(catalogRows[0]?.source_updated_at < catalogRows[0]?.retrieved_at);
+  await expectDenied(
+    () => runtime`
+      insert into ingestion_runs (
+        source_id, run_type, status, started_at, completed_at, counts
+      ) values (
+        'kassalapp', 'catalog', 'completed', now(), now(), '{}'::jsonb
+      )
+    `,
+    "runtime role must not insert an already-publishable ingestion run",
+  );
+  await expectDenied(
+    () => runtime`
+      update ingestion_runs
+      set source_id = 'legacy-import'
+      where id = ${ingestionRun.id}
+    `,
+    "runtime role must not relabel an ingestion source",
+  );
+  await expectDenied(
+    () => runtime`
+      update ingestion_runs
+      set run_type = 'historical-prices'
+      where id = ${ingestionRun.id}
+    `,
+    "runtime role must not relabel an ingestion type",
+  );
+  await expectDenied(
+    () => runtime`
+      update ingestion_runs
+      set started_at = started_at - interval '1 minute'
+      where id = ${ingestionRun.id}
+    `,
+    "runtime role must not rewrite ingestion start time",
+  );
+  await expectDenied(
+    () => runtime`
+      update ingestion_runs
+      set created_at = created_at - interval '1 minute'
+      where id = ${ingestionRun.id}
+    `,
+    "runtime role must not rewrite ingestion creation time",
+  );
+  await expectDenied(
+    () => runtime`
+      update ingestion_runs
+      set status = 'running'
+      where id = ${ingestionRun.id}
+    `,
+    "runtime role must not rewrite a still-running ingestion row",
+  );
+  await runtime`
+    update ingestion_runs
+    set status = 'completed',
+        completed_at = now(),
+        counts = '{"observations":1}'::jsonb
+    where id = ${ingestionRun.id}
+  `;
+  await expectDenied(
+    () => runtime`
+      update ingestion_runs
+      set status = 'degraded'
+      where id = ${ingestionRun.id}
+    `,
+    "runtime role must not promote or relabel a terminal ingestion run",
+  );
+  await expectDenied(
+    () => runtime`
+      update ingestion_runs
+      set counts = '{"observations":999}'::jsonb
+      where id = ${ingestionRun.id}
+    `,
+    "runtime role must not rewrite terminal ingestion counts",
+  );
+  await expectDenied(
+    () => runtime`delete from ingestion_runs where id = ${ingestionRun.id}`,
+    "runtime role must not delete ingestion provenance",
+  );
+
+  const [webCapabilities] = await web`
+    select
+      current_user as role_name,
+      has_database_privilege(current_user, current_database(), 'CREATE') as database_create,
+      has_database_privilege(current_user, current_database(), 'TEMPORARY') as database_temp,
+      has_schema_privilege(current_user, 'public', 'CREATE') as schema_create,
+      has_table_privilege(
+        current_user,
+        'handleplan_schema_migrations',
+        'SELECT'
+      ) as migration_select,
+      has_table_privilege(current_user, 'price_cache', 'SELECT') as cache_select,
+      has_table_privilege(current_user, 'price_cache', 'INSERT, UPDATE, DELETE')
+        as cache_write,
+      has_table_privilege(current_user, 'canonical_products', 'SELECT')
+        as catalog_select,
+      has_table_privilege(current_user, 'canonical_products', 'INSERT, UPDATE, DELETE')
+        as catalog_write,
+      has_table_privilege(current_user, 'catalog_observations', 'SELECT')
+        as catalog_observation_select,
+      has_table_privilege(
+        current_user,
+        'catalog_observations',
+        'INSERT, UPDATE, DELETE'
+      ) as catalog_observation_write,
+      has_table_privilege(current_user, 'price_observations', 'SELECT')
+        as evidence_select,
+      has_table_privilege(current_user, 'price_observations', 'INSERT, UPDATE, DELETE')
+        as evidence_write,
+      has_column_privilege(current_user, 'source_permissions', 'permissions', 'SELECT')
+        as source_permission_public_select,
+      has_column_privilege(
+        current_user,
+        'source_permissions',
+        'private_reference_key',
+        'SELECT'
+      ) as source_permission_private_select,
+      has_table_privilege(current_user, 'publication_captures', 'SELECT')
+        as private_capture_select,
+      has_table_privilege(current_user, 'extracted_offer_candidates', 'SELECT')
+        as private_candidate_select,
+      has_table_privilege(current_user, 'review_actions', 'SELECT')
+        as review_queue_select,
+      has_table_privilege(current_user, 'worker_leases', 'SELECT')
+        as worker_lease_select,
+      has_table_privilege(current_user, 'worker_job_results', 'SELECT')
+        as worker_result_select,
+      has_table_privilege(current_user, 'provider_request_budget_events', 'SELECT')
+        as budget_select,
+      has_sequence_privilege(current_user, 'canonical_products_id_seq', 'USAGE')
+        as sequence_usage,
+      has_function_privilege(
+        current_user,
+        'reject_append_only_mutation()',
+        'EXECUTE'
+      ) as guard_execute,
+      pg_has_role(current_user, 'handleplan', 'MEMBER') as migration_role_member,
+      pg_has_role(current_user, 'handleplan_app', 'MEMBER') as worker_role_member,
+      (
+        select count(*)::integer
+        from pg_class
+        where relowner = (select oid from pg_roles where rolname = current_user)
+      ) as owned_relations,
+      (
+        select rolsuper or rolcreaterole or rolcreatedb or rolreplication or rolbypassrls
+        from pg_roles
+        where rolname = current_user
+      ) as elevated_role
+  `;
+  assert.deepEqual(webCapabilities, {
+    role_name: webRole,
+    database_create: false,
+    database_temp: false,
+    schema_create: false,
+    migration_select: true,
+    cache_select: true,
+    cache_write: false,
+    catalog_select: true,
+    catalog_write: false,
+    catalog_observation_select: true,
+    catalog_observation_write: false,
+    evidence_select: true,
+    evidence_write: false,
+    source_permission_public_select: true,
+    source_permission_private_select: false,
+    private_capture_select: false,
+    private_candidate_select: false,
+    review_queue_select: false,
+    worker_lease_select: false,
+    worker_result_select: false,
+    budget_select: false,
+    sequence_usage: false,
+    guard_execute: false,
+    migration_role_member: false,
+    worker_role_member: false,
+    owned_relations: 0,
+    elevated_role: false,
+  });
+
+  const webMigrations = await web`
+    select id from handleplan_schema_migrations where id = '011_catalog_observations.sql'
+  `;
+  assert.equal(webMigrations.length, 1, "web readiness must read the migration ledger");
+  const webEvidence = await web`
+    select observation.amount_ore, product.display_name, coverage.state
+    from price_observations observation
+    inner join canonical_products product on product.id = observation.product_id
+    inner join price_coverage_checks coverage
+      on coverage.ingestion_run_id = observation.ingestion_run_id
+     and coverage.product_id = observation.product_id
+     and coverage.chain = observation.chain
+    where observation.id = ${observation.id}
+  `;
+  assert.deepEqual(
+    [...webEvidence],
+    [{ amount_ore: 3190, display_name: "Runtime role proof product", state: "priced" }],
+    "web SELECT must read public price evidence",
+  );
+  const webCatalogEvidence = await web`
+    select display_name, gtin, retrieved_at, source_updated_at
+    from catalog_observations
+    where id = ${catalogObservation.id}
+  `;
+  assert.equal(webCatalogEvidence[0]?.display_name, "Runtime observed catalog payload");
+  assert.equal(webCatalogEvidence[0]?.gtin, "7038010000010");
+  await web`
+    select source_id, permissions
+    from source_permissions
+    order by reviewed_at desc, id desc
+    limit 1
+  `;
+
+  await expectDenied(
+    () => web`select private_reference_key from source_permissions limit 1`,
+    "web role must not read private source references",
+  );
+  await expectDenied(
+    () => web`select id from publication_captures limit 1`,
+    "web role must not read private publication captures",
+  );
+  await expectDenied(
+    () => web`select id from extracted_offer_candidates limit 1`,
+    "web role must not read private offer candidates",
+  );
+  await expectDenied(
+    () => web`select lease_key from worker_leases limit 1`,
+    "web role must not read worker leases",
+  );
+  await expectDenied(
+    () => web`select provider_key from provider_request_budget_events limit 1`,
+    "web role must not read request-budget state",
+  );
+  await expectDenied(
+    () => web`
+      insert into canonical_products (
+        display_name, package_amount, package_unit, units_per_pack, status
+      ) values ('Web forgery', 1, 'package', 1, 'active')
+    `,
+    "web role must not write canonical products",
+  );
+  await expectDenied(
+    () => web`
+      insert into ingestion_runs (source_id, run_type, status, started_at, counts)
+      values ('kassalapp', 'web_forgery', 'running', now(), '{}'::jsonb)
+    `,
+    "web role must not write ingestion runs",
+  );
+  await expectDenied(
+    () => web`
+      insert into price_cache (ean, chain, amount_ore, observed_at, fetched_at)
+      values ('7044710999981', 'extra', 1, now(), now())
+    `,
+    "web role must not write the legacy price cache",
+  );
+  await expectDenied(
+    () => web`
+      insert into price_observations (
+        evidence_key, product_id, chain, amount_ore, observed_at, fetched_at,
+        source_id, ingestion_run_id, evidence_level, confidence, claim_eligibility
+      ) values (
+        'web-forgery', ${product.id}, 'extra', 1, now(), now(),
+        'kassalapp', ${ingestionRun.id}, 'chain', 100, 'ordinary_only'
+      )
+    `,
+    "web role must not write price evidence",
+  );
+  await expectDenied(
+    () => web`
+      insert into catalog_observations (
+        ingestion_run_id, source_record_id, canonical_product_id, gtin,
+        display_name, package_amount, package_unit, units_per_pack,
+        retrieved_at, raw_record_hash
+      ) values (
+        ${ingestionRun.id}, 'web-forgery', ${product.id}, '7038010000010',
+        'Web forgery', 1, 'package', 1, now(), ${"f".repeat(64)}
+      )
+    `,
+    "web role must not write catalog evidence",
+  );
+  await expectDenied(
+    () => web`
+      insert into worker_leases (
+        lease_key, owner_id, acquired_at, expires_at, heartbeat_at
+      ) values ('web-forgery', 'web', now(), now() + interval '1 minute', now())
+    `,
+    "web role must not write worker leases",
+  );
+  await expectDenied(
+    () => web`
+      insert into provider_request_budget_events (provider_key)
+      values ('web-forgery')
+    `,
+    "web role must not write request-budget state",
+  );
+  await expectDenied(
+    () => web`select nextval('canonical_products_id_seq')`,
+    "web role must not use sequences",
+  );
+  await expectDenied(
+    () => web.unsafe("select reject_append_only_mutation()"),
+    "web role must not execute database functions",
+  );
 
   await expectDenied(
     () => runtime`
@@ -438,9 +1088,34 @@ try {
   );
   await expectDenied(
     () => runtime`
+      insert into source_health_snapshots (source_id, status, details, recorded_at)
+      values ('kassalapp', 'healthy', '{}'::jsonb, now())
+    `,
+    "worker role must not write unimplemented public-status pipelines",
+  );
+  await expectDenied(
+    () => runtime`select id from publication_captures limit 1`,
+    "worker role must not read private capture pipelines",
+  );
+  await expectDenied(
+    () => runtime`
       update price_observations set amount_ore = 1 where id = ${observation.id}
     `,
     "runtime role must not update append-only evidence",
+  );
+  await expectDenied(
+    () => runtime`
+      update catalog_observations
+      set display_name = 'Rewritten catalog payload'
+      where id = ${catalogObservation.id}
+    `,
+    "runtime role must not update append-only catalog evidence",
+  );
+  await expectDenied(
+    () => runtime`
+      delete from catalog_observations where id = ${catalogObservation.id}
+    `,
+    "runtime role must not delete append-only catalog evidence",
   );
   await runtime`select set_config('handleplan.allow_append_only_mutation', 'on', false)`;
   await expectDenied(
@@ -477,10 +1152,16 @@ try {
 
   proofResult = {
     database: proofDatabase,
-    role: runtimeRole,
+    workerRole,
+    webRole,
+    ownershipFailClosed: true,
     cacheAndWorkerWrites: true,
     requestBudgetCoordination: true,
+    webPublicReads: true,
+    webPrivateReadsDenied: true,
+    webWritesDenied: true,
     protectedInsertRead: true,
+    catalogObservationInsertRead: true,
     protectedMutationDenied: true,
     triggerDisableDenied: true,
     schemaDdlDenied: true,
@@ -497,6 +1178,9 @@ try {
     }
   }
 
+  if (web) {
+    await attemptCleanup("close web connection", () => web.end({ timeout: 5 }));
+  }
   if (runtime) {
     await attemptCleanup("close runtime connection", () => runtime.end({ timeout: 5 }));
   }

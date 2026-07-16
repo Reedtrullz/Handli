@@ -5,6 +5,7 @@
     "build": "next build",
     "dev": "next dev",
     "lint": "eslint .",
+    "test:handlemodus:browser": "playwright test --config playwright.handlemodus.config.ts",
     "test": "vitest run",
     "test:result:browser": "playwright test --config playwright.task8.config.ts",
     "typecheck": "tsc --noEmit"

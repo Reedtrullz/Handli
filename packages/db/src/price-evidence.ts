@@ -122,7 +122,6 @@ export class PostgresPriceEvidenceMirror implements PriceEvidenceMirror {
     const [run] = await transaction
         .insert(ingestionRuns)
         .values({
-          completedAt: fetchedAt,
           counts: { received: rows.length },
           runType: "interactive_price_mirror",
           sourceId,

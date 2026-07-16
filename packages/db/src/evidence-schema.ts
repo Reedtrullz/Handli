@@ -309,6 +309,7 @@ export const ingestionRuns = pgTable(
   "ingestion_runs",
   {
     id: id("id").primaryKey(),
+    jobId: varchar("job_id", { length: 200 }),
     sourceId: varchar("source_id", { length: 64 })
       .notNull()
       .references(() => dataSources.id),
@@ -321,6 +322,9 @@ export const ingestionRuns = pgTable(
     createdAt: time("created_at").notNull().defaultNow(),
   },
   (table) => [
+    uniqueIndex("ingestion_runs_job_id_unique")
+      .on(table.jobId)
+      .where(sql`${table.jobId} is not null`),
     check(
       "ingestion_runs_status",
       sql`${table.status} in ('running', 'completed', 'degraded', 'failed', 'cancelled')`,
@@ -328,6 +332,121 @@ export const ingestionRuns = pgTable(
     check(
       "ingestion_runs_time_range",
       sql`${table.completedAt} is null or ${table.completedAt} >= ${table.startedAt}`,
+    ),
+  ],
+);
+
+export const sourceRecordOutcomes = pgTable(
+  "source_record_outcomes",
+  {
+    id: id("id").primaryKey(),
+    ingestionRunId: foreignId("ingestion_run_id")
+      .notNull()
+      .references(() => ingestionRuns.id),
+    recordKind: varchar("record_kind", { length: 32 }).notNull(),
+    sourceRecordId: varchar("source_record_id", { length: 200 }).notNull(),
+    outcomeState: varchar("outcome_state", { length: 16 }).notNull(),
+    reason: varchar("reason", { length: 80 }),
+    subjectEan: varchar("subject_ean", { length: 14 }),
+    subjectChain: varchar("subject_chain", { length: 32 }),
+    rawChainCode: varchar("raw_chain_code", { length: 100 }),
+    normalizedRecord: jsonb("normalized_record").$type<Record<string, unknown>>(),
+    outcomeHash: char("outcome_hash", { length: 64 }).notNull(),
+    recordedAt: time("recorded_at").notNull(),
+  },
+  (table) => [
+    unique("source_record_outcomes_run_kind_record_unique").on(
+      table.ingestionRunId,
+      table.recordKind,
+      table.sourceRecordId,
+    ),
+    check(
+      "source_record_outcomes_state",
+      sql`${table.outcomeState} in ('accepted', 'quarantined', 'unknown')`,
+    ),
+    check(
+      "source_record_outcomes_reason_state",
+      sql`(${table.outcomeState} = 'accepted' and ${table.reason} is null) or (${table.outcomeState} in ('quarantined', 'unknown') and ${table.reason} is not null)`,
+    ),
+    check(
+      "source_record_outcomes_ean_shape",
+      sql`${table.subjectEan} is null or ${table.subjectEan} ~ '^([0-9]{8}|[0-9]{13})$'`,
+    ),
+    check(
+      "source_record_outcomes_chain_supported",
+      sql`${table.subjectChain} is null or ${table.subjectChain} in ('bunnpris', 'rema-1000', 'extra')`,
+    ),
+    check(
+      "source_record_outcomes_hash_shape",
+      sql`${table.outcomeHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+  ],
+);
+
+export const catalogObservations = pgTable(
+  "catalog_observations",
+  {
+    id: id("id").primaryKey(),
+    ingestionRunId: foreignId("ingestion_run_id")
+      .notNull()
+      .references(() => ingestionRuns.id),
+    sourceRecordId: varchar("source_record_id", { length: 128 }).notNull(),
+    canonicalProductId: foreignId("canonical_product_id")
+      .notNull()
+      .references(() => canonicalProducts.id),
+    gtin: varchar("gtin", { length: 14 }).notNull(),
+    displayName: varchar("display_name", { length: 240 }).notNull(),
+    brand: varchar("brand", { length: 160 }),
+    packageAmount: integer("package_amount").notNull(),
+    packageUnit: varchar("package_unit", { length: 16 }).notNull(),
+    unitsPerPack: integer("units_per_pack").notNull().default(1),
+    retrievedAt: time("retrieved_at").notNull(),
+    sourceUpdatedAt: time("source_updated_at"),
+    rawRecordHash: char("raw_record_hash", { length: 64 }).notNull(),
+    createdAt: time("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    unique("catalog_observations_run_record_unique").on(
+      table.ingestionRunId,
+      table.sourceRecordId,
+    ),
+    index("catalog_observations_gtin_retrieved_idx").on(
+      table.gtin,
+      table.retrievedAt,
+      table.id,
+    ),
+    index("catalog_observations_product_retrieved_idx").on(
+      table.canonicalProductId,
+      table.retrievedAt,
+      table.id,
+    ),
+    check(
+      "catalog_observations_gtin_shape",
+      sql`${table.gtin} ~ '^([0-9]{8}|[0-9]{13})$'`,
+    ),
+    check(
+      "catalog_observations_display_name_nonempty",
+      sql`length(trim(${table.displayName})) > 0`,
+    ),
+    check(
+      "catalog_observations_package_amount_positive",
+      sql`${table.packageAmount} > 0`,
+    ),
+    check(
+      "catalog_observations_package_unit",
+      sql`${table.packageUnit} in ('g', 'ml', 'piece', 'package')`,
+    ),
+    check(
+      "catalog_observations_units_per_pack_positive",
+      sql`${table.unitsPerPack} > 0`,
+    ),
+    check(
+      "catalog_observations_source_time_order",
+      sql`${table.sourceUpdatedAt} is null or ${table.sourceUpdatedAt} <= ${table.retrievedAt}`,
+    ),
+    check(
+      "catalog_observations_hash_shape",
+      sql`${table.rawRecordHash} ~ '^[0-9a-f]{64}$'`,
     ),
   ],
 );
@@ -773,6 +892,55 @@ export const workerLeases = pgTable(
   ],
 );
 
+export const workerJobResults = pgTable(
+  "worker_job_results",
+  {
+    id: id("id").primaryKey(),
+    jobId: varchar("job_id", { length: 200 }).notNull(),
+    sourceId: varchar("source_id", { length: 64 })
+      .notNull()
+      .references(() => dataSources.id),
+    jobKind: varchar("job_kind", { length: 40 }).notNull(),
+    scheduledAt: time("scheduled_at").notNull(),
+    runId: varchar("run_id", { length: 200 }).notNull(),
+    status: varchar("status", { length: 16 }).notNull(),
+    startedAt: time("started_at").notNull(),
+    completedAt: time("completed_at").notNull(),
+    counts: jsonb("counts").$type<Record<string, number>>().notNull(),
+    resultHash: char("result_hash", { length: 64 }).notNull(),
+    createdAt: time("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("worker_job_results_job_id_unique").on(table.jobId),
+    index("worker_job_results_source_kind_schedule_idx").on(
+      table.sourceId,
+      table.jobKind,
+      table.scheduledAt,
+      table.id,
+    ),
+    check(
+      "worker_job_results_job_kind",
+      sql`${table.jobKind} in ('catalog-refresh', 'benchmark-price-refresh', 'physical-store-sync', 'historical-observation-collection')`,
+    ),
+    check(
+      "worker_job_results_status",
+      sql`${table.status} in ('succeeded', 'partial', 'cancelled', 'timed-out', 'failed')`,
+    ),
+    check(
+      "worker_job_results_time_range",
+      sql`${table.completedAt} >= ${table.startedAt} and ${table.completedAt} >= ${table.scheduledAt}`,
+    ),
+    check(
+      "worker_job_results_counts_object",
+      sql`jsonb_typeof(${table.counts}) = 'object'`,
+    ),
+    check(
+      "worker_job_results_hash_shape",
+      sql`${table.resultHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+  ],
+);
+
 export const alertEvents = pgTable(
   "alert_events",
   {
@@ -865,4 +1033,8 @@ export type CanonicalProductRow = typeof canonicalProducts.$inferSelect;
 export type PriceEvidenceRow = typeof priceObservations.$inferSelect;
 export type NewPriceEvidenceRow = typeof priceObservations.$inferInsert;
 export type CoverageCheckRow = typeof priceCoverageChecks.$inferSelect;
+export type SourceRecordOutcomeRow = typeof sourceRecordOutcomes.$inferSelect;
+export type NewSourceRecordOutcomeRow = typeof sourceRecordOutcomes.$inferInsert;
+export type CatalogObservationRow = typeof catalogObservations.$inferSelect;
+export type NewCatalogObservationRow = typeof catalogObservations.$inferInsert;
 export type ApprovedOfferRow = typeof approvedOffers.$inferSelect;

@@ -4,11 +4,19 @@
   "type": "module",
   "exports": {
     ".": "./src/price-cache.ts",
+    "./catalog-reader": "./src/catalog-reader.ts",
     "./client": "./src/client.ts",
     "./evidence": "./src/price-evidence.ts",
+    "./ingestion": "./src/ingestion.ts",
+    "./planning-evidence-reader": "./src/planning-evidence-reader.ts",
+    "./public-catalog-index-reader": "./src/public-catalog-index-reader.ts",
     "./read-model": "./src/price-read-model.ts",
     "./request-budget": "./src/request-budget.ts",
-    "./schema": "./src/schema.ts"
+    "./schema": "./src/schema.ts",
+    "./source-access": "./src/source-access.ts",
+    "./worker-lease": "./src/worker-lease.ts",
+    "./worker-state": "./src/worker-state.ts",
+    "./worker-targets": "./src/worker-targets.ts"
   },
   "scripts": {
     "db:migrate": "drizzle-kit push",

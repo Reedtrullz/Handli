@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { sourceIdSchema } from "./contract-primitives";
+import { fulfilmentSchema, type Fulfilment } from "./fulfilment-contract";
 
 export type MoneyOre = number & { readonly __moneyOre: unique symbol };
 export const MAX_PERSISTED_MONEY_ORE = 2_147_483_647;
@@ -62,6 +63,7 @@ export interface PlanResult<SourceId extends string = "kassalapp"> {
     costOre: MoneyOre;
     observedAt: string;
     source: SourceId;
+    fulfilment?: Fulfilment;
   }>;
   totalOre: MoneyOre;
   chains: PriceObservation["chain"][];
@@ -194,6 +196,7 @@ export const sourceNeutralPlanResultSchema: z.ZodType<PlanResult<string>> = z.ob
       costOre: moneyOreSchema,
       observedAt: z.iso.datetime({ offset: false, precision: 3 }),
       source: sourceIdSchema,
+      fulfilment: fulfilmentSchema.optional(),
     }),
   ),
   totalOre: moneyOreSchema,
@@ -219,6 +222,7 @@ export const planResultSchema: z.ZodType<PlanResult> = z.object({
       costOre: moneyOreSchema,
       observedAt: z.iso.datetime({ offset: false, precision: 3 }),
       source: z.literal("kassalapp"),
+      fulfilment: fulfilmentSchema.optional(),
     }),
   ),
   totalOre: moneyOreSchema,

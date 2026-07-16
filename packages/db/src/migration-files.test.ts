@@ -18,6 +18,9 @@ const productionEntrypoint = fileURLToPath(
 const productionDeploy = fileURLToPath(
   new URL("../../../deploy/deploy-on-vps.sh", import.meta.url),
 );
+const legacyRollbackCompose = fileURLToPath(
+  new URL("../../../deploy/compose.rollback-legacy.yml", import.meta.url),
+);
 const ciWorkflow = fileURLToPath(new URL("../../../.github/workflows/ci.yml", import.meta.url));
 const databaseUpgradeProof = fileURLToPath(
   new URL("../../../tests/acceptance/prove-database-upgrade.mjs", import.meta.url),
@@ -43,6 +46,7 @@ function runMigrationWith(overrides: Record<string, string>) {
       DATABASE_MIGRATION_URL:
         "postgresql://proof:proof_admin_url_safe_000000000001@127.0.0.1:1/proof",
       APP_DATABASE_PASSWORD: "proof_app_url_safe_000000000000000001",
+      WEB_DATABASE_PASSWORD: "proof_web_url_safe_000000000000000001",
       MIGRATIONS_DIR: migrationsDirectory,
       ...overrides,
     },
@@ -65,12 +69,15 @@ describe("forward-only v1 migrations", () => {
       "006_source_health.sql",
       "007_append_only_guards.sql",
       "008_provider_request_budget.sql",
+      "009_ingestion_outcomes.sql",
+      "010_worker_job_results.sql",
+      "011_catalog_observations.sql",
     ]);
   });
 
   it("uses additive SQL and preserves price_cache as rollback state", async () => {
     const files = (await readdir(migrationsDirectory))
-      .filter((file) => /^00[2-8]_[a-z0-9_]+\.sql$/.test(file))
+      .filter((file) => /^(?:00[2-9]|01[01])_[a-z0-9_]+\.sql$/.test(file))
       .sort();
     const source = (
       await Promise.all(
@@ -181,10 +188,92 @@ describe("forward-only v1 migrations", () => {
     );
   });
 
-  it("separates the migration owner from the fail-closed runtime role", async () => {
-    const [runner, compose, entrypoint, deploy, proof, workflow] = await Promise.all([
+  it("adds idempotent scheduled runs and append-only source outcome audit", async () => {
+    const [migration, runner, packageManifest] = await Promise.all([
+      readFile(
+        path.join(migrationsDirectory, "009_ingestion_outcomes.sql"),
+        "utf8",
+      ),
+      readFile(migrationRunner, "utf8"),
+      readFile(
+        fileURLToPath(new URL("../package.json", import.meta.url)),
+        "utf8",
+      ),
+    ]);
+
+    expect(migration).toContain("add column if not exists job_id varchar(200)");
+    expect(migration).toContain("ingestion_runs_job_id_unique");
+    expect(migration).toContain("create table source_record_outcomes");
+    expect(migration).toContain("source_record_outcomes_append_only");
+    expect(migration).toContain("source_record_outcomes_run_kind_record_unique");
+    expect(runner).toMatch(
+      /protectedAppendOnlyTables[\s\S]*source_record_outcomes/,
+    );
+    expect(runner).toContain("source_record_outcomes_id_seq");
+    expect(JSON.parse(packageManifest).exports["./ingestion"]).toBe(
+      "./src/ingestion.ts",
+    );
+  });
+
+  it("persists fenced worker schedule outcomes independently of ingestion evidence", async () => {
+    const [migration, runner, packageManifest] = await Promise.all([
+      readFile(
+        path.join(migrationsDirectory, "010_worker_job_results.sql"),
+        "utf8",
+      ),
+      readFile(migrationRunner, "utf8"),
+      readFile(
+        fileURLToPath(new URL("../package.json", import.meta.url)),
+        "utf8",
+      ),
+    ]);
+
+    expect(migration).toContain("create table worker_job_results");
+    expect(migration).toContain("worker_job_results_job_id_unique");
+    expect(migration).toContain("worker_job_results_append_only");
+    expect(migration).toContain("result_hash char(64) not null");
+    expect(migration).not.toContain("fence_token");
+    expect(runner).toMatch(/protectedAppendOnlyTables[\s\S]*worker_job_results/);
+    expect(runner).toContain("worker_job_results_id_seq");
+    expect(JSON.parse(packageManifest).exports["./worker-state"]).toBe(
+      "./src/worker-state.ts",
+    );
+  });
+
+  it("versions catalog payloads append-only and grants only append/read capabilities", async () => {
+    const [migration, runner] = await Promise.all([
+      readFile(
+        path.join(migrationsDirectory, "011_catalog_observations.sql"),
+        "utf8",
+      ),
+      readFile(migrationRunner, "utf8"),
+    ]);
+
+    expect(migration).toContain("create table catalog_observations");
+    expect(migration).toContain("ingestion_run_id bigint not null references ingestion_runs(id)");
+    expect(migration).toContain("retrieved_at timestamptz not null");
+    expect(migration).toContain("source_updated_at timestamptz");
+    expect(migration).toContain("catalog_observations_append_only");
+    expect(migration).toContain("create function enforce_ingestion_run_lifecycle()");
+    expect(migration).toContain("create trigger ingestion_runs_lifecycle_guard");
+    expect(migration).toContain("new.source_id is distinct from old.source_id");
+    expect(migration).toContain("new.run_type is distinct from old.run_type");
+    expect(migration).toContain("new.started_at is distinct from old.started_at");
+    expect(migration).toContain("new.created_at is distinct from old.created_at");
+    expect(migration).toContain("old.status <> 'running'");
+    expect(migration).toContain(
+      "new.status not in ('completed', 'degraded', 'failed', 'cancelled')",
+    );
+    expect(runner).toMatch(/protectedAppendOnlyTables[\s\S]*catalog_observations/);
+    expect(runner).toMatch(/webReadOnlyTables[\s\S]*catalog_observations/);
+    expect(runner).toContain("catalog_observations_id_seq");
+  });
+
+  it("separates the migration owner, write-capable worker, and read-only web roles", async () => {
+    const [runner, compose, rollbackCompose, entrypoint, deploy, proof, workflow] = await Promise.all([
       readFile(migrationRunner, "utf8"),
       readFile(productionCompose, "utf8"),
+      readFile(legacyRollbackCompose, "utf8"),
       readFile(productionEntrypoint, "utf8"),
       readFile(productionDeploy, "utf8"),
       readFile(runtimeRoleProof, "utf8"),
@@ -193,22 +282,62 @@ describe("forward-only v1 migrations", () => {
 
     expect(runner).toContain("DATABASE_MIGRATION_URL");
     expect(runner).toContain("APP_DATABASE_PASSWORD");
-    expect(runner).toContain('const runtimeRole = "handleplan_app"');
+    expect(runner).toContain("WEB_DATABASE_PASSWORD");
+    expect(runner).toContain('const workerRole = "handleplan_app"');
+    expect(runner).toContain('const webRole = "handleplan_web"');
+    expect(runner).toContain("webReadOnlyTables");
+    expect(runner).toContain('"handleplan_schema_migrations"');
+    expect(runner).not.toContain("reassign owned by");
+    expect(runner).not.toMatch(
+      /grant select on table \$\{identifiers\(webReadOnlyTables\)\}\s+to \$\{workerRole\}/,
+    );
+    const webAllowlist = runner.match(/const webReadOnlyTables = \[([\s\S]*?)\];/)?.[1];
+    expect(webAllowlist).toBeDefined();
+    expect(webAllowlist).not.toContain('"publication_captures"');
+    expect(webAllowlist).not.toContain('"review_actions"');
+    expect(webAllowlist).not.toContain('"worker_leases"');
+    expect(webAllowlist).not.toContain('"worker_job_results"');
+    expect(webAllowlist).not.toContain('"provider_request_budget_events"');
     expect(compose).toMatch(/migrate:[\s\S]*DATABASE_MIGRATION_URL:/);
     expect(compose).toContain(
       "${APP_DATABASE_PASSWORD:?APP_DATABASE_PASSWORD is required}",
     );
     expect(compose).toContain(
+      "${WEB_DATABASE_PASSWORD:?WEB_DATABASE_PASSWORD is required}",
+    );
+    expect(compose).toContain(
       "${HANDLEPLAN_MIGRATION_IMAGE:?HANDLEPLAN_MIGRATION_IMAGE is required}",
     );
-    expect(compose).toMatch(/app:[\s\S]*DATABASE_URL: postgresql:\/\/handleplan_app:/);
+    expect(compose).toMatch(/app:[\s\S]*DATABASE_URL: postgresql:\/\/handleplan_web:/);
+    expect(compose).toMatch(/worker:[\s\S]*DATABASE_URL: postgresql:\/\/handleplan_app:/);
     expect(compose).not.toMatch(/app:[\s\S]*DATABASE_URL: postgresql:\/\/handleplan:/);
+    const appBlock = compose.match(/  app:\n([\s\S]*?)\n  worker:/)?.[1];
+    expect(appBlock).toBeDefined();
+    expect(appBlock).not.toContain("KASSAL_API_KEY");
+    expect(appBlock).not.toContain("KASSAL_BASE_URL");
+    expect(appBlock).not.toContain("KASSAL_MODE");
     expect(compose).toMatch(
       /app:[\s\S]*migrate:[\s\S]*condition: service_completed_successfully/,
     );
+    expect(compose).toMatch(
+      /app:[\s\S]*healthcheck:[\s\S]*127\.0\.0\.1:3000\/api\/ready/,
+    );
     expect(entrypoint).not.toContain("migrate.mjs");
     expect(deploy).toContain('HANDLEPLAN_MIGRATION_IMAGE="$migration_image"');
-    expect(deploy).toContain('deploy "$previous_revision" "$revision"');
+    expect(deploy).toContain(
+      'deploy "$previous_revision" "$revision" "$previous_compatibility_mode"',
+    );
+    expect(deploy).toContain('record_deployment_state "$state_dir" "$revision" current');
+    expect(deploy).toContain("compose.rollback-legacy.yml");
+    expect(deploy).toContain("rm -f worker");
+    expect(rollbackCompose).toContain("postgresql://handleplan_web:");
+    expect(rollbackCompose).toContain("KASSAL_API_KEY: legacy-rollback-network-disabled");
+    expect(rollbackCompose).toContain("KASSAL_BASE_URL: https://127.0.0.1:1");
+    expect(rollbackCompose).not.toContain("postgresql://handleplan_app:");
+    expect(rollbackCompose).not.toContain("${KASSAL_API_KEY");
+    expect(rollbackCompose).not.toContain("https://kassal.app/");
+    expect(rollbackCompose).toContain("127.0.0.1:3000/api/health");
+    expect(rollbackCompose).not.toContain("worker:");
     expect(proof).toContain("handleplan.allow_append_only_mutation");
     expect(proof).toContain("disable trigger source_permissions_append_only");
     expect(proof).toContain("has_table_privilege");
@@ -217,9 +346,27 @@ describe("forward-only v1 migrations", () => {
     expect(proof).toContain("budget_delete");
     expect(proof).toContain("budget_update");
     expect(proof).toContain("provider_request_budget_events");
+    expect(proof).toContain('const webRole = "handleplan_web"');
+    expect(proof).toContain("web SELECT must read public price evidence");
+    expect(proof).toContain("web role must not read private publication captures");
+    expect(proof).toContain("web role must not write canonical products");
     expect(workflow).toMatch(
       /- name: Prove runtime database least privilege[\s\S]*prove-runtime-database-role\.mjs/,
     );
+  });
+
+  it("rejects any shared owner, worker, or web credential before connecting", () => {
+    const sharedRuntime = runMigrationWith({
+      WEB_DATABASE_PASSWORD: "proof_app_url_safe_000000000000000001",
+    });
+    const sharedOwner = runMigrationWith({
+      WEB_DATABASE_PASSWORD: "proof_admin_url_safe_000000000001",
+    });
+
+    expect(sharedRuntime.status).not.toBe(0);
+    expect(sharedRuntime.stderr).toContain("Worker and web database credentials must differ");
+    expect(sharedOwner.status).not.toBe(0);
+    expect(sharedOwner.stderr).toContain("Migration and web database credentials must differ");
   });
 
   it("lets CI select the repository migration directory without changing production", async () => {
@@ -288,12 +435,13 @@ describe("forward-only v1 migrations", () => {
     expect(restore).toContain("insert into source_permissions");
     expect(restore).toContain("insert into publication_captures");
     expect(restore).toContain("insert into review_actions");
+    expect(restore).toContain("insert into catalog_observations");
     expect(workflow).toMatch(
       /- name: Prove migration upgrade and backup restore[\s\S]*node tests\/acceptance\/prove-database-upgrade\.mjs/,
     );
     expect(runbook).toMatch(/permission audit.*publication capture.*review audit/is);
     expect(runbook).toMatch(/ordinary-only.*blocked.*official claims/is);
-    expect(runbook).toMatch(/migrations 002 through 008.*all eight/is);
+    expect(runbook).toMatch(/migrations 002 through 011.*all eleven/is);
     expect(runbook).toMatch(/request-budget.*ephemeral.*SELECT.*INSERT.*DELETE/is);
     expect(runbook).toMatch(/does not prove.*off-host.*retention/is);
   });

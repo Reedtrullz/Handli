@@ -14,9 +14,11 @@ import {
   isValidGtin,
   normalizeCategoryPageSourceResponse,
   normalizeLabelSourceResponse,
+  normalizeHistoricalPriceSourceResponse,
   normalizePhysicalStorePageSourceResponse,
   normalizePriceSourceResponse,
   normalizeProductComparisonSourceResponse,
+  normalizeProductPageSourceResponse,
   normalizeProductSourceResponse,
 } from "./source-contracts";
 
@@ -78,6 +80,11 @@ export interface KassalappGateway {
  * and quarantined source states before deriving public read models.
  */
 export interface KassalappIngestionGateway {
+  getSourceCatalogProducts(
+    page: number,
+    limit: number,
+    signal?: AbortSignal,
+  ): Promise<Array<SourceRecordOutcome<KassalappProductSourceRecordV1>>>;
   getSourceProductByEan(
     ean: string,
     signal?: AbortSignal,
@@ -87,6 +94,10 @@ export interface KassalappIngestionGateway {
     signal?: AbortSignal,
   ): Promise<SourceRecordOutcome<KassalappProductSourceRecordV1>>;
   getSourceBulkPrices(
+    eans: string[],
+    signal?: AbortSignal,
+  ): Promise<Array<SourceRecordOutcome<KassalappPriceSourceRecordV1>>>;
+  getSourceHistoricalPrices(
     eans: string[],
     signal?: AbortSignal,
   ): Promise<Array<SourceRecordOutcome<KassalappPriceSourceRecordV1>>>;
@@ -102,12 +113,29 @@ export interface KassalappIngestionGateway {
 }
 
 export interface KassalappClientOptions {
+  authorizeRequestAttempt?: KassalappRequestAttemptAuthorizer;
   baseUrl: string;
   apiKey: string;
   fetch: typeof fetch;
   now?: () => Date;
   requestCoordinator?: KassalappRequestCoordinator;
 }
+
+export type KassalappRequestScope =
+  | "catalog"
+  | "ordinary-price"
+  | "physical-store"
+  | "price-history";
+
+export interface KassalappRequestAttemptContext {
+  readonly attempt: 1 | 2;
+  readonly scope: KassalappRequestScope;
+}
+
+export type KassalappRequestAttemptAuthorizer = (
+  context: Readonly<KassalappRequestAttemptContext>,
+  signal: AbortSignal,
+) => Promise<void>;
 
 export interface KassalappRequestCoordinator {
   acquire(signal?: AbortSignal): Promise<void>;
@@ -314,6 +342,35 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
   }
 
+  async getSourceCatalogProducts(
+    page: number,
+    limit: number,
+    signal?: AbortSignal,
+  ): Promise<Array<SourceRecordOutcome<KassalappProductSourceRecordV1>>> {
+    const parsed = z.object({
+      limit: z.number().int().min(1).max(100),
+      page: z.number().int().min(1).max(10_000),
+    }).safeParse({ limit, page });
+    if (!parsed.success) throw new KassalappGatewayError("INVALID_REQUEST");
+    try {
+      const url = new URL(`${this.baseUrl}/products`);
+      url.searchParams.set("page", String(parsed.data.page));
+      url.searchParams.set("size", String(parsed.data.limit));
+      url.searchParams.set("sort", "date_desc");
+      url.searchParams.set("unique", "1");
+      url.searchParams.set("exclude_without_ean", "1");
+      const response = await this.requestJson(url, { method: "GET" }, signal, "catalog");
+      const now = this.currentTime();
+      return normalizeProductPageSourceResponse(response, {
+        limit: parsed.data.limit,
+        now,
+        retrievedAt: now.toISOString(),
+      });
+    } catch (error) {
+      throw toGatewayError(error);
+    }
+  }
+
   async getSourceProductByEan(
     ean: string,
     signal?: AbortSignal,
@@ -321,8 +378,10 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
     if (!isValidGtin(ean)) throw new KassalappGatewayError("INVALID_REQUEST");
     const url = `${this.baseUrl}/products/ean/${encodeURIComponent(ean)}`;
     try {
-      const response = await this.requestOptionalJson(url, { method: "GET" }, signal);
-      if (response === undefined) return [{ state: "unknown", sourceRecordId: ean, reason: "NOT_FOUND" }];
+      const response = await this.requestOptionalJson(url, { method: "GET" }, signal, "catalog");
+      if (response === undefined) {
+        return [{ ean, state: "unknown", sourceRecordId: ean, reason: "NOT_FOUND" }];
+      }
       const now = this.currentTime();
       return normalizeProductComparisonSourceResponse(response, {
         expectedEan: ean,
@@ -342,7 +401,7 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
     if (!parsed.success) throw new KassalappGatewayError("INVALID_REQUEST");
     const url = `${this.baseUrl}/products/id/${encodeURIComponent(parsed.data)}`;
     try {
-      const response = await this.requestOptionalJson(url, { method: "GET" }, signal);
+      const response = await this.requestOptionalJson(url, { method: "GET" }, signal, "catalog");
       if (response === undefined) {
         return { state: "unknown", sourceRecordId: String(parsed.data), reason: "NOT_FOUND" };
       }
@@ -363,7 +422,7 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
     try {
       const url = new URL(`${this.baseUrl}/categories`);
       url.searchParams.set("size", "100");
-      const response = await this.requestJson(url, { method: "GET" }, signal);
+      const response = await this.requestJson(url, { method: "GET" }, signal, "catalog");
       return normalizeCategoryPageSourceResponse(response, this.currentTime().toISOString());
     } catch (error) {
       throw toGatewayError(error);
@@ -374,7 +433,12 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
     signal?: AbortSignal,
   ): Promise<Array<SourceRecordOutcome<KassalappLabelSourceRecordV1>>> {
     try {
-      const response = await this.requestJson(`${this.baseUrl}/labels`, { method: "GET" }, signal);
+      const response = await this.requestJson(
+        `${this.baseUrl}/labels`,
+        { method: "GET" },
+        signal,
+        "catalog",
+      );
       return normalizeLabelSourceResponse(response, this.currentTime().toISOString());
     } catch (error) {
       throw toGatewayError(error);
@@ -392,7 +456,7 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
       url.searchParams.set("group", chainCode);
       url.searchParams.set("size", "100");
       try {
-        const response = await this.requestJson(url, { method: "GET" }, signal);
+        const response = await this.requestJson(url, { method: "GET" }, signal, "physical-store");
         const now = this.currentTime();
         const page = normalizePhysicalStorePageSourceResponse(response, {
           expectedChainCode: chainCode,
@@ -439,6 +503,21 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
     eans: string[],
     signal?: AbortSignal,
   ): Promise<Array<SourceRecordOutcome<KassalappPriceSourceRecordV1>>> {
+    return await this.getSourcePrices(eans, "current", signal);
+  }
+
+  async getSourceHistoricalPrices(
+    eans: string[],
+    signal?: AbortSignal,
+  ): Promise<Array<SourceRecordOutcome<KassalappPriceSourceRecordV1>>> {
+    return await this.getSourcePrices(eans, "historical", signal);
+  }
+
+  private async getSourcePrices(
+    eans: string[],
+    observationKind: "current" | "historical",
+    signal?: AbortSignal,
+  ): Promise<Array<SourceRecordOutcome<KassalappPriceSourceRecordV1>>> {
     if (signal?.aborted) throw new KassalappGatewayError("CANCELLED");
     if (eans.length === 0) return [];
     if (!z.array(z.string()).max(MAX_TOTAL_BULK_EANS).safeParse(eans).success ||
@@ -455,9 +534,13 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
           `${this.baseUrl}/products/prices-bulk`,
           { body: JSON.stringify({ eans: batch }), method: "POST" },
           signal,
+          observationKind === "current" ? "ordinary-price" : "price-history",
         );
         const now = this.currentTime();
-        outcomes.push(...normalizePriceSourceResponse(response, {
+        const normalize = observationKind === "current"
+          ? normalizePriceSourceResponse
+          : normalizeHistoricalPriceSourceResponse;
+        outcomes.push(...normalize(response, {
           expectedEans: batch,
           now,
           retrievedAt: now.toISOString(),
@@ -466,6 +549,7 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
         const gatewayError = toGatewayError(error);
         if (gatewayError.code === "CANCELLED") throw gatewayError;
         outcomes.push(...batch.map((ean) => ({
+          ean,
           state: "unknown" as const,
           sourceRecordId: ean,
           reason: "BATCH_FAILED" as const,
@@ -583,10 +667,11 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
     input: string | URL,
     init: RequestInit,
     signal?: AbortSignal,
+    scope?: KassalappRequestScope,
   ): Promise<unknown> {
     return await this.subscribeToRequest(
-      this.requestKey("required", input, init),
-      (sharedSignal) => this.requestJsonUncoalesced(input, init, sharedSignal),
+      this.requestKey("required", input, init, scope),
+      (sharedSignal) => this.requestJsonUncoalesced(input, init, sharedSignal, scope),
       signal,
     );
   }
@@ -595,12 +680,13 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
     input: string | URL,
     init: RequestInit,
     signal: AbortSignal,
+    scope?: KassalappRequestScope,
   ): Promise<unknown> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (signal?.aborted) {
         throw new KassalappGatewayError("CANCELLED");
       }
-      const result = await this.attempt(input, init, signal);
+      const result = await this.attempt(input, init, signal, scope, (attempt + 1) as 1 | 2);
       if (signal?.aborted) {
         throw new KassalappGatewayError("CANCELLED");
       }
@@ -629,10 +715,11 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
     input: string | URL,
     init: RequestInit,
     signal?: AbortSignal,
+    scope?: KassalappRequestScope,
   ): Promise<unknown | undefined> {
     return await this.subscribeToRequest(
-      this.requestKey("optional", input, init),
-      (sharedSignal) => this.requestOptionalJsonUncoalesced(input, init, sharedSignal),
+      this.requestKey("optional", input, init, scope),
+      (sharedSignal) => this.requestOptionalJsonUncoalesced(input, init, sharedSignal, scope),
       signal,
     );
   }
@@ -641,10 +728,11 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
     input: string | URL,
     init: RequestInit,
     signal: AbortSignal,
+    scope?: KassalappRequestScope,
   ): Promise<unknown | undefined> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (signal?.aborted) throw new KassalappGatewayError("CANCELLED");
-      const result = await this.attempt(input, init, signal);
+      const result = await this.attempt(input, init, signal, scope, (attempt + 1) as 1 | 2);
       if (signal?.aborted) throw new KassalappGatewayError("CANCELLED");
       if (result.response.ok) return result.body;
       if (result.response.status === 404) return undefined;
@@ -662,7 +750,9 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
   private async attempt(
     input: string | URL,
     init: RequestInit,
-    callerSignal?: AbortSignal,
+    callerSignal: AbortSignal,
+    scope: KassalappRequestScope | undefined,
+    attemptNumber: 1 | 2,
   ): Promise<AttemptResult> {
     if (callerSignal?.aborted) {
       throw new KassalappGatewayError("CANCELLED");
@@ -670,6 +760,16 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
 
     await this.acquireRequestSlot(callerSignal);
     if (callerSignal?.aborted) throw new KassalappGatewayError("CANCELLED");
+
+    if (scope !== undefined && this.options.authorizeRequestAttempt !== undefined) {
+      try {
+        await this.options.authorizeRequestAttempt({ attempt: attemptNumber, scope }, callerSignal);
+      } catch {
+        if (callerSignal.aborted) throw new KassalappGatewayError("CANCELLED");
+        throw new KassalappGatewayError("UPSTREAM_UNAVAILABLE");
+      }
+      if (callerSignal.aborted) throw new KassalappGatewayError("CANCELLED");
+    }
 
     const controller = new AbortController();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -737,9 +837,15 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
     }
   }
 
-  private requestKey(mode: "optional" | "required", input: string | URL, init: RequestInit): string {
+  private requestKey(
+    mode: "optional" | "required",
+    input: string | URL,
+    init: RequestInit,
+    scope?: KassalappRequestScope,
+  ): string {
     return JSON.stringify([
       mode,
+      scope ?? "ungoverned",
       init.method ?? "GET",
       String(input),
       typeof init.body === "string" ? init.body : "",

@@ -1,4 +1,7 @@
+import { isValidGtin } from "@handleplan/domain";
 import { z } from "zod";
+
+export { isValidGtin };
 
 export const KASSALAPP_SOURCE_CONTRACT_VERSION = 1 as const;
 export const KASSALAPP_SOURCE_ID = "kassalapp" as const;
@@ -51,12 +54,16 @@ export type SourceRecordOutcome<T> =
       sourceRecordId: string;
       reason: SourceQuarantineReason;
       chainCode?: string;
+      chainId?: KassalappChainId;
+      ean?: string;
     }
   | {
       state: "unknown";
       sourceRecordId: string;
       reason: SourceUnknownReason;
       chainCode?: string;
+      chainId?: KassalappChainId;
+      ean?: string;
     };
 
 interface SourceRecordBase {
@@ -83,6 +90,7 @@ export interface KassalappPriceSourceRecordV1 extends SourceRecordBase {
   chainId: KassalappChainId;
   chainCode: string;
   amountOre: number;
+  observationKind: "current" | "historical";
   observedAt: string;
 }
 
@@ -160,6 +168,27 @@ function outcomeSourceRecordId<T extends SourceRecordBase>(outcome: SourceRecord
   return outcome.state === "accepted" ? outcome.record.sourceRecordId : outcome.sourceRecordId;
 }
 
+function commonOutcomeSubject<T extends SourceRecordBase>(
+  outcomes: readonly SourceRecordOutcome<T>[],
+): { chainCode?: string; chainId?: KassalappChainId; ean?: string } {
+  const values = outcomes.map((outcome) =>
+    (outcome.state === "accepted" ? outcome.record : outcome) as unknown as Record<string, unknown>);
+  const common = <Value extends string>(key: "chainCode" | "chainId" | "ean"): Value | undefined => {
+    const candidates = new Set(values.map((value) => value[key]).filter(
+      (value): value is string => typeof value === "string",
+    ));
+    return candidates.size === 1 ? [...candidates][0] as Value : undefined;
+  };
+  const chainCode = common<string>("chainCode");
+  const chainId = common<KassalappChainId>("chainId");
+  const ean = common<string>("ean");
+  return {
+    ...(chainCode === undefined ? {} : { chainCode }),
+    ...(chainId === undefined ? {} : { chainId }),
+    ...(ean === undefined ? {} : { ean }),
+  };
+}
+
 export function canonicalizeSourceRecordOutcomes<T extends SourceRecordBase>(
   outcomes: readonly SourceRecordOutcome<T>[],
 ): SourceRecordOutcome<T>[] {
@@ -177,7 +206,12 @@ export function canonicalizeSourceRecordOutcomes<T extends SourceRecordBase>(
         outcome.state === "accepted");
       const acceptedShapes = new Set(accepted.map(({ record }) => JSON.stringify(record)));
       if (acceptedShapes.size > 1 || (accepted.length > 0 && group.some((outcome) => outcome.state !== "accepted"))) {
-        return [{ state: "quarantined" as const, sourceRecordId, reason: "DUPLICATE_IDENTITY" as const }];
+        return [{
+          ...commonOutcomeSubject(group),
+          state: "quarantined" as const,
+          sourceRecordId,
+          reason: "DUPLICATE_IDENTITY" as const,
+        }];
       }
       const unique = new Map<string, SourceRecordOutcome<T>>();
       for (const outcome of group) unique.set(JSON.stringify(outcome), outcome);
@@ -187,18 +221,6 @@ export function canonicalizeSourceRecordOutcomes<T extends SourceRecordBase>(
       });
     },
   );
-}
-
-export function isValidGtin(input: string): boolean {
-  if (!/^(?:\d{8}|\d{13})$/.test(input)) return false;
-  const digits = [...input].map(Number);
-  const checkDigit = digits.pop();
-  if (checkDigit === undefined) return false;
-  const weightedSum = digits.reduce((sum, digit, index) => {
-    const positionFromRight = digits.length - index;
-    return sum + digit * (positionFromRight % 2 === 1 ? 3 : 1);
-  }, 0);
-  return (10 - (weightedSum % 10)) % 10 === checkDigit;
 }
 
 export function normalizePackageMeasure(
@@ -319,6 +341,9 @@ const upstreamProductResourceSchema = z.object({
 });
 
 const productResourceEnvelopeSchema = z.object({ data: z.unknown().nullable() });
+const productPageEnvelopeSchema = z.object({
+  data: z.array(z.unknown()).max(100),
+});
 
 export interface ProductNormalizationContext {
   expectedEan?: string;
@@ -359,28 +384,37 @@ export function normalizeProductComparisonSourceResponse(
   const { nowMs, retrievedAt } = contextTimestamp(context.now, context.retrievedAt);
   const envelope = comparisonProductEnvelopeSchema.parse(input);
   if (envelope.data === null) {
-    return [{ state: "unknown", sourceRecordId: context.expectedEan ?? "not-found", reason: "NOT_FOUND" }];
+    return [{
+      ...(context.expectedEan !== undefined && isValidGtin(context.expectedEan)
+        ? { ean: context.expectedEan }
+        : {}),
+      state: "unknown",
+      sourceRecordId: context.expectedEan ?? "not-found",
+      reason: "NOT_FOUND",
+    }];
   }
   const ean = envelope.data.ean;
   if (!isValidGtin(ean)) return [{ state: "quarantined", sourceRecordId: ean, reason: "INVALID_GTIN" }];
   if (context.expectedEan !== undefined && ean !== context.expectedEan) {
-    return [{ state: "quarantined", sourceRecordId: ean, reason: "IDENTIFIER_MISMATCH" }];
+    return [{ ean, state: "quarantined", sourceRecordId: ean, reason: "IDENTIFIER_MISMATCH" }];
   }
   if (envelope.data.products.length === 0) {
-    return [{ state: "unknown", sourceRecordId: ean, reason: "NOT_FOUND" }];
+    return [{ ean, state: "unknown", sourceRecordId: ean, reason: "NOT_FOUND" }];
   }
 
   return canonicalizeSourceRecordOutcomes(envelope.data.products.map((candidate, index) => {
     const parsed = upstreamComparisonProductSchema.safeParse(candidate);
     const sourceRecordId = safeSourceRecordId((candidate as { id?: unknown })?.id, `${ean}:product-${index}`);
-    if (!parsed.success) return { state: "quarantined" as const, sourceRecordId, reason: "MALFORMED_RECORD" as const };
+    if (!parsed.success) {
+      return { ean, state: "quarantined" as const, sourceRecordId, reason: "MALFORMED_RECORD" as const };
+    }
     const sourceUpdatedAt = canonicalSourceTimestamp(parsed.data.updated_at);
     if (timestampIsFuture(sourceUpdatedAt, nowMs)) {
-      return { state: "quarantined" as const, sourceRecordId, reason: "FUTURE_TIMESTAMP" as const };
+      return { ean, state: "quarantined" as const, sourceRecordId, reason: "FUTURE_TIMESTAMP" as const };
     }
     const packageResult = normalizePackageMeasure(parsed.data.weight, parsed.data.weight_unit);
     if (packageResult.state === "quarantined") {
-      return { state: "quarantined" as const, sourceRecordId, reason: "INVALID_MEASURE" as const };
+      return { ean, state: "quarantined" as const, sourceRecordId, reason: "INVALID_MEASURE" as const };
     }
     return {
       state: "accepted" as const,
@@ -431,6 +465,21 @@ export function normalizeProductSourceResponse(
   };
 }
 
+export function normalizeProductPageSourceResponse(
+  input: unknown,
+  context: ProductNormalizationContext & { limit: number },
+): SourceRecordOutcome<KassalappProductSourceRecordV1>[] {
+  if (!Number.isSafeInteger(context.limit) || context.limit < 1 || context.limit > 100) {
+    throw new TypeError("Product discovery limit must be an integer from 1 through 100");
+  }
+  const envelope = productPageEnvelopeSchema.parse(input);
+  if (envelope.data.length > context.limit) {
+    throw new TypeError("Product discovery response exceeded its requested bound");
+  }
+  return canonicalizeSourceRecordOutcomes(envelope.data.map((candidate) =>
+    normalizeProductSourceResponse({ data: candidate }, context)));
+}
+
 const upstreamPriceAmountSchema = z
   .number().finite().nonnegative()
   .refine((amount) => Number.isSafeInteger(Math.round(amount * 100)) &&
@@ -477,6 +526,25 @@ export interface PriceNormalizationContext {
   retrievedAt: string;
 }
 
+function priceSourceRecordId(
+  ean: string,
+  chainCode: string,
+  observationKind: "current" | "historical",
+  observedAt: string,
+  amountOre: number | undefined,
+): string {
+  const identity = [
+    ean,
+    chainCode,
+    observationKind,
+    observedAt,
+  ];
+  if (observationKind === "historical") {
+    identity.push(amountOre === undefined ? "missing" : amountOre.toString());
+  }
+  return identity.join(":");
+}
+
 export function normalizePriceSourceResponse(
   input: unknown,
   context: PriceNormalizationContext,
@@ -491,7 +559,11 @@ export function normalizePriceSourceResponse(
   for (const [productIndex, candidateProduct] of envelope.data.entries()) {
     const product = upstreamPriceProductSchema.safeParse(candidateProduct);
     if (!product.success) {
+      const candidateEan = (candidateProduct as { ean?: unknown })?.ean;
       outcomes.push({
+        ...(typeof candidateEan === "string" && isValidGtin(candidateEan)
+          ? { ean: candidateEan }
+          : {}),
         state: "quarantined",
         sourceRecordId: `price-product-${productIndex}`,
         reason: "MALFORMED_RECORD",
@@ -516,22 +588,52 @@ export function normalizePriceSourceResponse(
       const store = upstreamPriceStoreSchema.safeParse(candidateStore);
       const fallbackRecordId = `${ean}:store-${storeIndex}`;
       if (!store.success) {
-        outcomes.push({ state: "quarantined", sourceRecordId: fallbackRecordId, reason: "MALFORMED_RECORD" });
+        const candidateChainCode = (candidateStore as { store?: unknown })?.store;
+        const chainCode = typeof candidateChainCode === "string"
+          ? candidateChainCode.trim()
+          : undefined;
+        const chainId = chainCode === undefined ? undefined : CHAIN_BY_CODE[chainCode];
+        outcomes.push({
+          ean,
+          ...(chainCode === undefined || chainCode === "" ? {} : { chainCode }),
+          ...(chainId === undefined ? {} : { chainId }),
+          state: "quarantined",
+          sourceRecordId: fallbackRecordId,
+          reason: "MALFORMED_RECORD",
+        });
         continue;
       }
 
       const chainCode = store.data.store;
       const chainId = CHAIN_BY_CODE[chainCode];
-      const sourceRecordId = store.data.last_checked === null
-        ? `${ean}:${chainCode}:unknown-time`
-        : `${ean}:${chainCode}:${canonicalSourceTimestamp(store.data.last_checked)}`;
+      const observedAt = store.data.last_checked === null
+        ? "unknown-time"
+        : canonicalSourceTimestamp(store.data.last_checked);
+      const amountOre = store.data.current_price === null
+        ? undefined
+        : Math.round(store.data.current_price * 100);
+      const sourceRecordId = priceSourceRecordId(
+        ean,
+        chainCode,
+        "current",
+        observedAt,
+        amountOre,
+      );
       if (chainId === undefined) {
-        outcomes.push({ state: "quarantined", sourceRecordId, reason: "UNKNOWN_CHAIN", chainCode });
+        outcomes.push({
+          chainCode,
+          ean,
+          state: "quarantined",
+          sourceRecordId,
+          reason: "UNKNOWN_CHAIN",
+        });
         continue;
       }
       returnedSupportedChains.add(chainCode);
       if (store.data.last_checked === null) {
         outcomes.push({
+          chainId,
+          ean,
           state: "unknown",
           sourceRecordId,
           reason: "MISSING_TIMESTAMP",
@@ -539,13 +641,26 @@ export function normalizePriceSourceResponse(
         });
         continue;
       }
-      const observedAt = canonicalSourceTimestamp(store.data.last_checked);
       if (timestampIsFuture(observedAt, nowMs)) {
-        outcomes.push({ state: "quarantined", sourceRecordId, reason: "FUTURE_TIMESTAMP", chainCode });
+        outcomes.push({
+          chainCode,
+          chainId,
+          ean,
+          state: "quarantined",
+          sourceRecordId,
+          reason: "FUTURE_TIMESTAMP",
+        });
         continue;
       }
       if (store.data.current_price === null) {
-        outcomes.push({ state: "unknown", sourceRecordId, reason: "MISSING_PRICE", chainCode });
+        outcomes.push({
+          chainCode,
+          chainId,
+          ean,
+          state: "unknown",
+          sourceRecordId,
+          reason: "MISSING_PRICE",
+        });
         continue;
       }
 
@@ -557,7 +672,8 @@ export function normalizePriceSourceResponse(
           ean,
           chainId,
           chainCode,
-          amountOre: Math.round(store.data.current_price * 100),
+          amountOre: amountOre!,
+          observationKind: "current",
           observedAt,
         },
       });
@@ -570,8 +686,10 @@ export function normalizePriceSourceResponse(
     for (const [chainCode] of Object.entries(CHAIN_BY_CODE)) {
       if (returnedSupportedChains.has(chainCode)) continue;
       outcomes.push({
+        chainId: CHAIN_BY_CODE[chainCode]!,
+        ean,
         state: "unknown",
-        sourceRecordId: `${ean}:${chainCode}:coverage`,
+        sourceRecordId: `${ean}:${chainCode}:current:coverage`,
         reason: "MISSING_SUPPORTED_CHAIN",
         chainCode,
       });
@@ -581,7 +699,133 @@ export function normalizePriceSourceResponse(
   if (expectedEans !== undefined) {
     for (const ean of expectedEans) {
       if (!returnedEans.has(ean)) {
-        outcomes.push({ state: "unknown", sourceRecordId: ean, reason: "MISSING_REQUESTED_EAN" });
+        outcomes.push({
+          ean,
+          state: "unknown",
+          sourceRecordId: ean,
+          reason: "MISSING_REQUESTED_EAN",
+        });
+      }
+    }
+  }
+
+  return canonicalizeSourceRecordOutcomes(outcomes);
+}
+
+export function normalizeHistoricalPriceSourceResponse(
+  input: unknown,
+  context: PriceNormalizationContext,
+): SourceRecordOutcome<KassalappPriceSourceRecordV1>[] {
+  const { nowMs, retrievedAt } = contextTimestamp(context.now, context.retrievedAt);
+  const envelope = priceEnvelopeSchema.parse(input);
+  const expectedEans = context.expectedEans === undefined ? undefined : new Set(context.expectedEans);
+  const outcomes: SourceRecordOutcome<KassalappPriceSourceRecordV1>[] = [];
+  const returnedEans = new Set<string>();
+
+  for (const [productIndex, candidateProduct] of envelope.data.entries()) {
+    const product = upstreamPriceProductSchema.safeParse(candidateProduct);
+    if (!product.success) {
+      const candidateEan = (candidateProduct as { ean?: unknown })?.ean;
+      outcomes.push({
+        ...(typeof candidateEan === "string" && isValidGtin(candidateEan)
+          ? { ean: candidateEan }
+          : {}),
+        state: "quarantined",
+        sourceRecordId: `historical-price-product-${productIndex}`,
+        reason: "MALFORMED_RECORD",
+      });
+      continue;
+    }
+
+    const ean = product.data.ean;
+    if (!isValidGtin(ean)) {
+      outcomes.push({ state: "quarantined", sourceRecordId: ean, reason: "INVALID_GTIN" });
+      continue;
+    }
+    if (expectedEans !== undefined && !expectedEans.has(ean)) {
+      outcomes.push({
+        ean,
+        state: "quarantined",
+        sourceRecordId: ean,
+        reason: "IDENTIFIER_MISMATCH",
+      });
+      continue;
+    }
+    returnedEans.add(ean);
+
+    for (const history of product.data.price_history) {
+      const chainCode = history.store;
+      const chainId = CHAIN_BY_CODE[chainCode];
+      const observedAt = `${history.date}T00:00:00.000Z`;
+      const parsedAmount = upstreamPriceAmountSchema.safeParse(history.price);
+      const amountOre = parsedAmount.success
+        ? Math.round(parsedAmount.data * 100)
+        : undefined;
+      const sourceRecordId = priceSourceRecordId(
+        ean,
+        chainCode,
+        "historical",
+        observedAt,
+        amountOre,
+      );
+
+      if (chainId === undefined) {
+        outcomes.push({
+          chainCode,
+          ean,
+          state: "quarantined",
+          sourceRecordId,
+          reason: "UNKNOWN_CHAIN",
+        });
+        continue;
+      }
+      if (!parsedAmount.success) {
+        outcomes.push({
+          chainCode,
+          chainId,
+          ean,
+          state: "quarantined",
+          sourceRecordId,
+          reason: "MALFORMED_RECORD",
+        });
+        continue;
+      }
+      if (timestampIsFuture(observedAt, nowMs)) {
+        outcomes.push({
+          chainCode,
+          chainId,
+          ean,
+          state: "quarantined",
+          sourceRecordId,
+          reason: "FUTURE_TIMESTAMP",
+        });
+        continue;
+      }
+      outcomes.push({
+        state: "accepted",
+        record: {
+          ...sourceBase(sourceRecordId, retrievedAt),
+          amountOre: amountOre!,
+          chainCode,
+          chainId,
+          ean,
+          kind: "price",
+          observationKind: "historical",
+          observedAt,
+        },
+      });
+    }
+  }
+
+  if (expectedEans !== undefined) {
+    for (const ean of expectedEans) {
+      if (!returnedEans.has(ean)) {
+        outcomes.push({
+          ean,
+          state: "unknown",
+          sourceRecordId: ean,
+          reason: "MISSING_REQUESTED_EAN",
+        });
       }
     }
   }
@@ -751,7 +995,20 @@ export function normalizePhysicalStoreSourceResponse(
   return canonicalizeSourceRecordOutcomes(envelope.data.map((candidate, index) => {
     const parsed = upstreamPhysicalStoreSchema.safeParse(candidate);
     const sourceRecordId = safeSourceRecordId((candidate as { id?: unknown })?.id, `physical-store-${index}`);
-    if (!parsed.success) return { state: "quarantined", sourceRecordId, reason: "MALFORMED_RECORD" };
+    if (!parsed.success) {
+      const candidateChainCode = (candidate as { group?: unknown })?.group;
+      const chainCode = typeof candidateChainCode === "string"
+        ? candidateChainCode.trim()
+        : undefined;
+      const chainId = chainCode === undefined ? undefined : CHAIN_BY_CODE[chainCode];
+      return {
+        ...(chainCode === undefined || chainCode === "" ? {} : { chainCode }),
+        ...(chainId === undefined ? {} : { chainId }),
+        state: "quarantined",
+        sourceRecordId,
+        reason: "MALFORMED_RECORD",
+      };
+    }
 
     const chainCode = parsed.data.group;
     if (chainCode === null) {
@@ -797,6 +1054,7 @@ export function normalizePhysicalStorePageSourceResponse(
       sourceRecordId: outcome.record.sourceRecordId,
       reason: "IDENTIFIER_MISMATCH" as const,
       chainCode: outcome.record.chainCode,
+      chainId: outcome.record.chainId,
     };
   });
   const recordCount = envelope.data.length;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { deterministicFakeExecution, type WorkerJobHandler } from "./fake";
-import { WorkerRunner } from "./runner";
+import { WorkerRunner, WorkerUnresponsiveError } from "./runner";
 
 const request = {
   contractVersion: 1 as const,
@@ -11,6 +11,7 @@ const request = {
   sourceId: "fixture-source",
   timeoutMs: 50,
 };
+const execution = { fenceToken: "wlf1.fixture-fence" } as const;
 
 function sequenceClock(...timestamps: string[]): () => Date {
   let index = 0;
@@ -18,6 +19,51 @@ function sequenceClock(...timestamps: string[]): () => Date {
 }
 
 describe("WorkerRunner", () => {
+  it("passes the validated request identity and required lease fence to the handler", async () => {
+    let received: unknown;
+    const runner = new WorkerRunner({
+      createRunId: ({ jobId }) => `run:${jobId}`,
+      handlers: {
+        "catalog-refresh": async (context) => {
+          received = context;
+          return {};
+        },
+      },
+      now: sequenceClock("2026-07-16T12:00:00.000Z", "2026-07-16T12:00:01.000Z"),
+    });
+
+    await runner.run(request, execution);
+
+    expect(received).toEqual({
+      fenceToken: execution.fenceToken,
+      jobId: request.jobId,
+      kind: request.kind,
+      runId: `run:${request.jobId}`,
+      signal: expect.any(AbortSignal),
+      sourceId: request.sourceId,
+    });
+  });
+
+  it("fails closed without invoking a handler when the execution fence is missing", async () => {
+    let invoked = false;
+    const runner = new WorkerRunner({
+      createRunId: () => "run-missing-fence",
+      handlers: {
+        "catalog-refresh": async () => {
+          invoked = true;
+          return {};
+        },
+      },
+      now: sequenceClock("2026-07-16T12:00:00.000Z", "2026-07-16T12:00:01.000Z"),
+    });
+
+    await expect(runner.run(request, undefined as never)).resolves.toMatchObject({
+      counters: { failed: 1, fetched: 0 },
+      status: "failed",
+    });
+    expect(invoked).toBe(false);
+  });
+
   it("produces deterministic IDs, counters, and timing from injected dependencies", async () => {
     const runner = new WorkerRunner({
       createRunId: ({ jobId }) => `run:${jobId}`,
@@ -33,7 +79,7 @@ describe("WorkerRunner", () => {
       now: sequenceClock("2026-07-16T12:00:00.000Z", "2026-07-16T12:00:01.000Z"),
     });
 
-    await expect(runner.run(request)).resolves.toEqual({
+    await expect(runner.run(request, execution)).resolves.toEqual({
       contractVersion: 1,
       runId: "run:job-catalog-1",
       jobId: "job-catalog-1",
@@ -67,22 +113,69 @@ describe("WorkerRunner", () => {
       now: sequenceClock("2026-07-16T12:00:00.000Z", "2026-07-16T12:00:00.000Z"),
     });
 
-    await expect(runner.run(request, controller.signal)).resolves.toMatchObject({ status: "cancelled" });
+    await expect(runner.run(request, {
+      ...execution,
+      signal: controller.signal,
+    })).resolves.toMatchObject({ status: "cancelled" });
     expect(invoked).toBe(false);
   });
 
-  it("bounds an uncooperative handler with the job timeout", async () => {
-    const never: WorkerJobHandler = async () => new Promise(() => {});
+  it("does not miss cancellation that happens while the abort listener is attached", async () => {
+    const caller = new AbortController();
+    const signal = caller.signal;
+    const addEventListener = signal.addEventListener.bind(signal);
+    Object.defineProperty(signal, "addEventListener", {
+      value: (...args: Parameters<AbortSignal["addEventListener"]>) => {
+        caller.abort();
+        addEventListener(...args);
+      },
+    });
     const runner = new WorkerRunner({
-      createRunId: () => "run-timeout",
-      handlers: { "catalog-refresh": never },
+      createRunId: () => "run-cancel-race",
+      handlerShutdownGraceMs: 5,
+      handlers: { "catalog-refresh": async () => await new Promise(() => {}) },
       now: sequenceClock("2026-07-16T12:00:00.000Z", "2026-07-16T12:00:01.000Z"),
     });
 
-    await expect(runner.run({ ...request, timeoutMs: 5 })).resolves.toMatchObject({
+    await expect(runner.run({ ...request, timeoutMs: 5 }, {
+      ...execution,
+      signal,
+    })).resolves.toMatchObject({
+      status: "cancelled",
+    });
+  });
+
+  it("aborts, joins, and preserves counters when a cooperative handler times out", async () => {
+    const cooperative: WorkerJobHandler = async ({ signal }) => await new Promise((resolve) => {
+      signal.addEventListener("abort", () => resolve({
+        counters: { accepted: 1, fetched: 1, persisted: 1 },
+      }), { once: true });
+    });
+    const runner = new WorkerRunner({
+      createRunId: () => "run-timeout",
+      handlerShutdownGraceMs: 25,
+      handlers: { "catalog-refresh": cooperative },
+      now: sequenceClock("2026-07-16T12:00:00.000Z", "2026-07-16T12:00:01.000Z"),
+    });
+
+    await expect(runner.run({ ...request, timeoutMs: 5 }, execution)).resolves.toMatchObject({
+      counters: { accepted: 1, fetched: 1, persisted: 1 },
       runId: "run-timeout",
       status: "timed-out",
     });
+  });
+
+  it("rejects with a fatal bounded error when an aborted handler does not settle", async () => {
+    const runner = new WorkerRunner({
+      createRunId: () => "run-unresponsive",
+      handlerShutdownGraceMs: 5,
+      handlers: { "catalog-refresh": async () => await new Promise(() => {}) },
+      now: sequenceClock("2026-07-16T12:00:00.000Z", "2026-07-16T12:00:01.000Z"),
+    });
+
+    await expect(runner.run({ ...request, timeoutMs: 5 }, execution)).rejects.toEqual(
+      new WorkerUnresponsiveError(),
+    );
   });
 
   it("sanitizes handler failures and keeps the run result structurally valid", async () => {
@@ -95,7 +188,7 @@ describe("WorkerRunner", () => {
       now: sequenceClock("2026-07-16T12:00:00.000Z", "2026-07-16T12:00:01.000Z"),
     });
 
-    const result = await runner.run(request);
+    const result = await runner.run(request, execution);
     expect(result).toMatchObject({ status: "failed", counters: { failed: 1 } });
     expect(JSON.stringify(result)).not.toContain("secret payload");
   });
@@ -122,8 +215,8 @@ describe("WorkerRunner", () => {
       now: sequenceClock("2026-07-16T12:00:00.000Z", "2026-07-16T12:00:01.000Z"),
     });
 
-    await expect(partial.run(request)).resolves.toMatchObject({ status: "partial" });
-    await expect(failed.run(request)).resolves.toMatchObject({ status: "failed" });
+    await expect(partial.run(request, execution)).resolves.toMatchObject({ status: "partial" });
+    await expect(failed.run(request, execution)).resolves.toMatchObject({ status: "failed" });
   });
 
   it("turns invalid counter accounting into a bounded failed result", async () => {
@@ -135,7 +228,7 @@ describe("WorkerRunner", () => {
       now: sequenceClock("2026-07-16T12:00:00.000Z", "2026-07-16T12:00:01.000Z"),
     });
 
-    await expect(runner.run(request)).resolves.toMatchObject({
+    await expect(runner.run(request, execution)).resolves.toMatchObject({
       counters: { accepted: 0, failed: 1, fetched: 0, persisted: 0 },
       status: "failed",
     });
@@ -150,30 +243,36 @@ describe("WorkerRunner", () => {
       now: sequenceClock("2026-07-16T12:00:00.000Z", "2026-07-16T12:00:01.000Z"),
     });
 
-    await expect(runner.run(request)).resolves.toMatchObject({
+    await expect(runner.run(request, execution)).resolves.toMatchObject({
       counters: { accepted: 0, failed: 1, fetched: 0, persisted: 0 },
       status: "failed",
     });
   });
 
-  it("actively cancels a running handler and propagates the bounded abort signal", async () => {
+  it("actively cancels, joins, and preserves counters from a running handler", async () => {
     const caller = new AbortController();
     let handlerSignal: AbortSignal | undefined;
-    const handler: WorkerJobHandler = async ({ signal }) => {
+    const handler: WorkerJobHandler = async ({ signal }) => await new Promise((resolve) => {
       handlerSignal = signal;
-      return await new Promise(() => {});
-    };
+      signal.addEventListener("abort", () => resolve({
+        counters: { quarantined: 1, fetched: 1, persisted: 1 },
+      }), { once: true });
+    });
     const runner = new WorkerRunner({
       createRunId: () => "run-active-cancel",
+      handlerShutdownGraceMs: 25,
       handlers: { "catalog-refresh": handler },
       now: sequenceClock("2026-07-16T12:00:00.000Z", "2026-07-16T12:00:01.000Z"),
     });
 
-    const run = runner.run(request, caller.signal);
+    const run = runner.run(request, { ...execution, signal: caller.signal });
     await Promise.resolve();
     caller.abort("private cancellation reason");
 
-    await expect(run).resolves.toMatchObject({ status: "cancelled" });
+    await expect(run).resolves.toMatchObject({
+      counters: { fetched: 1, persisted: 1, quarantined: 1 },
+      status: "cancelled",
+    });
     expect(handlerSignal?.aborted).toBe(true);
   });
 });

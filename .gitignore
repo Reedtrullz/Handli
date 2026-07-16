@@ -8,5 +8,6 @@
 playwright-report/
 test-results/
 coverage/
+apps/worker/dist/
 node_modules/
 .pnpm-store/

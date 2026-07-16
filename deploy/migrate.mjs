@@ -19,6 +19,16 @@ if (!/^[A-Za-z0-9_-]{32,128}$/.test(appDatabasePassword)) {
   );
 }
 
+const webDatabasePassword = process.env.WEB_DATABASE_PASSWORD;
+if (!webDatabasePassword) {
+  throw new Error("WEB_DATABASE_PASSWORD is required for migrations");
+}
+if (!/^[A-Za-z0-9_-]{32,128}$/.test(webDatabasePassword)) {
+  throw new Error(
+    "WEB_DATABASE_PASSWORD must be a 32-128 character URL-safe secret",
+  );
+}
+
 let parsedMigrationUrl;
 try {
   parsedMigrationUrl = new URL(databaseMigrationUrl);
@@ -29,12 +39,19 @@ if (!["postgres:", "postgresql:"].includes(parsedMigrationUrl.protocol)) {
   throw new Error("DATABASE_MIGRATION_URL must use PostgreSQL");
 }
 
-const runtimeRole = "handleplan_app";
+const workerRole = "handleplan_app";
+const webRole = "handleplan_web";
 const migrationRole = decodeURIComponent(parsedMigrationUrl.username);
 const migrationPassword = decodeURIComponent(parsedMigrationUrl.password);
 const databaseName = decodeURIComponent(parsedMigrationUrl.pathname.slice(1));
-if (!migrationRole || migrationRole === runtimeRole) {
-  throw new Error("Migrations require a database owner distinct from handleplan_app");
+if (
+  !/^[a-z][a-z0-9_]{0,62}$/.test(migrationRole)
+  || migrationRole === workerRole
+  || migrationRole === webRole
+) {
+  throw new Error(
+    "Migrations require a simple database owner distinct from handleplan_app and handleplan_web",
+  );
 }
 if (!/^[A-Za-z0-9_-]{32,128}$/.test(migrationPassword)) {
   throw new Error(
@@ -45,7 +62,13 @@ if (!/^[a-z][a-z0-9_]{0,62}$/.test(databaseName)) {
   throw new Error("DATABASE_MIGRATION_URL must name a simple PostgreSQL database");
 }
 if (migrationPassword && migrationPassword === appDatabasePassword) {
-  throw new Error("Migration and runtime database credentials must differ");
+  throw new Error("Migration and worker database credentials must differ");
+}
+if (migrationPassword && migrationPassword === webDatabasePassword) {
+  throw new Error("Migration and web database credentials must differ");
+}
+if (appDatabasePassword === webDatabasePassword) {
+  throw new Error("Worker and web database credentials must differ");
 }
 
 const migrationsDirectory = path.resolve(
@@ -91,69 +114,129 @@ const sql = postgres(databaseMigrationUrl, {
 const advisoryLockId = 7_229_164_301;
 
 const protectedAppendOnlyTables = [
+  "catalog_observations",
   "price_observations",
   "price_coverage_checks",
-  "publication_captures",
-  "review_actions",
+  "source_record_outcomes",
+  "worker_job_results",
 ];
 
-const runtimeReadOnlyTables = ["data_sources", "source_permissions"];
+const workerReadOnlyTables = [
+  "handleplan_schema_migrations",
+  "data_sources",
+  "source_permissions",
+  "geographic_scopes",
+];
 
 const insertUpdateTables = [
   "price_cache",
   "canonical_products",
   "product_identifiers",
   "source_products",
-  "product_families",
   "ingestion_runs",
-  "geographic_scopes",
   "physical_stores",
-  "publications",
-  "extraction_runs",
-  "extracted_offer_candidates",
-  "approved_offers",
-  "alert_events",
 ];
 
-const replaceableTables = [
-  "product_family_memberships",
-  "geographic_scope_regions",
-  "geographic_scope_postal_codes",
-  "geographic_scope_stores",
-  "offer_targets",
-  "offer_conditions",
-  "worker_leases",
-  "historical_price_statistics",
-];
-
-const appendOnlyOperationalTables = ["source_health_snapshots"];
+const replaceableTables = ["worker_leases"];
 
 const ephemeralRequestBudgetTables = ["provider_request_budget_events"];
 
 const runtimeSequences = [
+  "catalog_observations_id_seq",
   "canonical_products_id_seq",
   "product_identifiers_id_seq",
   "ingestion_runs_id_seq",
   "price_observations_id_seq",
   "price_coverage_checks_id_seq",
-  "geographic_scopes_id_seq",
   "physical_stores_id_seq",
-  "publications_id_seq",
-  "publication_captures_id_seq",
-  "extraction_runs_id_seq",
-  "extracted_offer_candidates_id_seq",
-  "approved_offers_id_seq",
-  "offer_conditions_id_seq",
-  "review_actions_id_seq",
-  "source_health_snapshots_id_seq",
-  "alert_events_id_seq",
+  "source_record_outcomes_id_seq",
+  "worker_job_results_id_seq",
 ];
 
-function identifiers(values) {
-  return values.map((value) => `"${value}"`).join(", ");
+const webReadOnlyTables = [
+  "catalog_observations",
+  "handleplan_schema_migrations",
+  "price_cache",
+  "canonical_products",
+  "product_identifiers",
+  "geographic_scopes",
+  "physical_stores",
+  "geographic_scope_regions",
+  "geographic_scope_stores",
+  "ingestion_runs",
+  "price_observations",
+  "price_coverage_checks",
+];
+
+const webDataSourceColumns = [
+  "id",
+  "display_name",
+  "source_kind",
+  "runtime_state",
+  "public_reference_url",
+  "permission_reviewed_at",
+  "permission_expires_at",
+  "created_at",
+  "updated_at",
+];
+
+const webSourcePermissionColumns = [
+  "id",
+  "source_id",
+  "decision",
+  "reviewed_at",
+  "valid_until",
+  "permissions",
+  "created_at",
+];
+
+const webSourceProductColumns = [
+  "source_id",
+  "external_id",
+  "canonical_product_id",
+  "raw_record_hash",
+  "match_state",
+  "first_seen_at",
+  "last_seen_at",
+];
+
+const webSourceHealthColumns = [
+  "id",
+  "source_id",
+  "geographic_scope_id",
+  "status",
+  "last_discovery_success_at",
+  "last_capture_success_at",
+  "last_publish_success_at",
+  "newest_eligible_evidence_at",
+  "recorded_at",
+];
+
+function identifier(value) {
+  return `"${value.replaceAll('"', '""')}"`;
 }
 
-async function configureRuntimeRole() {
+function identifiers(values) {
+  return values.map(identifier).join(", ");
+}
+
+async function revokeRoleMemberships(transaction, role) {
+  const memberships = await transaction`
+    select granted.rolname as granted_role, member.rolname as member_role
+    from pg_auth_members membership
+    join pg_roles member on member.oid = membership.member
+    join pg_roles granted on granted.oid = membership.roleid
+    where member.rolname = ${role} or granted.rolname = ${role}
+    order by granted.rolname, member.rolname
+  `;
+  for (const membership of memberships) {
+    await transaction.unsafe(
+      `revoke ${identifier(membership.granted_role)} from ${identifier(membership.member_role)}`,
+    );
+  }
+}
+
+async function configureRuntimeRoles() {
   await sql.begin(async (transaction) => {
     const [{ current_user: currentUser, current_database: currentDatabase }] =
       await transaction`
@@ -165,105 +248,147 @@ async function configureRuntimeRole() {
 
     await transaction`
       select set_config(
-        'handleplan.runtime_role_bootstrap_password',
+        'handleplan.worker_role_bootstrap_password',
         ${appDatabasePassword},
         true
       )
     `;
+    await transaction`
+      select set_config(
+        'handleplan.web_role_bootstrap_password',
+        ${webDatabasePassword},
+        true
+      )
+    `;
     await transaction.unsafe(`
-      do $runtime_role$
+      do $runtime_roles$
       begin
-        if exists (select 1 from pg_roles where rolname = '${runtimeRole}') then
+        if exists (select 1 from pg_roles where rolname = '${workerRole}') then
           execute format(
-            'alter role ${runtimeRole} with login nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls password %L',
-            current_setting('handleplan.runtime_role_bootstrap_password')
+            'alter role ${workerRole} with login nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls password %L',
+            current_setting('handleplan.worker_role_bootstrap_password')
           );
         else
           execute format(
-            'create role ${runtimeRole} with login nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls password %L',
-            current_setting('handleplan.runtime_role_bootstrap_password')
+            'create role ${workerRole} with login nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls password %L',
+            current_setting('handleplan.worker_role_bootstrap_password')
+          );
+        end if;
+        if exists (select 1 from pg_roles where rolname = '${webRole}') then
+          execute format(
+            'alter role ${webRole} with login nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls password %L',
+            current_setting('handleplan.web_role_bootstrap_password')
+          );
+        else
+          execute format(
+            'create role ${webRole} with login nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls password %L',
+            current_setting('handleplan.web_role_bootstrap_password')
           );
         end if;
       end
-      $runtime_role$;
+      $runtime_roles$;
     `);
 
-    const memberships = await transaction`
-      select granted.rolname
-      from pg_auth_members membership
-      join pg_roles member on member.oid = membership.member
-      join pg_roles granted on granted.oid = membership.roleid
-      where member.rolname = ${runtimeRole}
-      order by granted.rolname
-    `;
-    if (memberships.length > 0) {
-      throw new Error(
-        `handleplan_app must not inherit or assume other roles: ${memberships
-          .map(({ rolname }) => rolname)
-          .join(", ")}`,
-      );
-    }
+    await revokeRoleMemberships(transaction, workerRole);
+    await revokeRoleMemberships(transaction, webRole);
 
-    const [ownership] = await transaction`
+    const ownership = await transaction`
       select
+        role.rolname,
         (
           select count(*)::integer
           from pg_database
           where datname = current_database()
-            and datdba = (select oid from pg_roles where rolname = ${runtimeRole})
+            and datdba = role.oid
         ) as databases,
         (
           select count(*)::integer
           from pg_namespace
-          where nspowner = (select oid from pg_roles where rolname = ${runtimeRole})
+          where nspowner = role.oid
         ) as schemas,
         (
           select count(*)::integer
           from pg_class
-          where relowner = (select oid from pg_roles where rolname = ${runtimeRole})
+          where relowner = role.oid
         ) as relations,
         (
           select count(*)::integer
           from pg_proc
-          where proowner = (select oid from pg_roles where rolname = ${runtimeRole})
+          where proowner = role.oid
         ) as functions
+      from pg_roles role
+      where role.rolname in (${workerRole}, ${webRole})
+      order by role.rolname
     `;
-    if (Object.values(ownership).some((count) => count !== 0)) {
-      throw new Error("handleplan_app must not own database objects");
+    if (
+      ownership.length !== 2
+      || ownership.some(({ rolname: _role, ...counts }) =>
+        Object.values(counts).some((count) => count !== 0))
+    ) {
+      throw new Error("Runtime roles must not own database objects");
     }
 
     await transaction.unsafe(`
-      revoke create, temporary on database "${databaseName}" from public;
-      revoke all privileges on database "${databaseName}" from ${runtimeRole};
-      grant connect on database "${databaseName}" to ${runtimeRole};
+      revoke all privileges on database "${databaseName}" from public;
+      revoke all privileges on database "${databaseName}" from ${workerRole}, ${webRole};
+      grant connect on database "${databaseName}" to ${workerRole}, ${webRole};
 
       revoke all privileges on schema public from public;
-      revoke all privileges on schema public from ${runtimeRole};
-      grant usage on schema public to ${runtimeRole};
+      revoke all privileges on schema public from ${workerRole}, ${webRole};
+      grant usage on schema public to ${workerRole}, ${webRole};
 
-      revoke all privileges on all tables in schema public from ${runtimeRole};
-      revoke all privileges on all sequences in schema public from ${runtimeRole};
-      revoke all privileges on all functions in schema public from ${runtimeRole};
-      revoke execute on function public.reject_append_only_mutation() from public;
+      revoke all privileges on all tables in schema public from public, ${workerRole}, ${webRole};
+      revoke all privileges on all sequences in schema public from public, ${workerRole}, ${webRole};
+      revoke all privileges on all functions in schema public from public, ${workerRole}, ${webRole};
 
-      grant select on table ${identifiers(runtimeReadOnlyTables)}
-        to ${runtimeRole};
+      alter default privileges for role ${migrationRole} in schema public
+        revoke all privileges on tables from public, ${workerRole}, ${webRole};
+      alter default privileges for role ${migrationRole} in schema public
+        revoke all privileges on sequences from public, ${workerRole}, ${webRole};
+      alter default privileges for role ${migrationRole} in schema public
+        revoke all privileges on functions from public, ${workerRole}, ${webRole};
+      alter default privileges for role ${workerRole} in schema public
+        revoke all privileges on tables from public, ${workerRole}, ${webRole};
+      alter default privileges for role ${workerRole} in schema public
+        revoke all privileges on sequences from public, ${workerRole}, ${webRole};
+      alter default privileges for role ${workerRole} in schema public
+        revoke all privileges on functions from public, ${workerRole}, ${webRole};
+      alter default privileges for role ${webRole} in schema public
+        revoke all privileges on tables from public, ${workerRole}, ${webRole};
+      alter default privileges for role ${webRole} in schema public
+        revoke all privileges on sequences from public, ${workerRole}, ${webRole};
+      alter default privileges for role ${webRole} in schema public
+        revoke all privileges on functions from public, ${workerRole}, ${webRole};
+
+      grant select on table ${identifiers(workerReadOnlyTables)}
+        to ${workerRole};
       grant select, insert on table ${identifiers(protectedAppendOnlyTables)}
-        to ${runtimeRole};
+        to ${workerRole};
       grant select, insert, update on table ${identifiers(insertUpdateTables)}
-        to ${runtimeRole};
+        to ${workerRole};
       grant select, insert, update, delete on table ${identifiers(replaceableTables)}
-        to ${runtimeRole};
-      grant select, insert on table ${identifiers(appendOnlyOperationalTables)}
-        to ${runtimeRole};
+        to ${workerRole};
       grant select, insert, delete on table ${identifiers(ephemeralRequestBudgetTables)}
-        to ${runtimeRole};
-      grant select on table latest_price_evidence to ${runtimeRole};
-      grant usage on sequence ${identifiers(runtimeSequences)} to ${runtimeRole};
+        to ${workerRole};
+      grant usage on sequence ${identifiers(runtimeSequences)} to ${workerRole};
+
+      grant select on table ${identifiers(webReadOnlyTables)} to ${webRole};
+      grant select on table latest_price_evidence to ${webRole};
+      grant select (${identifiers(webDataSourceColumns)})
+        on table data_sources to ${webRole};
+      grant select (${identifiers(webSourcePermissionColumns)})
+        on table source_permissions to ${webRole};
+      grant select (${identifiers(webSourceProductColumns)})
+        on table source_products to ${webRole};
+      grant select (${identifiers(webSourceHealthColumns)})
+        on table source_health_snapshots to ${webRole};
     `);
 
     await transaction`
-      select set_config('handleplan.runtime_role_bootstrap_password', '', true)
+      select set_config('handleplan.worker_role_bootstrap_password', '', true)
+    `;
+    await transaction`
+      select set_config('handleplan.web_role_bootstrap_password', '', true)
     `;
   });
 }
@@ -314,7 +439,7 @@ try {
   }
 
   if (ciMaxMigrationId === undefined) {
-    await configureRuntimeRole();
+    await configureRuntimeRoles();
   }
 } finally {
   await sql`select pg_advisory_unlock(${advisoryLockId})`.catch(() => undefined);

@@ -9,12 +9,14 @@ import productResourceFixture from "../test/fixtures/v1/product-by-id.json";
 import {
   isValidGtin,
   normalizeCategorySourceResponse,
+  normalizeHistoricalPriceSourceResponse,
   normalizeLabelSourceResponse,
   normalizePackageMeasure,
   normalizePhysicalStorePageSourceResponse,
   normalizePhysicalStoreSourceResponse,
   normalizePriceSourceResponse,
   normalizeProductComparisonSourceResponse,
+  normalizeProductPageSourceResponse,
   normalizeProductSourceResponse,
 } from "./source-contracts";
 
@@ -79,15 +81,19 @@ describe("Kassalapp v1 source contracts", () => {
     expect(normalizeProductComparisonSourceResponse(invalid, { now: NOW, retrievedAt: RETRIEVED_AT })[0])
       .toMatchObject({ state: "quarantined", reason: "INVALID_GTIN" });
     expect(normalizeProductComparisonSourceResponse(productComparisonFixture, {
-      expectedEan: "7040000000008",
+      expectedEan: "7040000000009",
       now: NOW,
       retrievedAt: RETRIEVED_AT,
-    })[0]).toMatchObject({ state: "quarantined", reason: "IDENTIFIER_MISMATCH" });
+    })[0]).toMatchObject({
+      ean: "7038010000010",
+      state: "quarantined",
+      reason: "IDENTIFIER_MISMATCH",
+    });
 
     const future = structuredClone(productComparisonFixture);
     future.data.products[0]!.updated_at = "2026-07-17T08:30:00Z";
     expect(normalizeProductComparisonSourceResponse(future, { now: NOW, retrievedAt: RETRIEVED_AT })[0])
-      .toMatchObject({ state: "quarantined", reason: "FUTURE_TIMESTAMP" });
+      .toMatchObject({ ean: "7038010000010", state: "quarantined", reason: "FUTURE_TIMESTAMP" });
   });
 
   it("fails closed when a malformed comparison item conflicts with an accepted source identity", () => {
@@ -100,11 +106,12 @@ describe("Kassalapp v1 source contracts", () => {
     const outcomes = normalizeProductComparisonSourceResponse(conflict, { now: NOW, retrievedAt: RETRIEVED_AT });
     expect(outcomes.filter((outcome) => outcome.state === "accepted" && outcome.record.sourceRecordId === "117"))
       .toHaveLength(0);
-    expect(outcomes).toContainEqual({
+    expect(outcomes).toContainEqual(expect.objectContaining({
+      ean: "7038010000010",
       state: "quarantined",
       sourceRecordId: "117",
       reason: "DUPLICATE_IDENTITY",
-    });
+    }));
   });
 
   it("preserves missing and unknown package states without inventing a unit", () => {
@@ -115,17 +122,119 @@ describe("Kassalapp v1 source contracts", () => {
       .toMatchObject({ state: "accepted", record: { packageMeasureState: "unknown-unit" } });
   });
 
+  it("normalizes a bounded product discovery page without public Product DTO loss", () => {
+    const malformed = { ...structuredClone(productResourceFixture.data), ean: "invalid", id: 118 };
+    expect(normalizeProductPageSourceResponse({
+      data: [productResourceFixture.data, malformed],
+    }, {
+      limit: 2,
+      now: NOW,
+      retrievedAt: RETRIEVED_AT,
+    })).toEqual([
+      expect.objectContaining({
+        state: "accepted",
+        record: expect.objectContaining({
+          chainCodes: ["BUNNPRIS"],
+          ean: "7038010000010",
+          packageMeasure: { amount: 1000, unit: "ml" },
+          sourceRecordId: "117",
+        }),
+      }),
+      expect.objectContaining({
+        reason: "INVALID_GTIN",
+        sourceRecordId: "118",
+        state: "quarantined",
+      }),
+    ]);
+    expect(() => normalizeProductPageSourceResponse({
+      data: [productResourceFixture.data, productResourceFixture.data],
+    }, {
+      limit: 1,
+      now: NOW,
+      retrievedAt: RETRIEVED_AT,
+    })).toThrow();
+  });
+
   it("keeps accepted, unknown-price, and unknown-chain price states explicit", () => {
     expect(normalizePriceSourceResponse(pricesFixture, { now: NOW, retrievedAt: RETRIEVED_AT }))
       .toEqual(expect.arrayContaining([
         expect.objectContaining({
           state: "accepted",
-          record: expect.objectContaining({ amountOre: 2190, chainId: "extra", ean: "7038010000010" }),
+          record: expect.objectContaining({
+            amountOre: 2190,
+            chainId: "extra",
+            ean: "7038010000010",
+            observationKind: "current",
+          }),
         }),
-        expect.objectContaining({ state: "unknown", reason: "MISSING_SUPPORTED_CHAIN", chainCode: "BUNNPRIS" }),
-        expect.objectContaining({ state: "quarantined", reason: "UNKNOWN_CHAIN", chainCode: "FUTURE_CHAIN" }),
-        expect.objectContaining({ state: "unknown", reason: "MISSING_PRICE", chainCode: "REMA_1000" }),
+        expect.objectContaining({
+          chainCode: "BUNNPRIS",
+          chainId: "bunnpris",
+          ean: "7038010000010",
+          reason: "MISSING_SUPPORTED_CHAIN",
+          state: "unknown",
+        }),
+        expect.objectContaining({
+          chainCode: "FUTURE_CHAIN",
+          ean: "7038010000010",
+          reason: "UNKNOWN_CHAIN",
+          state: "quarantined",
+        }),
+        expect.objectContaining({
+          chainCode: "REMA_1000",
+          chainId: "rema-1000",
+          ean: "7038010000010",
+          reason: "MISSING_PRICE",
+          state: "unknown",
+        }),
       ]));
+  });
+
+  it("keeps current and historical observation identities collision-proof", () => {
+    const history = structuredClone(pricesFixture);
+    history.data[0]!.price_history.push({
+      date: "2026-07-15",
+      price: 20.9,
+      store: "COOP_EXTRA",
+    });
+
+    const current = normalizePriceSourceResponse(history, {
+      expectedEans: ["7038010000010"],
+      now: NOW,
+      retrievedAt: RETRIEVED_AT,
+    }).filter((outcome) => outcome.state === "accepted");
+    const historical = normalizeHistoricalPriceSourceResponse(history, {
+      expectedEans: ["7038010000010"],
+      now: NOW,
+      retrievedAt: RETRIEVED_AT,
+    }).filter((outcome) => outcome.state === "accepted");
+
+    expect(current[0]?.record).toMatchObject({ observationKind: "current" });
+    expect(historical.map(({ record }) => record)).toEqual([
+      expect.objectContaining({
+        amountOre: 2090,
+        chainId: "extra",
+        ean: "7038010000010",
+        observationKind: "historical",
+        observedAt: "2026-07-15T00:00:00.000Z",
+      }),
+      expect.objectContaining({
+        amountOre: 2190,
+        chainId: "extra",
+        ean: "7038010000010",
+        observationKind: "historical",
+        observedAt: "2026-07-15T00:00:00.000Z",
+      }),
+    ]);
+    const identities = [...current, ...historical].map(({ record }) => record.sourceRecordId);
+    expect(new Set(identities).size).toBe(identities.length);
+    for (const outcome of historical) {
+      expect(outcome.record.sourceRecordId).toContain(outcome.record.ean);
+      expect(outcome.record.sourceRecordId).toContain(outcome.record.chainCode);
+      expect(outcome.record.sourceRecordId).toContain(outcome.record.observationKind);
+      expect(outcome.record.sourceRecordId).toContain(outcome.record.observedAt);
+      expect(outcome.record.sourceRecordId).toContain(String(outcome.record.amountOre));
+    }
   });
 
   it("quarantines malformed and future price records instead of coercing them", () => {
@@ -313,6 +422,15 @@ describe("Kassalapp v1 source contracts", () => {
       }],
       outcomes: [{ state: "quarantined", reason: "IDENTIFIER_MISMATCH", sourceRecordId: "501" }],
     });
+    expect(normalizePhysicalStorePageSourceResponse(wrongChain, {
+      expectedChainCode: "BUNNPRIS",
+      now: NOW,
+      retrievedAt: RETRIEVED_AT,
+    }).outcomes[0]).toMatchObject({
+      chainCode: "COOP_EXTRA",
+      chainId: "extra",
+      state: "quarantined",
+    });
   });
 
   it("does not call a partially malformed required-chain store page complete", () => {
@@ -338,6 +456,16 @@ describe("Kassalapp v1 source contracts", () => {
       reason: "INVALID_RECORDS",
       state: "unknown",
     }]);
+    expect(normalizePhysicalStorePageSourceResponse(partial, {
+      expectedChainCode: "BUNNPRIS",
+      now: NOW,
+      retrievedAt: RETRIEVED_AT,
+    }).outcomes).toContainEqual(expect.objectContaining({
+      chainCode: "BUNNPRIS",
+      chainId: "bunnpris",
+      reason: "MALFORMED_RECORD",
+      state: "quarantined",
+    }));
   });
 
   it("deduplicates and sorts category, label, and store identities deterministically", () => {

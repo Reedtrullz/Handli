@@ -120,15 +120,80 @@ describe("calculatePlans", () => {
     expect(plan?.totalOre).toBe(2_598);
   });
 
-  it.each(["g", "ml"] as const)("fails closed for required %s quantities until package normalization exists", (quantityUnit) => {
-    const result = calculatePlans(request({
-      needs: [{ ...needs[0]!, quantity: 500, quantityUnit }],
+  it.each([
+    {
+      quantity: 1_500,
+      quantityUnit: "ml" as const,
+      packageQuantity: 1_000,
+      packageCount: 2,
+      fulfilledAmount: 2_000,
+      surplusAmount: 500,
+    },
+    {
+      quantity: 1_000,
+      quantityUnit: "g" as const,
+      packageQuantity: 500,
+      packageCount: 2,
+      fulfilledAmount: 1_000,
+      surplusAmount: 0,
+    },
+  ])("fulfils $quantity $quantityUnit using enough real packages", ({
+    quantity,
+    quantityUnit,
+    packageQuantity,
+    packageCount,
+    fulfilledAmount,
+    surplusAmount,
+  }) => {
+    const [plan] = calculatePlans(request({
+      needs: [{ ...needs[0]!, quantity, quantityUnit }],
       matchingRules: [rules[0]!],
+      products: [{
+        ...products[0]!,
+        packageQuantity,
+        packageUnit: quantityUnit,
+      }],
       prices: [price("7038010000010", "extra", 1_299)],
       maxStores: 1,
     }), NOW);
 
-    expect(result).toEqual([]);
+    expect(plan?.totalOre).toBe(2_598);
+    expect(plan?.assignments[0]?.fulfilment).toEqual({
+      contractVersion: 1,
+      needId: "milk",
+      canonicalProductId: "7038010000010",
+      requested: { amount: quantity, unit: quantityUnit },
+      packageMeasure: { amount: packageQuantity, unit: quantityUnit },
+      packageCount,
+      fulfilledAmount,
+      surplusAmount,
+      complete: true,
+    });
+  });
+
+  it("fails closed for missing, incompatible, fractional, or overflowing package fulfilment", () => {
+    const baseNeed = { ...needs[0]!, quantity: 1_000, quantityUnit: "g" as const };
+    const base = {
+      needs: [baseNeed],
+      matchingRules: [rules[0]!],
+      prices: [price("7038010000010", "extra", 1_299)],
+      maxStores: 1 as const,
+    };
+
+    expect(calculatePlans(request({ ...base, products: [products[0]!] }), NOW)).toEqual([]);
+    expect(calculatePlans(request({
+      ...base,
+      products: [{ ...products[0]!, packageQuantity: 500, packageUnit: "ml" }],
+    }), NOW)).toEqual([]);
+    expect(calculatePlans(request({
+      ...base,
+      products: [{ ...products[0]!, packageQuantity: 1.5, packageUnit: "g" }],
+    }), NOW)).toEqual([]);
+    expect(calculatePlans(request({
+      ...base,
+      needs: [{ ...baseNeed, quantity: Number.MAX_SAFE_INTEGER }],
+      products: [{ ...products[0]!, packageQuantity: Number.MAX_SAFE_INTEGER - 1, packageUnit: "g" }],
+    }), NOW)).toEqual([]);
   });
 
   it("returns the non-dominated convenience and savings plans", () => {

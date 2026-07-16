@@ -1,19 +1,25 @@
-import { planResultSchema } from "@handleplan/domain";
+import {
+  exactProductPlanApiEvidenceEnvelopeSchema,
+  type ExactProductPlanApiRequest,
+  planResultV2Schema,
+} from "@handleplan/domain";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
 import type { PlanServiceContract } from "../../../lib/server/plan-service";
 import {
+  CatalogUnavailableError,
   PlanRequestCancelledError,
   PriceDataUnavailableError,
+  UnknownExactProductError,
 } from "../../../lib/server/plan-service";
-import { createPlansHandler } from "./route";
+import { createPlansHandler, PLAN_CAVEATS } from "./route";
 
 const body = {
   matchingRules: [
     {
-      exactEan: "7038010000013",
+      exactEan: "7038010000010",
       explanation: "Nøyaktig produkt",
       id: "melk-exact",
       mode: "exact",
@@ -31,27 +37,123 @@ const body = {
       required: true,
     },
   ],
-  products: [{ ean: "7038010000013", name: "Tine Lettmelk 1 %" }],
+  products: [{ ean: "7038010000010", name: "Tine Lettmelk 1 %" }],
 };
 
-const plan = planResultSchema.parse({
-  assignments: [
+const exactBody: ExactProductPlanApiRequest = {
+  contractVersion: 1,
+  maxStores: 3,
+  needs: [
     {
-      chain: "extra",
-      costOre: 2190,
-      ean: "7038010000013",
-      needId: "melk",
+      id: "melk",
+      match: {
+        kind: "exact-product",
+        product: { kind: "gtin", value: "7038010000010" },
+        userApproved: true,
+      },
       quantity: 1,
-      observedAt: "2026-07-15T11:00:00.000Z",
-      source: "kassalapp",
+      quantityUnit: "each",
+      required: true,
     },
   ],
+};
+
+const canonicalProduct = {
+  brand: "TINE",
+  catalogEvidence: {
+    observedAt: "2026-07-15T11:00:00.000Z",
+    source: {
+      contractVersion: 1 as const,
+      displayName: "Kassalapp",
+      id: "kassalapp",
+      sourceClass: "ordinary-price" as const,
+      state: "approved" as const,
+    },
+    sourceRecordId: `source-record:${"a".repeat(64)}`,
+  },
+  displayName: "Canonical TINE Lettmelk",
+  gtin: "7038010000010",
+  packageMeasure: { amount: 1_000, unit: "ml" as const },
+  unitsPerPack: 1,
+};
+
+const exactPlan = planResultV2Schema.parse({
+  assignments: [{
+    canonicalProductId: "product:milk",
+    chain: "extra",
+    checkout: { ordinaryTotalOre: 2_190, savingOre: 0, totalOre: 2_190 },
+    costOre: 2_190,
+    ean: "7038010000010",
+    fulfilment: {
+      canonicalProductId: "product:milk",
+      complete: true,
+      contractVersion: 2,
+      needId: "melk",
+      packageCount: 1,
+      packageMeasure: { amount: 1_000, unit: "ml" },
+      purchased: { amount: 1, unit: "package" },
+      requested: { amount: 1, unit: "package" },
+      surplus: { amount: 0, unit: "package" },
+    },
+    needId: "melk",
+    observedAt: "2026-07-15T11:00:00.000Z",
+    source: "kassalapp",
+  }],
   chains: ["extra"],
   coverage: 1,
   freshness: { melk: "eligible" },
-  id: "plan-1",
+  id: "plan-v2-1",
   substitutions: [],
-  totalOre: 2190,
+  totalOre: 2_190,
+});
+
+const exactEvidence = exactProductPlanApiEvidenceEnvelopeSchema.parse({
+  assignmentEvidence: [{
+    chainId: "extra" as const,
+    conditions: { kind: "ordinary-price" as const },
+    evidenceId: "price:1",
+    needId: "melk",
+    planId: exactPlan.id,
+  }],
+  needs: [{
+    comparisonScope: {
+      completeness: "partial" as const,
+      contractVersion: 1 as const,
+      entries: [
+        { chainId: "bunnpris", status: { kind: "unknown" as const, reason: "not-checked" as const } },
+        { chainId: "extra", status: { evidenceId: "price:1", kind: "priced" as const } },
+        { chainId: "rema-1000", status: { kind: "unknown" as const, reason: "not-checked" as const } },
+      ],
+      evaluatedAt: "2026-07-15T12:00:00.000Z",
+      expectedChainIds: ["bunnpris", "extra", "rema-1000"],
+    },
+    excludedPriceEvidence: [],
+    historicalComparisons: [],
+    historicalPriceEvidence: [],
+    needId: "melk",
+    officialOffers: [],
+    ordinaryPrices: [{
+      amountOre: 2_190,
+      chainId: "extra",
+      contractVersion: 1 as const,
+      evidenceLevel: "observed" as const,
+      geographicScope: { countryCode: "NO", kind: "national" as const },
+      id: "price:1",
+      kind: "price-evidence" as const,
+      observedAt: "2026-07-15T11:00:00.000Z",
+      priceKind: "ordinary" as const,
+      productMatch: { canonicalProductId: "product:milk", kind: "exact" as const },
+      sourceId: "kassalapp",
+      sourceRecordId: "record:1",
+    }],
+  }],
+  sources: [{
+    contractVersion: 1 as const,
+    displayName: "Kassalapp",
+    id: "kassalapp",
+    sourceClass: "ordinary-price" as const,
+    state: "approved" as const,
+  }],
 });
 
 function request(
@@ -93,28 +195,167 @@ function streamingRequest(
 }
 
 describe("POST /api/plans", () => {
-  it("returns complete plans, canonical UTC time, and the mandatory Norwegian caveats", async () => {
-    const service: PlanServiceContract = {
-      calculate: async () => ({
-        generatedAt: "2026-07-15T12:00:00.000Z",
-        plans: [plan],
-        priceDataSource: "upstream",
-      }),
-    };
+  it("rejects the unversioned browser-trusted contract before resolving the service", async () => {
+    const getService = vi.fn<() => PlanServiceContract>(() => ({
+      calculate: vi.fn(),
+    }));
 
-    const response = await createPlansHandler(() => service)(request());
+    const response = await createPlansHandler(getService)(request());
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ code: "CONTRACT_VERSION_REQUIRED" });
+    expect(getService).not.toHaveBeenCalled();
+  });
+
+  it("routes versioned requests to the exact-product service", async () => {
+    const calculate = vi.fn();
+    const calculateExact = vi.fn(async () => ({
+      evidence: exactEvidence,
+      generatedAt: "2026-07-15T12:00:00.000Z",
+      plans: [exactPlan],
+      priceDataSource: "cache" as const,
+      products: [canonicalProduct],
+    }));
+
+    const response = await createPlansHandler(() => ({ calculate, calculateExact }))(
+      request(exactBody),
+    );
 
     expect(response.status).toBe(200);
+    expect(calculate).not.toHaveBeenCalled();
+    expect(calculateExact).toHaveBeenCalledWith(exactBody, expect.any(AbortSignal));
     await expect(response.json()).resolves.toEqual({
       caveats: [
         "Resultatet gjelder prisene Handleplan kunne verifisere; ukjent kjededekning kan påvirke sammenligningen.",
         "Kjedepris betyr ikke at varen er på lager eller har samme hyllepris i din butikk.",
         "Medlemspriser og kundeavis-tilbud er ikke med i denne beregningen.",
       ],
+      contractVersion: 1,
+      evidence: exactEvidence,
       generatedAt: "2026-07-15T12:00:00.000Z",
-      priceDataSource: "upstream",
-      plans: [plan],
+      plans: [exactPlan],
+      priceDataSource: "cache",
+      products: [canonicalProduct],
     });
+  });
+
+  it("counts UTF-8 response bytes and rejects an oversized strict result", async () => {
+    const wide = "ø".repeat(180);
+    const offers = Array.from({ length: 50 }, (_, index) => ({
+      applicability: {
+        channels: ["in-store" as const],
+        contractVersion: 1 as const,
+        endsAt: "2026-07-17T12:00:00.000Z",
+        geographicScope: { kind: "unknown" as const, reason: "ø".repeat(500) },
+        startsAt: "2026-07-15T12:00:00.000Z",
+      },
+      capturedAt: "2026-07-15T11:00:00.000Z",
+      chainId: `chain:${wide}`,
+      conditions: [{ kind: "public" as const }],
+      contractVersion: 1 as const,
+      evidenceLevel: "observed" as const,
+      id: `offer:${index}:${wide}`,
+      kind: "official-offer" as const,
+      pricing: { kind: "unit" as const, unitPriceOre: 1_990 },
+      productMatch: {
+        canonicalProductId: `product:${wide}`,
+        kind: "exact" as const,
+      },
+      sourceId: "kassalapp",
+      sourceRecordId: `record:${index}:${wide}`,
+    }));
+    const strictEvidence = exactProductPlanApiEvidenceEnvelopeSchema.parse({
+      assignmentEvidence: [],
+      needs: [{
+        ...exactEvidence.needs[0],
+        comparisonScope: {
+          ...exactEvidence.needs[0]!.comparisonScope,
+          entries: [
+            { chainId: "bunnpris", status: { kind: "unknown", reason: "not-checked" } },
+            { chainId: "extra", status: { kind: "unknown", reason: "not-checked" } },
+            { chainId: "rema-1000", status: { kind: "unknown", reason: "not-checked" } },
+          ],
+        },
+        officialOffers: offers,
+        ordinaryPrices: [],
+      }],
+      sources: exactEvidence.sources,
+    });
+    const publicPayload = {
+      caveats: PLAN_CAVEATS,
+      contractVersion: 1,
+      evidence: strictEvidence,
+      generatedAt: "2026-07-15T12:00:00.000Z",
+      plans: [],
+      priceDataSource: "cache",
+      products: [canonicalProduct],
+    };
+    const serialized = JSON.stringify(publicPayload);
+    expect(serialized.length).toBeLessThanOrEqual(128 * 1024);
+    expect(new TextEncoder().encode(serialized).byteLength).toBeGreaterThan(128 * 1024);
+
+    const response = await createPlansHandler(() => ({
+      calculate: vi.fn(),
+      calculateExact: async () => ({
+        evidence: strictEvidence,
+        generatedAt: "2026-07-15T12:00:00.000Z",
+        plans: [],
+        priceDataSource: "cache" as const,
+        products: [canonicalProduct],
+      }),
+    }))(request(exactBody));
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(await response.json()).toEqual({ code: "RESPONSE_TOO_LARGE" });
+  });
+
+  it("never downgrades a body with its own contractVersion to the legacy parser", async () => {
+    const calculate = vi.fn();
+    const calculateExact = vi.fn();
+    const response = await createPlansHandler(() => ({ calculate, calculateExact }))(
+      request({ ...body, contractVersion: 1 }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ code: "INVALID_REQUEST" });
+    expect(calculate).not.toHaveBeenCalled();
+    expect(calculateExact).not.toHaveBeenCalled();
+  });
+
+  it("rejects a digit-shaped invalid GTIN before either service or gateway path", async () => {
+    const calculate = vi.fn();
+    const calculateExact = vi.fn();
+    const response = await createPlansHandler(() => ({ calculate, calculateExact }))(
+      request({
+        ...exactBody,
+        needs: [{
+          ...exactBody.needs[0],
+          match: {
+            ...exactBody.needs[0]!.match,
+            product: { kind: "gtin", value: "7038010000013" },
+          },
+        }],
+      }),
+    );
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ code: "INVALID_EXACT_PRODUCT" });
+    expect(calculate).not.toHaveBeenCalled();
+    expect(calculateExact).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [new UnknownExactProductError(), 422, "UNKNOWN_EXACT_PRODUCT"],
+    [new CatalogUnavailableError(), 503, "CATALOG_UNAVAILABLE"],
+  ] as const)("maps exact catalog errors without leaking details", async (error, status, code) => {
+    const response = await createPlansHandler(() => ({
+      calculate: vi.fn(),
+      calculateExact: async () => { throw error; },
+    }))(request(exactBody));
+
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual({ code });
   });
 
   it("rejects non-JSON, malformed JSON, and oversized bodies before the service", async () => {
@@ -143,30 +384,6 @@ describe("POST /api/plans", () => {
     expect(service.calculate).not.toHaveBeenCalled();
   });
 
-  it.each(["g", "ml"] as const)("rejects required %s quantities before planning", async (quantityUnit) => {
-    const service: PlanServiceContract = { calculate: vi.fn() };
-    const response = await createPlansHandler(() => service)(request({
-      ...body,
-      needs: [{ ...body.needs[0], quantity: 500, quantityUnit }],
-    }));
-
-    expect(response.status).toBe(400);
-    expect(service.calculate).not.toHaveBeenCalled();
-  });
-
-  it("accepts a generic-only basket when its approved family has a catalog candidate", async () => {
-    const calculate = vi.fn(async () => ({ generatedAt: "2026-07-15T12:00:00.000Z", plans: [plan], priceDataSource: "upstream" as const }));
-    const response = await createPlansHandler(() => ({ calculate }))(request({
-      ...body,
-      needs: [{ ...body.needs[0], query: "lettmelk", matchRuleId: "melk-flex" }],
-      matchingRules: [{ id: "melk-flex", mode: "flexible", productFamily: "lettmelk", userApproved: true, explanation: "Samme type" }],
-      products: [{ ...body.products[0], productFamily: "lettmelk" }],
-    }));
-
-    expect(response.status).toBe(200);
-    expect(calculate).toHaveBeenCalledOnce();
-  });
-
   it("stops an oversized stream without trusting Content-Length", async () => {
     const service: PlanServiceContract = { calculate: vi.fn() };
     const cancelled = vi.fn();
@@ -181,33 +398,6 @@ describe("POST /api/plans", () => {
     expect(await response.json()).toEqual({ code: "REQUEST_TOO_LARGE" });
     expect(cancelled).toHaveBeenCalledOnce();
     expect(service.calculate).not.toHaveBeenCalled();
-  });
-
-  it("decodes UTF-8 split across stream chunks", async () => {
-    const encoded = new TextEncoder().encode(
-      JSON.stringify({
-        ...body,
-        products: [{ ...body.products[0], name: "Melk 🥛" }],
-      }),
-    );
-    const emojiStart = encoded.findIndex((byte) => byte === 0xf0);
-    const chunks = [encoded.slice(0, emojiStart + 2), encoded.slice(emojiStart + 2)];
-    let seenName: string | undefined;
-    const service: PlanServiceContract = {
-      calculate: async (value) => {
-        seenName = value.products[0]?.name;
-        return {
-          generatedAt: "2026-07-15T12:00:00.000Z",
-          plans: [],
-          priceDataSource: "upstream",
-        };
-      },
-    };
-
-    const response = await createPlansHandler(() => service)(streamingRequest(chunks));
-
-    expect(response.status).toBe(200);
-    expect(seenName).toBe("Melk 🥛");
   });
 
   it.each([
@@ -267,7 +457,7 @@ describe("POST /api/plans", () => {
 
   it("rejects invalid public bodies without returning raw Zod details", async () => {
     const service: PlanServiceContract = { calculate: vi.fn() };
-    const response = await createPlansHandler(() => service)(request({ ...body, maxStores: 4 }));
+    const response = await createPlansHandler(() => service)(request({ ...exactBody, maxStores: 4 }));
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ code: "INVALID_REQUEST" });
@@ -276,14 +466,15 @@ describe("POST /api/plans", () => {
 
   it("maps an unsafe or incomplete fallback to the required sanitized 503", async () => {
     const service: PlanServiceContract = {
-      calculate: async () => {
+      calculate: vi.fn(),
+      calculateExact: async () => {
         const error = new PriceDataUnavailableError();
         error.stack = "secret stack with ?query=milk";
         throw error;
       },
     };
 
-    const response = await createPlansHandler(() => service)(request());
+    const response = await createPlansHandler(() => service)(request(exactBody));
 
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ code: "PRICE_DATA_UNAVAILABLE" });
@@ -291,12 +482,13 @@ describe("POST /api/plans", () => {
 
   it("maps cancellation to a sanitized best-effort client-closed response", async () => {
     const service: PlanServiceContract = {
-      calculate: async () => {
+      calculate: vi.fn(),
+      calculateExact: async () => {
         throw new PlanRequestCancelledError();
       },
     };
 
-    const response = await createPlansHandler(() => service)(request());
+    const response = await createPlansHandler(() => service)(request(exactBody));
 
     expect(response.status).toBe(499);
     expect(await response.json()).toEqual({ code: "REQUEST_CANCELLED" });
@@ -304,20 +496,23 @@ describe("POST /api/plans", () => {
 
   it("forwards the incoming cancellation signal to planning", async () => {
     let seenSignal: AbortSignal | undefined;
-    const incoming = request();
     const service: PlanServiceContract = {
-      calculate: async (_value, signal) => {
+      calculate: vi.fn(),
+      calculateExact: async (_value, signal) => {
         seenSignal = signal;
         return {
+          evidence: exactEvidence,
           generatedAt: "2026-07-15T12:00:00.000Z",
-          plans: [],
-          priceDataSource: "upstream",
+          plans: [exactPlan],
+          priceDataSource: "cache",
+          products: [canonicalProduct],
         };
       },
     };
 
-    await createPlansHandler(() => service)(incoming);
+    const versionedIncoming = request(exactBody);
+    await createPlansHandler(() => service)(versionedIncoming);
 
-    expect(seenSignal).toBe(incoming.signal);
+    expect(seenSignal).toBe(versionedIncoming.signal);
   });
 });

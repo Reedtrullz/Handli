@@ -1,3 +1,4 @@
+import { publicDiscoveryResponseSchema } from "@handleplan/domain";
 import { z } from "zod";
 
 import {
@@ -6,11 +7,24 @@ import {
   type DiscoveryServiceContract,
 } from "../../../../lib/server/discovery-service";
 
-const searchParamsSchema = z.object({ q: z.string().trim().min(2).max(80).optional() }).strict();
+const searchParamsSchema = z.object({ q: z.string().trim().min(2).max(120).optional() }).strict();
+const MAX_RESPONSE_BYTES = 128 * 1024;
 type ServiceProvider = () => DiscoveryServiceContract | Promise<DiscoveryServiceContract>;
 
 function errorResponse(code: string, status: number): Response {
   return Response.json({ code }, { status });
+}
+
+function validatedResponse(value: unknown): Response {
+  const parsed = publicDiscoveryResponseSchema.safeParse(value);
+  if (!parsed.success) throw new DiscoveryUnavailableError();
+  const body = JSON.stringify(parsed.data);
+  if (new TextEncoder().encode(body).byteLength > MAX_RESPONSE_BYTES) {
+    throw new DiscoveryUnavailableError();
+  }
+  return new Response(body, {
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
 }
 
 export function createDiscoverySearchHandler(getService: ServiceProvider) {
@@ -25,7 +39,7 @@ export function createDiscoverySearchHandler(getService: ServiceProvider) {
 
     try {
       const service = await getService();
-      return Response.json(parsed.data.q === undefined
+      return validatedResponse(parsed.data.q === undefined
         ? await service.browse(request.signal)
         : await service.search(parsed.data.q, request.signal));
     } catch (error) {

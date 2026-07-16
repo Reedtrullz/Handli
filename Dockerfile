@@ -9,6 +9,7 @@ FROM base AS dependencies
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/package.json
+COPY apps/worker/package.json apps/worker/package.json
 COPY packages/db/package.json packages/db/package.json
 COPY packages/domain/package.json packages/domain/package.json
 COPY packages/kassalapp/package.json packages/kassalapp/package.json
@@ -20,6 +21,7 @@ COPY . .
 ARG APP_COMMIT_SHA=development
 ENV APP_COMMIT_SHA=$APP_COMMIT_SHA
 RUN pnpm --filter web build
+RUN pnpm --filter @handleplan/worker build
 
 FROM base AS runner
 WORKDIR /app
@@ -32,6 +34,7 @@ RUN addgroup --system --gid 1001 nodejs \
 
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/apps/worker/dist/main.mjs /app/apps/worker/dist/main.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.pnpm/postgres@3.4.9/node_modules/postgres ./node_modules/postgres
 COPY --from=builder --chown=nextjs:nodejs /app/deploy/entrypoint.sh /app/deploy/entrypoint.sh
 COPY --from=builder --chown=nextjs:nodejs /app/deploy/migrate.mjs /app/deploy/migrate.mjs

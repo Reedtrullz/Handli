@@ -6,14 +6,19 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/main.mjs",
     "lint": "tsc --noEmit --strict --skipLibCheck --target ES2022 --module ESNext --moduleResolution Bundler src/*.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit --strict --skipLibCheck --target ES2022 --module ESNext --moduleResolution Bundler src/*.ts"
   },
   "dependencies": {
+    "@handleplan/db": "workspace:*",
+    "@handleplan/kassalapp": "workspace:*",
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@types/node": "24.10.13",
+    "esbuild": "0.25.12",
     "typescript": "5.9.3",
     "vitest": "4.0.18"
   }

@@ -17,7 +17,7 @@ import { PostgresEvidencePriceReader } from "./price-read-model";
 import { priceCache } from "./schema";
 
 const observation: PriceObservation = {
-  ean: "7038010000134",
+  ean: "7038010000133",
   chain: "extra",
   amountOre: 2490 as MoneyOre,
   observedAt: "2026-07-15T08:30:00.000Z",
@@ -69,12 +69,12 @@ describe("price-cache mappings", () => {
     const now = new Date("2026-07-15T12:00:00.000Z");
     const future = {
       ...observation,
-      ean: "7038010000141",
+      ean: "7038010000140",
       observedAt: "2026-07-15T12:00:00.001Z",
     };
     const historical = {
       ...observation,
-      ean: "7038010000158",
+      ean: "7038010000157",
       observedAt: "2026-06-01T08:30:00.000Z",
     };
 
@@ -163,7 +163,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
     const now = new Date("2026-07-15T12:00:00.000Z");
     const current = {
       ...observation,
-      ean: "7038010000165",
+      ean: "7038010000164",
       observedAt: "2026-07-15T10:00:00.000Z",
     };
     const older = {
@@ -180,7 +180,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       amountOre: 500 as MoneyOre,
       observedAt: "2026-07-15T12:00:00.001Z",
     };
-    const futureOnly = { ...future, ean: "7038010000172" };
+    const futureOnly = { ...future, ean: "7038010000171" };
 
     await cache.putMany([current], now);
     await cache.putMany([older, equalTimestamp, future, futureOnly], now);
@@ -447,9 +447,9 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
           insert into ingestion_runs (
             source_id, run_type, status, started_at, completed_at, counts
           ) values (
-            'kassalapp', 'eligible_reader_test', ${runStatus},
+            'kassalapp', 'eligible_reader_test', 'running',
             ${new Date(Date.now() - 1_000).toISOString()},
-            ${completedAt}, '{}'
+            null, '{}'
           )
           returning id
         `;
@@ -478,6 +478,13 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
             ${overrides.checkedAt ?? "2026-07-15T12:00:00.000Z"}
           )
         `;
+        if (runStatus !== "running") {
+          await connection.sql`
+            update ingestion_runs
+            set status = ${runStatus}, completed_at = ${completedAt}
+            where id = ${run!.id}
+          `;
+        }
         expect(evidence).toBeDefined();
       };
 

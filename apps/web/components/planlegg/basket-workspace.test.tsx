@@ -11,7 +11,7 @@ import { BASKET_QUANTITY_MAX, BASKET_STORAGE_KEY } from "../../lib/browser-baske
 import { BasketWorkspace } from "./basket-workspace";
 
 const milk: Product = {
-  ean: "7038010000013",
+  ean: "7038010000010",
   name: "TINE Lettmelk 1 % 1 l",
   brand: "TINE",
   packageQuantity: 1000,
@@ -19,7 +19,7 @@ const milk: Product = {
   productFamily: "lettmelk",
 };
 const cheese: Product = {
-  ean: "7038010000020",
+  ean: "7038010000027",
   name: "Norvegia Original 1 kg",
   brand: "TINE",
   packageQuantity: 1000,
@@ -436,10 +436,11 @@ describe("Planlegg basket workspace", () => {
       id: `need-${index}`, query: milk.name, quantity: 1, quantityUnit: "each", matchRuleId: `rule-${index}`, required: true,
     }));
     localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify({
-      version: 1,
+      version: 2,
       needs,
       matchingRules: needs.map((_, index) => ({ id: `rule-${index}`, mode: "exact", exactEan: milk.ean, userApproved: true, explanation: "Eksakt produkt" })),
       products: [milk],
+      convenienceWeightBasisPoints: 5_000,
       travel: { enabled: false, mode: "car" },
     }));
 

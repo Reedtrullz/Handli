@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   canonicalProductSchema,
+  isValidGtin,
   packageMeasureSchema,
   productFamilySchema,
   productIdentifierSchema,
@@ -42,6 +43,18 @@ describe("canonical catalog contracts", () => {
         kind: "source",
         value: "7038010000010",
       }).success,
+    ).toBe(false);
+  });
+
+  it("validates EAN-8 and EAN-13 checksums at the canonical identity boundary", () => {
+    expect(isValidGtin("7038010000010")).toBe(true);
+    expect(isValidGtin("96385074")).toBe(true);
+    expect(isValidGtin("7038010000013")).toBe(false);
+    expect(isValidGtin("96385075")).toBe(false);
+    expect(isValidGtin("not-a-gtin")).toBe(false);
+
+    expect(
+      productIdentifierSchema.safeParse({ kind: "gtin", value: "7038010000013" }).success,
     ).toBe(false);
   });
 

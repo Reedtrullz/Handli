@@ -23,7 +23,10 @@ export default function PlanleggPage() {
       <footer className="site-footer">
         <div>
           <p>© 2026 Handleplan • Uavhengig prissammenligning</p>
-          <p>Tilbakemelding og personverninformasjon kommer senere.</p>
+          <nav aria-label="Om Handleplan">
+            <a href="/status">Datadekning</a>
+            <a href="/om">Offentlig gode og rettelser</a>
+          </nav>
         </div>
       </footer>
     </div>

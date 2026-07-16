@@ -37,7 +37,11 @@ describe.skipIf(!runDatabaseIntegration)("PostgresProviderRequestBudget integrat
   it("admits exactly N of N+1 immediate claims across independent coordinators", async () => {
     const options = {
       limit: 3,
-      maxWaitMs: 1_000,
+      // The deadline includes pool checkout and advisory-lock acquisition. Keep
+      // enough headroom for this concurrency assertion when the full database
+      // suite is sharing PostgreSQL; the dedicated max-wait tests below retain
+      // the tight timing bounds.
+      maxWaitMs: 5_000,
       providerKey,
       windowMs: 60_000,
     } as const;
@@ -78,7 +82,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresProviderRequestBudget integrat
       where provider_key = ${providerKey}
     `;
     expect(state).toEqual({ all_current: true, attempt_count: 3 });
-  });
+  }, 10_000);
 
   it("cancels a database advisory-lock wait", async () => {
     const cancellationKey = `${providerKey}-cancel`;

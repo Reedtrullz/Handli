@@ -10,6 +10,25 @@ import {
 } from "./contract-primitives";
 
 const normalizedMeasureUnitSchema = z.enum(["g", "ml", "piece", "package"]);
+const gtinShape = /^(?:\d{8}|\d{13})$/;
+
+export function isValidGtin(input: string): boolean {
+  if (!gtinShape.test(input)) return false;
+
+  const digits = [...input].map(Number);
+  const checkDigit = digits.pop();
+  if (checkDigit === undefined) return false;
+
+  const weightedSum = digits.reduce((sum, digit, index) => {
+    const positionFromRight = digits.length - index;
+    return sum + digit * (positionFromRight % 2 === 1 ? 3 : 1);
+  }, 0);
+  return (10 - (weightedSum % 10)) % 10 === checkDigit;
+}
+
+export const gtinSchema = z.string().regex(gtinShape).refine(isValidGtin, {
+  message: "GTIN checksum is invalid",
+});
 
 export const packageMeasureSchema = z
   .object({
@@ -23,7 +42,7 @@ export type PackageMeasure = z.infer<typeof packageMeasureSchema>;
 const gtinIdentifierSchema = z
   .object({
     kind: z.literal("gtin"),
-    value: z.string().regex(/^(?:\d{8}|\d{13})$/),
+    value: gtinSchema,
   })
   .strict();
 

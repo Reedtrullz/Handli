@@ -11,15 +11,26 @@ import {
 } from "./contracts";
 
 export class WorkerCancelledError extends Error {
-  constructor() {
+  constructor(readonly counters?: Partial<WorkerRunCounters>) {
     super("Worker execution was cancelled");
     this.name = "WorkerCancelledError";
   }
 }
 
+export class WorkerUnresponsiveError extends Error {
+  constructor() {
+    super("Worker handler did not stop within the shutdown grace period");
+    this.name = "WorkerUnresponsiveError";
+  }
+}
+
 export interface WorkerJobContext {
+  fenceToken: string;
+  jobId: string;
+  kind: WorkerJobKind;
   runId: string;
   signal: AbortSignal;
+  sourceId: string;
 }
 
 export interface WorkerHandlerResult {
@@ -29,17 +40,29 @@ export interface WorkerHandlerResult {
 
 export type WorkerJobHandler = (context: WorkerJobContext) => Promise<WorkerHandlerResult>;
 
+export interface WorkerRunExecution {
+  fenceToken: string;
+  signal?: AbortSignal;
+}
+
 export interface WorkerRunnerOptions {
   createRunId: (request: WorkerJobRequest) => string;
+  handlerShutdownGraceMs?: number;
   handlers: Partial<Record<WorkerJobKind, WorkerJobHandler>>;
   now: () => Date;
 }
 
-type ExecutionOutcome =
-  | { kind: "completed"; result: WorkerHandlerResult }
+type HandlerSettlement =
+  | { kind: "fulfilled"; result: WorkerHandlerResult }
+  | { error: unknown; kind: "rejected" };
+
+type InitialOutcome =
   | { kind: "cancelled" }
-  | { kind: "timed-out" }
-  | { kind: "failed" };
+  | { kind: "settled"; settlement: HandlerSettlement }
+  | { kind: "timed-out" };
+
+const DEFAULT_HANDLER_SHUTDOWN_GRACE_MS = 5_000;
+const MAX_HANDLER_SHUTDOWN_GRACE_MS = 120_000;
 
 function canonicalNow(now: () => Date): string {
   const value = now();
@@ -64,14 +87,32 @@ function completionStatus(counters: WorkerRunCounters): "succeeded" | "partial" 
   return counters.fetched > 0 ? "partial" : "failed";
 }
 
-export class WorkerRunner {
-  constructor(private readonly options: WorkerRunnerOptions) {}
+function isValidFenceToken(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length >= 1
+    && value.length <= 1_024
+    && value.trim().length > 0;
+}
 
-  async run(input: unknown, callerSignal?: AbortSignal): Promise<WorkerRunResult> {
+export class WorkerRunner {
+  private readonly handlerShutdownGraceMs: number;
+
+  constructor(private readonly options: WorkerRunnerOptions) {
+    const grace = options.handlerShutdownGraceMs ?? DEFAULT_HANDLER_SHUTDOWN_GRACE_MS;
+    if (!Number.isInteger(grace) || grace < 1 || grace > MAX_HANDLER_SHUTDOWN_GRACE_MS) {
+      throw new TypeError(
+        `handlerShutdownGraceMs must be an integer from 1 through ${MAX_HANDLER_SHUTDOWN_GRACE_MS}`,
+      );
+    }
+    this.handlerShutdownGraceMs = grace;
+  }
+
+  async run(input: unknown, execution: WorkerRunExecution): Promise<WorkerRunResult> {
     const request = workerJobRequestSchema.parse(input);
     const startedAt = canonicalNow(this.options.now);
     const runId = this.options.createRunId(request);
     const handler = this.options.handlers[request.kind];
+    const callerSignal = execution?.signal;
     const controller = new AbortController();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     let callerCancelled = callerSignal?.aborted ?? false;
@@ -105,21 +146,29 @@ export class WorkerRunner {
       });
     };
 
+    if (!isValidFenceToken(execution?.fenceToken)) return finish("failed");
     if (callerCancelled) return finish("cancelled");
     if (handler === undefined) return finish("failed");
 
-    const execution = Promise.resolve()
-      .then(() => handler({ runId, signal: controller.signal }))
-      .then<ExecutionOutcome, ExecutionOutcome>(
-        (result) => ({ kind: "completed", result }),
-        (error: unknown) => {
-          if (timedOut) return { kind: "timed-out" };
-          if (callerCancelled || error instanceof WorkerCancelledError) return { kind: "cancelled" };
-          return { kind: "failed" };
-        },
+    const handlerExecution: Promise<HandlerSettlement> = Promise.resolve()
+      .then(() => {
+        if (controller.signal.aborted) throw new WorkerCancelledError();
+        return handler({
+          fenceToken: execution.fenceToken,
+          jobId: request.jobId,
+          kind: request.kind,
+          runId,
+          signal: controller.signal,
+          sourceId: request.sourceId,
+        });
+      })
+      .then<HandlerSettlement, HandlerSettlement>(
+        (result) => ({ kind: "fulfilled", result }),
+        (error: unknown) => ({ error, kind: "rejected" }),
       );
 
-    const timeout = new Promise<ExecutionOutcome>((resolve) => {
+    const settled = handlerExecution.then<InitialOutcome>((settlement) => ({ kind: "settled", settlement }));
+    const timeout = new Promise<InitialOutcome>((resolve) => {
       timeoutId = setTimeout(() => {
         timedOut = true;
         controller.abort();
@@ -127,7 +176,7 @@ export class WorkerRunner {
       }, request.timeoutMs);
     });
 
-    const cancellation = new Promise<ExecutionOutcome>((resolve) => {
+    const cancellation = new Promise<InitialOutcome>((resolve) => {
       if (callerSignal === undefined) return;
       onCallerAbort = () => {
         callerCancelled = true;
@@ -135,26 +184,55 @@ export class WorkerRunner {
         resolve({ kind: "cancelled" });
       };
       callerSignal.addEventListener("abort", onCallerAbort, { once: true });
+      if (callerSignal.aborted) onCallerAbort();
     });
 
     try {
-      const outcome = await Promise.race([execution, timeout, cancellation]);
-      switch (outcome.kind) {
-        case "completed":
-          return finish(outcome.result.status ?? "succeeded", outcome.result.counters);
-        case "cancelled":
-          return finish("cancelled");
-        case "timed-out":
-          return finish("timed-out");
-        case "failed":
-          return finish("failed");
+      const outcome = await Promise.race([settled, timeout, cancellation]);
+      let settlement: HandlerSettlement;
+      let forcedStatus: "cancelled" | "timed-out" | undefined;
+
+      if (outcome.kind === "settled") {
+        settlement = outcome.settlement;
+      } else {
+        forcedStatus = outcome.kind;
+        settlement = await this.joinAfterAbort(handlerExecution);
       }
-      return finish("failed");
+
+      const counters = settlement.kind === "fulfilled"
+        ? settlement.result.counters
+        : settlement.error instanceof WorkerCancelledError
+          ? settlement.error.counters
+          : undefined;
+      if (forcedStatus !== undefined) return finish(forcedStatus, counters);
+      if (settlement.kind === "fulfilled") {
+        return finish(settlement.result.status ?? "succeeded", settlement.result.counters);
+      }
+      if (settlement.error instanceof WorkerCancelledError) {
+        return finish("cancelled", settlement.error.counters);
+      }
+      if (timedOut) return finish("timed-out", counters);
+      if (callerCancelled) return finish("cancelled", counters);
+      return finish("failed", counters);
     } finally {
       clearTimeout(timeoutId);
       if (callerSignal !== undefined && onCallerAbort !== undefined) {
         callerSignal.removeEventListener("abort", onCallerAbort);
       }
     }
+  }
+
+  private async joinAfterAbort(execution: Promise<HandlerSettlement>): Promise<HandlerSettlement> {
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    const graceExpired = Symbol("worker-handler-grace-expired");
+    const outcome = await Promise.race([
+      execution,
+      new Promise<typeof graceExpired>((resolve) => {
+        graceTimer = setTimeout(() => resolve(graceExpired), this.handlerShutdownGraceMs);
+      }),
+    ]);
+    clearTimeout(graceTimer);
+    if (outcome === graceExpired) throw new WorkerUnresponsiveError();
+    return outcome;
   }
 }

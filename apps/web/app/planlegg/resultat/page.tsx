@@ -1,120 +1,37 @@
 "use client";
 
 import {
-  matchProducts,
-  type MatchRule,
-  type Need,
-  type PlanResult,
-  type Product,
+  exactProductPlanApiResponseSchemaFor,
+  type ExactProductPlanApiRequest,
+  type ExactProductPlanApiResponse,
 } from "@handleplan/domain";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { z } from "zod";
 
-import { balancedPlanId, compareConvenience, projectPlanFrontier, PlanSelector } from "../../../components/planlegg/plan-selector";
+import {
+  planIdForPreference,
+  PlanSelector,
+} from "../../../components/planlegg/plan-selector";
 import { PlanSummary } from "../../../components/planlegg/plan-summary";
 import { PriceProvenance } from "../../../components/planlegg/price-provenance";
+import { StartTripButton } from "../../../components/planlegg/start-trip-button";
 import { StoreAssignment } from "../../../components/planlegg/store-assignment";
-import { loadBasket, saveBasket, SELECTED_PLAN_ID_MAX, type BrowserBasket } from "../../../lib/browser-basket";
+import {
+  loadBasket,
+  saveBasket,
+  strictPlanRequestReadiness,
+  type BrowserBasket,
+} from "../../../lib/browser-basket";
 
 const MAX_RESPONSE_BYTES = 128 * 1024;
-const MAX_PLANS = 24;
-const publicText = z.string().trim().min(1).max(300);
-const planId = z.string().trim().min(1).max(SELECTED_PLAN_ID_MAX);
-const ean = z.string().regex(/^(?:\d{8}|\d{13})$/);
-const chain = z.enum(["bunnpris", "rema-1000", "extra"]);
-const moneyOre = z.number().int().nonnegative().safe().max(100_000_000);
-const assignment = z.object({
-  needId: publicText,
-  ean,
-  chain,
-  quantity: z.number().int().positive().safe().max(10_000),
-  costOre: moneyOre,
-  observedAt: z.iso.datetime({ offset: false, precision: 3 }),
-  source: z.literal("kassalapp"),
-}).strict();
-const plan = z.object({
-  id: planId,
-  assignments: z.array(assignment).min(1).max(50),
-  totalOre: moneyOre,
-  chains: z.array(chain).min(1).max(3),
-  substitutions: z.array(publicText).max(50),
-  coverage: z.literal(1),
-  freshness: z.record(publicText, z.literal("eligible")),
-}).strict();
-const responseSchema = z.object({
-  caveats: z.array(publicText).max(10),
-  generatedAt: z.iso.datetime({ offset: false, precision: 3 }),
-  priceDataSource: z.enum(["upstream", "cache"]),
-  plans: z.array(plan).max(MAX_PLANS),
-}).strict();
-
-type ParsedResultResponse = z.infer<typeof responseSchema>;
-interface ResultResponse extends Omit<ParsedResultResponse, "plans"> {
-  plans: PlanResult[];
-}
 type ResultState =
   | { status: "loading" }
-  | { status: "ready"; response: ResultResponse }
+  | { status: "ready"; response: ExactProductPlanApiResponse }
   | { status: "empty" }
   | { status: "unavailable" }
+  | { status: "reapproval" }
   | { status: "invalid" };
 
 const subscribeToClient = () => () => {};
-
-function sameMembers(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && new Set(left).size === left.length && left.every((value) => right.includes(value));
-}
-
-function assignmentIdentity(candidate: ParsedResultResponse["plans"][number]): string {
-  return [...candidate.assignments]
-    .sort((left, right) => left.needId.localeCompare(right.needId))
-    .map((row) => `${row.needId}\0${row.ean}\0${row.chain}\0${row.quantity}\0${row.costOre}`)
-    .join("\u0001");
-}
-
-function dominates(
-  left: ParsedResultResponse["plans"][number],
-  right: ParsedResultResponse["plans"][number],
-): boolean {
-  const noWorse = left.totalOre <= right.totalOre && left.chains.length <= right.chains.length && left.substitutions.length <= right.substitutions.length;
-  return noWorse && (left.totalOre < right.totalOre || left.chains.length < right.chains.length || left.substitutions.length < right.substitutions.length);
-}
-
-function isCompleteSafeResponse(response: ParsedResultResponse, basket: BrowserBasket): boolean {
-  if (new Set(response.plans.map(({ id }) => id)).size !== response.plans.length) return false;
-  if (new Set(response.plans.map(assignmentIdentity)).size !== response.plans.length) return false;
-  if (response.plans.some((candidate, index) => response.plans.some((other, otherIndex) => index !== otherIndex && dominates(other, candidate)))) return false;
-  const requiredNeeds = basket.needs.filter(({ required }) => required);
-  const requiredIds = requiredNeeds.map(({ id }) => id);
-  const productsByEan = new Map(basket.products.map((product) => [product.ean, product]));
-  const rulesById = new Map(basket.matchingRules.map((rule) => [rule.id, rule]));
-  const needsById = new Map(requiredNeeds.map((need) => [need.id, need]));
-  const generatedAt = new Date(response.generatedAt).getTime();
-  if (!Number.isFinite(generatedAt)) return false;
-
-  return response.plans.every((candidate) => {
-    if (!sameMembers(candidate.assignments.map(({ needId }) => needId), requiredIds)) return false;
-    if (!sameMembers(candidate.chains, candidate.assignments.map(({ chain: assignmentChain }) => assignmentChain).filter((value, index, all) => all.indexOf(value) === index))) return false;
-    if (!sameMembers(Object.keys(candidate.freshness), requiredIds)) return false;
-    if (candidate.assignments.reduce((sum, row) => sum + row.costOre, 0) !== candidate.totalOre) return false;
-    const expectedSubstitutions = candidate.assignments.flatMap((row) => {
-      const need = needsById.get(row.needId);
-      const rule = need ? rulesById.get(need.matchRuleId) : undefined;
-      return rule?.mode === "exact" ? [] : [row.needId];
-    });
-    if (!sameMembers(candidate.substitutions, expectedSubstitutions)) return false;
-
-    return candidate.assignments.every((row) => {
-      const need = needsById.get(row.needId);
-      const product = productsByEan.get(row.ean);
-      const rule = need ? rulesById.get(need.matchRuleId) : undefined;
-      const observedAt = new Date(row.observedAt).getTime();
-      if (!need || !product || !rule || row.quantity !== need.quantity || row.source !== "kassalapp") return false;
-      if (!Number.isFinite(observedAt) || observedAt > generatedAt || generatedAt - observedAt > 72 * 60 * 60 * 1000) return false;
-      return matchProducts(need as Need, rule as MatchRule, [product as Product]).length === 1;
-    });
-  });
-}
 
 async function cancelResponseBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
   if (body === null) return;
@@ -125,7 +42,10 @@ async function cancelResponseBody(body: ReadableStream<Uint8Array> | null): Prom
   }
 }
 
-async function readSafeResponse(response: Response, basket: BrowserBasket): Promise<ResultResponse | undefined> {
+async function readSafeResponse(
+  response: Response,
+  request: ExactProductPlanApiRequest,
+): Promise<ExactProductPlanApiResponse | undefined> {
   const contentType = response.headers.get("content-type") ?? "";
   const token = "[!#$%&'*+.^_`|~0-9A-Za-z-]+";
   const quotedString = '"(?:[^"\\\\\\r\\n]|\\\\[\\t\\x20-\\x7e])*"';
@@ -173,32 +93,29 @@ async function readSafeResponse(response: Response, basket: BrowserBasket): Prom
   } catch {
     return undefined;
   }
-  const parsed = responseSchema.safeParse(value);
-  if (!parsed.success || !isCompleteSafeResponse(parsed.data, basket)) return undefined;
-  return parsed.data as unknown as ResultResponse;
-}
-
-function requestForBasket(basket: BrowserBasket): string | undefined {
-  const request = JSON.stringify({
-    needs: basket.needs,
-    matchingRules: basket.matchingRules,
-    products: basket.products,
-    maxStores: 3,
-  });
-  return new TextEncoder().encode(request).byteLength <= 64 * 1024 ? request : undefined;
+  const parsed = exactProductPlanApiResponseSchemaFor(request).safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function ResultWorkspaceClient() {
   const [basket] = useState<BrowserBasket>(() => loadBasket());
   const [state, setState] = useState<ResultState>({ status: "loading" });
   const [retry, setRetry] = useState(0);
-  const [selectedPlanId, setSelectedPlanId] = useState<string | undefined>(basket.selectedPlanId);
+  const [selectedPlanId, setSelectedPlanId] = useState<string | undefined>();
   const requestVersion = useRef(0);
-  const requiredItems = basket.needs.filter(({ required }) => required).length;
-  const requestBody = useMemo(() => requestForBasket(basket), [basket]);
+  const readiness = useMemo(() => strictPlanRequestReadiness(basket), [basket]);
+  const request = readiness.state === "ready" ? readiness.request : undefined;
+  const requiredItems = request?.needs.length ?? 0;
+  const requestBody = useMemo(() => {
+    if (request === undefined) return undefined;
+    const serialized = JSON.stringify(request);
+    return new TextEncoder().encode(serialized).byteLength <= 64 * 1024
+      ? serialized
+      : undefined;
+  }, [request]);
 
   useEffect(() => {
-    if (requiredItems === 0 || requestBody === undefined) {
+    if (request === undefined || requestBody === undefined) {
       return;
     }
     const version = ++requestVersion.current;
@@ -214,11 +131,15 @@ function ResultWorkspaceClient() {
         setState({ status: "unavailable" });
         return;
       }
+      if (response.status === 422) {
+        setState({ status: "reapproval" });
+        return;
+      }
       if (!response.ok) {
         setState({ status: "invalid" });
         return;
       }
-      const safe = await readSafeResponse(response, basket);
+      const safe = await readSafeResponse(response, request);
       if (controller.signal.aborted || version !== requestVersion.current) return;
       if (!safe) {
         setState({ status: "invalid" });
@@ -228,17 +149,15 @@ function ResultWorkspaceClient() {
         setState({ status: "empty" });
         return;
       }
-      const representatives = projectPlanFrontier(safe.plans);
-      const returnedIds = new Set(representatives.map(({ id }) => id));
-      const nextSelection = selectedPlanId && returnedIds.has(selectedPlanId)
-        ? selectedPlanId
-        : balancedPlanId(representatives);
+      const nextSelection = planIdForPreference(
+        safe.plans,
+        basket.convenienceWeightBasisPoints,
+      );
       if (!nextSelection) {
         setState({ status: "invalid" });
         return;
       }
       setSelectedPlanId(nextSelection);
-      saveBasket({ ...basket, selectedPlanId: nextSelection });
       setState({ status: "ready", response: safe });
     }).catch((error: unknown) => {
       if (controller.signal.aborted || version !== requestVersion.current) return;
@@ -249,10 +168,18 @@ function ResultWorkspaceClient() {
     return () => controller.abort();
   // The basket is intentionally snapshotted once for this calculation page.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestBody, requiredItems, retry]);
+  }, [request, requestBody, retry]);
 
-  if (requiredItems === 0) {
+  if (readiness.state === "empty") {
     return <ResultMessage title="Handlekurven er tom" copy="Legg til varer før du beregner en handleplan." />;
+  }
+  if (readiness.state === "requires-exact-approval") {
+    return (
+      <ResultMessage
+        title="Velg eksakte varer på nytt"
+        copy="Fleksible eller begrensede varevalg kan ikke beregnes trygt ennå. Gå tilbake og godkjenn et eksakt produkt for hver vare. Ingen eldre prisberegning ble brukt."
+      />
+    );
   }
   if (requestBody === undefined) {
     return <ResultMessage title="Kunne ikke vise handleplanen" copy="Handlekurven er for stor eller ugyldig. Gå tilbake og kontroller varene." />;
@@ -277,17 +204,19 @@ function ResultWorkspaceClient() {
       </ResultMessage>
     );
   }
+  if (state.status === "reapproval") {
+    return <ResultMessage title="Varen må godkjennes på nytt" copy="Minst én vare finnes ikke lenger som det eksakte produktet du valgte. Gå tilbake og velg varen på nytt. Ingen eldre prisberegning ble brukt." />;
+  }
   if (state.status === "invalid") {
     return <ResultMessage title="Kunne ikke vise handleplanen" copy="Svaret kunne ikke bekreftes som en komplett og trygg plan." />;
   }
 
-  const ordered = projectPlanFrontier(state.response.plans);
+  const ordered = state.response.plans;
   const selected = ordered.find(({ id }) => id === selectedPlanId) ?? ordered[0]!;
-  const convenience = [...ordered].sort(compareConvenience)[0]!;
+  const convenience = ordered[0]!;
 
   function selectPlan(planId: string): void {
     setSelectedPlanId(planId);
-    saveBasket({ ...basket, selectedPlanId: planId });
   }
 
   return (
@@ -305,22 +234,37 @@ function ResultWorkspaceClient() {
               chain={selectedChain}
               order={index + 1}
               assignments={selected.assignments.filter(({ chain: assignmentChain }) => assignmentChain === selectedChain)}
-              needs={basket.needs}
-              products={basket.products}
+              products={state.response.products}
             />
           ))}
         </div>
         <aside className="result-rail">
           <PlanSummary
-            plan={selected as PlanResult}
+            plan={selected}
             convenienceTotalOre={convenience.totalOre}
             requiredItems={requiredItems}
           />
-          <PlanSelector plans={ordered as PlanResult[]} selectedPlanId={selected.id} onSelect={selectPlan} />
+          <StartTripButton
+            key={`${state.response.generatedAt}:${selected.id}`}
+            caveats={state.response.caveats}
+            evidence={state.response.evidence}
+            generatedAt={state.response.generatedAt}
+            plan={selected}
+            products={state.response.products}
+          />
+          <PlanSelector
+            plans={ordered}
+            selectedPlanId={selected.id}
+            onSelect={selectPlan}
+            onPreferenceChange={(convenienceWeightBasisPoints) => {
+              saveBasket({ ...basket, convenienceWeightBasisPoints });
+            }}
+          />
           <PriceProvenance
             generatedAt={state.response.generatedAt}
             caveats={state.response.caveats}
             assignments={selected.assignments}
+            evidence={state.response.evidence}
             priceDataSource={state.response.priceDataSource}
           />
         </aside>
@@ -364,7 +308,13 @@ export default function ResultPage() {
       </header>
       <ResultWorkspace />
       <footer className="site-footer">
-        <div><p>© 2026 Handleplan • Uavhengig prissammenligning</p></div>
+        <div>
+          <p>© 2026 Handleplan • Uavhengig prissammenligning</p>
+          <nav aria-label="Om Handleplan">
+            <a href="/status">Datadekning</a>
+            <a href="/om">Offentlig gode og rettelser</a>
+          </nav>
+        </div>
       </footer>
     </div>
   );

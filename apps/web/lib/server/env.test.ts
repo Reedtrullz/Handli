@@ -5,124 +5,61 @@ vi.mock("server-only", () => ({}));
 import { readServerEnv } from "./env";
 
 describe("readServerEnv", () => {
-  it("rejects a missing Kassalapp credential", () => {
-    expect(() => readServerEnv({})).toThrow(/KASSAL_API_KEY/);
-  });
-
-  it("rejects missing database and upstream configuration", () => {
-    expect(() => readServerEnv({ KASSAL_API_KEY: "test-key" })).toThrow(/DATABASE_URL/);
-    expect(() =>
-      readServerEnv({
-        KASSAL_API_KEY: "test-key",
-        DATABASE_URL: "postgresql://localhost/handleplan",
-      }),
-    ).toThrow(/KASSAL_BASE_URL/);
-  });
-
-  it("returns only validated server configuration", () => {
-    expect(
-      readServerEnv({
-        KASSAL_API_KEY: "test-key",
-        DATABASE_URL: "postgresql://localhost/handleplan",
-        KASSAL_BASE_URL: "https://kassal.app/api/v1",
-        NEXT_PUBLIC_UNRELATED: "visible",
-      }),
-    ).toEqual({
+  it("requires only the read-only PostgreSQL URL in real mode", () => {
+    expect(() => readServerEnv({})).toThrow(/DATABASE_URL/);
+    expect(readServerEnv({
+      DATABASE_URL: "postgresql://handleplan_web:password@localhost/handleplan",
+    })).toEqual({
       mode: "real",
-      KASSAL_API_KEY: "test-key",
-      DATABASE_URL: "postgresql://localhost/handleplan",
-      KASSAL_BASE_URL: "https://kassal.app/api/v1",
-      PRICE_EVIDENCE_READ_MODEL: "legacy",
+      DATABASE_URL: "postgresql://handleplan_web:password@localhost/handleplan",
     });
   });
 
-  it.each(["legacy", "shadow", "evidence"] as const)(
-    "accepts the %s price evidence read model",
-    (PRICE_EVIDENCE_READ_MODEL) => {
-      expect(
-        readServerEnv({
-          KASSAL_API_KEY: "test-key",
-          DATABASE_URL: "postgresql://localhost/handleplan",
-          KASSAL_BASE_URL: "https://kassal.app/api/v1",
-          PRICE_EVIDENCE_READ_MODEL,
-        }),
-      ).toEqual(expect.objectContaining({ PRICE_EVIDENCE_READ_MODEL }));
-    },
-  );
-
-  it("rejects an unknown price evidence read model", () => {
-    expect(() =>
-      readServerEnv({
-        KASSAL_API_KEY: "test-key",
-        DATABASE_URL: "postgresql://localhost/handleplan",
-        KASSAL_BASE_URL: "https://kassal.app/api/v1",
-        PRICE_EVIDENCE_READ_MODEL: "prefer-newest",
-      }),
-    ).toThrow(/PRICE_EVIDENCE_READ_MODEL/);
+  it("does not read worker-only Kassalapp credentials into public web configuration", () => {
+    expect(readServerEnv({
+      DATABASE_URL: "postgresql://handleplan_web:password@localhost/handleplan",
+      KASSAL_API_KEY: "worker-only-secret",
+      KASSAL_BASE_URL: "https://provider.invalid/api",
+      PRICE_EVIDENCE_READ_MODEL: "legacy",
+    })).toEqual({
+      mode: "real",
+      DATABASE_URL: "postgresql://handleplan_web:password@localhost/handleplan",
+    });
   });
 
-  it("allows an explicit fake mode without production credentials", () => {
-    expect(
-      readServerEnv({
-        KASSAL_MODE: "fake",
-        KASSAL_API_KEY: "must-not-be-read",
-        NEXT_PUBLIC_KASSAL_MODE: "fake",
-      }),
-    ).toEqual({ mode: "fake" });
+  it("allows an explicit local fake mode without production credentials", () => {
+    expect(readServerEnv({
+      HANDLEPLAN_MODE: "fake",
+      KASSAL_API_KEY: "must-not-be-read",
+    })).toEqual({ mode: "fake" });
   });
 
   it("rejects fake mode in production even when an override-like value is supplied", () => {
     expect(() => readServerEnv({
-      NODE_ENV: "production",
-      KASSAL_MODE: "fake",
       ALLOW_FAKE_IN_PRODUCTION: "true",
+      HANDLEPLAN_MODE: "fake",
+      NODE_ENV: "production",
     })).toThrow(/production/i);
   });
 
-  it("rejects unsupported modes and keeps real mode strict", () => {
-    expect(() => readServerEnv({ KASSAL_MODE: "preview" })).toThrow(/KASSAL_MODE/);
-    expect(() => readServerEnv({ KASSAL_MODE: "real" })).toThrow(/KASSAL_API_KEY/);
+  it("rejects unsupported public-web modes", () => {
+    expect(() => readServerEnv({ HANDLEPLAN_MODE: "preview" })).toThrow(/HANDLEPLAN_MODE/);
   });
 
-  it.each(["https://db.example/handleplan", "mysql://db.example/handleplan", "ftp://db.example/handleplan"])(
-    "rejects the non-PostgreSQL database URL %s",
-    (DATABASE_URL) => {
-      expect(() =>
-        readServerEnv({
-          KASSAL_API_KEY: "test-key",
-          DATABASE_URL,
-          KASSAL_BASE_URL: "https://kassal.app/api/v1",
-        }),
-      ).toThrow(/DATABASE_URL/);
-    },
-  );
-
   it.each([
-    "http://kassal.app/api/v1",
-    "ftp://kassal.app/api/v1",
-    "javascript:alert(1)",
-  ])("rejects the non-HTTPS Kassalapp URL %s", (KASSAL_BASE_URL) => {
-    expect(() =>
-      readServerEnv({
-        KASSAL_API_KEY: "test-key",
-        DATABASE_URL: "postgresql://localhost/handleplan",
-        KASSAL_BASE_URL,
-      }),
-    ).toThrow(/KASSAL_BASE_URL/);
+    "https://db.example/handleplan",
+    "mysql://db.example/handleplan",
+    "ftp://db.example/handleplan",
+  ])("rejects the non-PostgreSQL database URL %s", (DATABASE_URL) => {
+    expect(() => readServerEnv({ DATABASE_URL })).toThrow(/DATABASE_URL/);
   });
 
   it("accepts both PostgreSQL URL spellings", () => {
     for (const DATABASE_URL of [
-      "postgres://localhost/handleplan",
-      "postgresql://localhost/handleplan",
+      "postgres://handleplan_web:password@localhost/handleplan",
+      "postgresql://handleplan_web:password@localhost/handleplan",
     ]) {
-      const parsed = readServerEnv({
-        KASSAL_API_KEY: "test-key",
-        DATABASE_URL,
-        KASSAL_BASE_URL: "https://kassal.app/api/v1",
-      });
-      expect(parsed.mode).toBe("real");
-      if (parsed.mode === "real") expect(parsed.DATABASE_URL).toBe(DATABASE_URL);
+      expect(readServerEnv({ DATABASE_URL })).toEqual({ mode: "real", DATABASE_URL });
     }
   });
 });

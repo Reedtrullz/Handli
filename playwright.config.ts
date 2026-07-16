@@ -21,7 +21,7 @@ export default defineConfig({
   webServer: {
     command: "corepack pnpm --filter web exec next dev --hostname 127.0.0.1 --port 3109",
     env: {
-      KASSAL_MODE: "fake",
+      HANDLEPLAN_MODE: "fake",
       KASSAL_API_KEY: leakSentinel,
     },
     url: "http://127.0.0.1:3109/api/health",

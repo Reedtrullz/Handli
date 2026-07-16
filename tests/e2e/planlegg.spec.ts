@@ -184,7 +184,7 @@ async function addExactProduct(page: Page, query: string, productName: RegExp): 
 const expectedCoverage = [
   "Bakehuset · Dekker «Norsk grovbrød 750 g»",
   "Evergood · Dekker «Evergood Kaffe 500 g»",
-  "TINE · Dekker «lettmelk»",
+  "TINE · Dekker «TINE Lettmelk 1 % 1 l»",
 ].sort();
 
 const expectedPlans = [
@@ -268,20 +268,16 @@ test("anonymous shopper approves matching and chooses every complete frontier pl
   await expect(page.getByText(/logg inn|opprett konto/i)).toHaveCount(0);
   await expectWcag22AandAA(page);
 
-  await page.getByLabel("Hva skal du handle?").fill("lettmelk");
-  await page.getByRole("button", { name: "Legg til" }).click();
-  await expect(page.getByRole("group", { name: /Godkjenn treff for lettmelk/ })).toBeVisible();
-  await page.getByRole("button", { name: "Samme type, valgfritt merke" }).click();
-  await expect(page.getByText("Samme type, valgfritt merke").last()).toBeVisible();
-
+  await addExactProduct(page, "lettmelk", /TINE Lettmelk/);
   await addExactProduct(page, "kaffe", /Evergood Kaffe/);
   await addExactProduct(page, "brød", /Norsk grovbrød/);
 
   const storedBeforeResult = await page.evaluate(() => JSON.stringify(localStorage));
   expect(storedBeforeResult).not.toContain("origin");
-  expect(JSON.parse(JSON.parse(storedBeforeResult)["handleplan:basket:v1"])).toMatchObject({
-    needs: [{ query: "lettmelk" }, { query: "Evergood Kaffe 500 g" }, { query: "Norsk grovbrød 750 g" }],
-    products: expect.arrayContaining([expect.objectContaining({ ean: "7038010000013", productFamily: "lettmelk" })]),
+  expect(JSON.parse(JSON.parse(storedBeforeResult)["handleplan:basket:v2"])).toMatchObject({
+    version: 2,
+    needs: [{ query: "TINE Lettmelk 1 % 1 l" }, { query: "Evergood Kaffe 500 g" }, { query: "Norsk grovbrød 750 g" }],
+    products: expect.arrayContaining([expect.objectContaining({ ean: "7038010000010" })]),
   });
   // Drain response bodies before a client navigation can cancel an in-flight
   // development-server response on slower CI runners.
@@ -321,13 +317,13 @@ test("anonymous shopper approves matching and chooses every complete frontier pl
   await balanced.focus();
   await page.keyboard.press("ArrowDown");
   await expect(page.getByRole("radio", { name: /^Mest spart/ })).toBeChecked();
-  const persistedPlanId = await page.getByRole("radio", { checked: true }).getAttribute("value");
-  expect(persistedPlanId).toBeTruthy();
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("handleplan:basket:v1"))).toContain(`"selectedPlanId":"${persistedPlanId}"`);
+  const selectedPlanId = await page.getByRole("radio", { checked: true }).getAttribute("value");
+  expect(selectedPlanId).toBeTruthy();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("handleplan:basket:v2"))).toContain('"convenienceWeightBasisPoints":0');
 
   await evidence.settle();
   await page.reload();
-  await expect(page.locator(`input[type="radio"][value="${persistedPlanId}"]`)).toBeChecked();
+  await expect(page.locator(`input[type="radio"][value="${selectedPlanId}"]`)).toBeChecked();
   await expectWcag22AandAA(page);
 
   const storage = await page.evaluate(() => Object.fromEntries(Object.entries(localStorage)));
@@ -354,12 +350,12 @@ test("a shopper discovers a fresh price and carries the exact product into Planl
 
   await expect(page).toHaveTitle("Oppdag | Handleplan");
   await expect(page.getByRole("heading", { name: "Oppdag" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Prisoversikt akkurat nå" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Varekatalog og prisgrunnlag" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "TINE Lettmelk 1 % 1 l" })).toBeVisible();
-  await expect(page.getByText("lavest av viste priser hos Bunnpris")).toBeVisible();
-  await expect(page.getByText(/Kassalapp via kontrollert prisgrunnlag/)).toBeVisible();
+  await expect(page.getByText("Laveste viste ordinærpris • Bunnpris")).toBeVisible();
+  await expect(page.getByText(/Deterministic fake price fixture/).first()).toBeVisible();
   await page.getByRole("button", { name: "Extra" }).click();
-  await expect(page.getByRole("heading", { name: "Aktuelle priser hos Extra" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Prisgrunnlag hos Extra" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "TINE Lettmelk 1 % 1 l" })).toBeVisible();
   await expectWcag22AandAA(page);
 
@@ -371,10 +367,10 @@ test("a shopper discovers a fresh price and carries the exact product into Planl
   await page.getByRole("link", { name: /Gå til Planlegg/ }).click();
   await expect(page).toHaveURL(`${BASE_ORIGIN}/planlegg`);
   await expect(page.getByRole("listitem", { name: /TINE Lettmelk 1 % 1 l/ })).toBeVisible();
-  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem("handleplan:basket:v1") ?? "{}"));
+  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem("handleplan:basket:v2") ?? "{}"));
   expect(persisted).toMatchObject({
     needs: [{ query: "TINE Lettmelk 1 % 1 l" }],
-    matchingRules: [{ mode: "exact", exactEan: "7038010000013" }],
+    matchingRules: [{ mode: "exact", exactEan: "7038010000010" }],
   });
 
   await expectCleanPublicEvidence(evidence);

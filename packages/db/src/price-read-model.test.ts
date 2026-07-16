@@ -11,7 +11,7 @@ function row(amountOre: number): PriceObservation {
   return {
     amountOre: amountOre as MoneyOre,
     chain: "extra",
-    ean: "7038010000134",
+    ean: "7038010000133",
     observedAt: "2026-07-15T08:30:00.000Z",
     source: "kassalapp",
   };

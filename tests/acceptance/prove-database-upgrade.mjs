@@ -30,6 +30,9 @@ const expectedMigrations = [
   "006_source_health.sql",
   "007_append_only_guards.sql",
   "008_provider_request_budget.sql",
+  "009_ingestion_outcomes.sql",
+  "010_worker_job_results.sql",
+  "011_catalog_observations.sql",
 ];
 
 assert.equal(process.env.CI, "true", "database proof requires CI=true");
@@ -38,6 +41,16 @@ assert.match(
   process.env.APP_DATABASE_PASSWORD ?? "",
   /^[A-Za-z0-9_-]{32,128}$/,
   "APP_DATABASE_PASSWORD must be a 32-128 character URL-safe secret",
+);
+assert.match(
+  process.env.WEB_DATABASE_PASSWORD ?? "",
+  /^[A-Za-z0-9_-]{32,128}$/,
+  "WEB_DATABASE_PASSWORD must be a 32-128 character URL-safe secret",
+);
+assert.notEqual(
+  process.env.APP_DATABASE_PASSWORD,
+  process.env.WEB_DATABASE_PASSWORD,
+  "worker and web database credentials must differ",
 );
 assert.ok(process.env.MIGRATIONS_DIR, "MIGRATIONS_DIR is required");
 assert.ok(isAbsolute(process.env.MIGRATIONS_DIR), "MIGRATIONS_DIR must be absolute");
@@ -57,6 +70,16 @@ assert.ok(adminUrl.pathname.length > 1, "DATABASE_ADMIN_URL must name an admin d
 assert.ok(
   !proofDatabases.includes(adminUrl.pathname.slice(1)),
   "DATABASE_ADMIN_URL must not target a proof database",
+);
+assert.notEqual(
+  decodeURIComponent(adminUrl.password),
+  process.env.APP_DATABASE_PASSWORD,
+  "migration and worker database credentials must differ",
+);
+assert.notEqual(
+  decodeURIComponent(adminUrl.password),
+  process.env.WEB_DATABASE_PASSWORD,
+  "migration and web database credentials must differ",
 );
 
 const postgresClientHost = process.env.POSTGRES_CLIENT_HOST;
@@ -216,7 +239,7 @@ async function verifyLegacyUpgrade(sql) {
       on price_coverage_checks.ingestion_run_id = price_observations.ingestion_run_id
      and price_coverage_checks.product_id = price_observations.product_id
      and price_coverage_checks.chain = price_observations.chain
-    where price_cache.ean = '7044710000000'
+    where price_cache.ean = '7044710000007'
       and price_cache.chain = 'extra'
   `;
 
@@ -300,6 +323,82 @@ async function verifyRestoreEvidence(sql) {
     "Deterministic audit fixture for backup and restore proof",
   );
   assert.equal(reviews[0].acted_at.toISOString(), "2026-07-16T08:09:00.000Z");
+
+  const workerResults = await sql`
+    select job_id, source_id, job_kind, scheduled_at, status, counts, result_hash
+    from worker_job_results
+    where job_id = 'ci-proof:kassalapp:catalog-refresh:2026-07-16T08:10:00.000Z'
+  `;
+  assert.equal(workerResults.length, 1, "worker schedule result must be present");
+  assert.deepEqual(
+    {
+      ...workerResults[0],
+      scheduled_at: workerResults[0].scheduled_at.toISOString(),
+    },
+    {
+      job_id: "ci-proof:kassalapp:catalog-refresh:2026-07-16T08:10:00.000Z",
+      source_id: "kassalapp",
+      job_kind: "catalog-refresh",
+      scheduled_at: "2026-07-16T08:10:00.000Z",
+      status: "failed",
+      counts: {
+        accepted: 0,
+        failed: 1,
+        fetched: 0,
+        persisted: 0,
+        quarantined: 0,
+        unknown: 0,
+      },
+      result_hash: "c".repeat(64),
+    },
+  );
+
+  const catalogObservations = await sql`
+    select
+      observation.source_record_id,
+      observation.gtin,
+      observation.display_name,
+      observation.brand,
+      observation.package_amount,
+      observation.package_unit,
+      observation.units_per_pack,
+      observation.retrieved_at,
+      observation.source_updated_at,
+      observation.raw_record_hash,
+      run.source_id,
+      run.run_type,
+      run.status,
+      run.completed_at
+    from catalog_observations observation
+    inner join ingestion_runs run on run.id = observation.ingestion_run_id
+    where observation.source_record_id = 'ci-proof-catalog-record-v1-03'
+  `;
+  assert.equal(catalogObservations.length, 1, "catalog observation must be present");
+  assert.deepEqual(
+    {
+      ...catalogObservations[0],
+      retrieved_at: catalogObservations[0].retrieved_at.toISOString(),
+      source_updated_at: catalogObservations[0].source_updated_at.toISOString(),
+      completed_at: catalogObservations[0].completed_at.toISOString(),
+    },
+    {
+      source_record_id: "ci-proof-catalog-record-v1-03",
+      gtin: "7038010000010",
+      display_name: "CI proof catalog observation",
+      brand: "CI observed brand",
+      package_amount: 1000,
+      package_unit: "g",
+      units_per_pack: 1,
+      retrieved_at: "2026-07-16T08:10:30.000Z",
+      source_updated_at: "2026-07-16T08:00:30.000Z",
+      raw_record_hash: "e".repeat(64),
+      source_id: "kassalapp",
+      run_type: "catalog",
+      status: "completed",
+      completed_at: "2026-07-16T08:11:00.000Z",
+    },
+    "restore must preserve the completed-run catalog payload and both clocks",
+  );
 }
 
 async function verifyRuntimeRolePolicy(sql) {
@@ -348,6 +447,16 @@ async function verifyRuntimeRolePolicy(sql) {
       ) as evidence_append_read,
       has_table_privilege(
         'handleplan_app',
+        'catalog_observations',
+        'SELECT, INSERT'
+      ) as catalog_append_read,
+      has_table_privilege(
+        'handleplan_app',
+        'catalog_observations',
+        'UPDATE, DELETE'
+      ) as catalog_rewrite,
+      has_table_privilege(
+        'handleplan_app',
         'worker_leases',
         'SELECT, INSERT, UPDATE, DELETE'
       ) as worker_lease_write,
@@ -356,6 +465,16 @@ async function verifyRuntimeRolePolicy(sql) {
         'source_health_snapshots',
         'SELECT, INSERT'
       ) as source_health_append,
+      has_table_privilege(
+        'handleplan_app',
+        'worker_job_results',
+        'SELECT, INSERT'
+      ) as worker_results_append,
+      has_table_privilege(
+        'handleplan_app',
+        'worker_job_results',
+        'UPDATE, DELETE'
+      ) as worker_results_rewrite,
       has_table_privilege(
         'handleplan_app',
         'provider_request_budget_events',
@@ -381,7 +500,82 @@ async function verifyRuntimeRolePolicy(sql) {
         'reject_append_only_mutation()',
         'EXECUTE'
       ) as guard_execute,
-      pg_has_role('handleplan_app', 'handleplan', 'MEMBER') as owner_member
+      pg_has_role('handleplan_app', 'handleplan', 'MEMBER') as owner_member,
+      has_database_privilege(
+        'handleplan_web',
+        current_database(),
+        'CREATE'
+      ) as web_database_create,
+      has_database_privilege(
+        'handleplan_web',
+        current_database(),
+        'TEMPORARY'
+      ) as web_database_temp,
+      has_schema_privilege('handleplan_web', 'public', 'CREATE') as web_schema_create,
+      has_table_privilege(
+        'handleplan_web',
+        'handleplan_schema_migrations',
+        'SELECT'
+      ) as web_migration_read,
+      has_table_privilege(
+        'handleplan_web',
+        'price_observations',
+        'SELECT'
+      ) as web_evidence_read,
+      has_table_privilege(
+        'handleplan_web',
+        'price_observations',
+        'INSERT, UPDATE, DELETE'
+      ) as web_evidence_write,
+      has_table_privilege(
+        'handleplan_web',
+        'catalog_observations',
+        'SELECT'
+      ) as web_catalog_observation_read,
+      has_table_privilege(
+        'handleplan_web',
+        'catalog_observations',
+        'INSERT, UPDATE, DELETE'
+      ) as web_catalog_observation_write,
+      has_column_privilege(
+        'handleplan_web',
+        'source_permissions',
+        'permissions',
+        'SELECT'
+      ) as web_permission_public_read,
+      has_column_privilege(
+        'handleplan_web',
+        'source_permissions',
+        'private_reference_key',
+        'SELECT'
+      ) as web_permission_private_read,
+      has_table_privilege(
+        'handleplan_web',
+        'publication_captures',
+        'SELECT'
+      ) as web_private_capture_read,
+      has_table_privilege(
+        'handleplan_web',
+        'worker_leases',
+        'SELECT'
+      ) as web_worker_state_read,
+      has_table_privilege(
+        'handleplan_web',
+        'provider_request_budget_events',
+        'SELECT'
+      ) as web_budget_read,
+      has_sequence_privilege(
+        'handleplan_web',
+        'canonical_products_id_seq',
+        'USAGE'
+      ) as web_sequence_usage,
+      has_function_privilege(
+        'handleplan_web',
+        'reject_append_only_mutation()',
+        'EXECUTE'
+      ) as web_guard_execute,
+      pg_has_role('handleplan_web', 'handleplan', 'MEMBER') as web_owner_member,
+      pg_has_role('handleplan_web', 'handleplan_app', 'MEMBER') as web_worker_member
   `;
 
   assert.deepEqual(policy, {
@@ -394,14 +588,35 @@ async function verifyRuntimeRolePolicy(sql) {
     protected_delete: false,
     source_state_update: false,
     evidence_append_read: true,
+    catalog_append_read: true,
+    catalog_rewrite: false,
     worker_lease_write: true,
-    source_health_append: true,
+    source_health_append: false,
+    worker_results_append: true,
+    worker_results_rewrite: false,
     budget_select: true,
     budget_insert: true,
     budget_delete: true,
     budget_update: false,
     guard_execute: false,
     owner_member: false,
+    web_database_create: false,
+    web_database_temp: false,
+    web_schema_create: false,
+    web_migration_read: true,
+    web_evidence_read: true,
+    web_evidence_write: false,
+    web_catalog_observation_read: true,
+    web_catalog_observation_write: false,
+    web_permission_public_read: true,
+    web_permission_private_read: false,
+    web_private_capture_read: false,
+    web_worker_state_read: false,
+    web_budget_read: false,
+    web_sequence_usage: false,
+    web_guard_execute: false,
+    web_owner_member: false,
+    web_worker_member: false,
   });
 }
 
@@ -536,6 +751,7 @@ try {
     restoredPermissionAudits: 1,
     restoredPublicationCaptures: 1,
     restoredReviewActions: 1,
+    restoredCatalogObservations: 1,
     restoredRuntimeRolePolicy: true,
   };
 } catch (error) {

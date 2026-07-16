@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Handleplan">
+  <rect width="512" height="512" rx="112" fill="#123f2b"/>
+  <path d="M146 196h220l-19 212H165z" fill="#f7f1df"/>
+  <path d="M198 204c0-48 25-88 58-88s58 40 58 88" fill="none" stroke="#f4cf69" stroke-width="28" stroke-linecap="round"/>
+  <path d="m205 298 36 36 72-82" fill="none" stroke="#277a4d" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

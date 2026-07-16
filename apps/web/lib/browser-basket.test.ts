@@ -2,18 +2,22 @@ import { describe, expect, it } from "vitest";
 
 import {
   BASKET_STORAGE_KEY,
+  BASKET_STORAGE_MAX_CODE_UNITS,
+  DEFAULT_CONVENIENCE_WEIGHT_BASIS_POINTS,
+  LEGACY_BASKET_STORAGE_KEY,
   BASKET_QUANTITY_MAX,
   BASKET_QUANTITY_MIN,
   addExactProductToBasket,
-  emptyBasketV1,
+  emptyBasketV2,
   loadBasket,
   removeBasketNeed,
   saveBasket,
+  strictPlanRequestReadiness,
 } from "./browser-basket";
 
-function memoryStorage(initial?: string): Storage {
+function memoryStorage(initial?: string, key = BASKET_STORAGE_KEY): Storage {
   const values = new Map<string, string>();
-  if (initial !== undefined) values.set(BASKET_STORAGE_KEY, initial);
+  if (initial !== undefined) values.set(key, initial);
 
   return {
     get length() {
@@ -28,7 +32,7 @@ function memoryStorage(initial?: string): Storage {
 }
 
 const populatedBasket = {
-  version: 1 as const,
+  version: 2 as const,
   needs: [
     {
       id: "need-1",
@@ -43,14 +47,14 @@ const populatedBasket = {
     {
       id: "rule-1",
       mode: "exact" as const,
-      exactEan: "7038010000013",
+      exactEan: "7038010000010",
       userApproved: true as const,
       explanation: "Eksakt produkt",
     },
   ],
   products: [
     {
-      ean: "7038010000013",
+      ean: "7038010000010",
       name: "TINE Lettmelk 1 % 1 l",
       brand: "TINE",
       packageQuantity: 1000,
@@ -58,24 +62,91 @@ const populatedBasket = {
       productFamily: "lettmelk",
     },
   ],
+  convenienceWeightBasisPoints: 5_000,
   travel: { enabled: false, mode: "car" as const },
 };
 
 describe("browser basket persistence", () => {
-  it("returns a fresh empty version 1 basket when storage is empty", () => {
+  it("projects an approved exact basket onto only the strict public planning contract", () => {
+    expect(strictPlanRequestReadiness(populatedBasket)).toEqual({
+      state: "ready",
+      request: {
+        contractVersion: 1,
+        maxStores: 3,
+        needs: [{
+          id: "need-1",
+          match: {
+            kind: "exact-product",
+            product: { kind: "gtin", value: "7038010000010" },
+            userApproved: true,
+          },
+          quantity: 2,
+          quantityUnit: "each",
+          required: true,
+        }],
+      },
+    });
+    const serialized = JSON.stringify(strictPlanRequestReadiness(populatedBasket));
+    expect(serialized).not.toMatch(/query|matchingRule|products|productFamily|explanation|travel|origin|TINE/i);
+  });
+
+  it.each(["flexible", "constrained"] as const)(
+    "requires new exact approval for a %s rule instead of creating a legacy request",
+    (mode) => {
+      const generic = {
+        ...populatedBasket,
+        matchingRules: [mode === "flexible"
+          ? {
+              explanation: "Samme type",
+              id: "rule-1",
+              mode,
+              productFamily: "lettmelk",
+              userApproved: true as const,
+            }
+          : {
+              allowedBrands: ["TINE"],
+              explanation: "Valgt merke",
+              id: "rule-1",
+              mode,
+              productFamily: "lettmelk",
+              userApproved: true as const,
+            }],
+      };
+
+      expect(strictPlanRequestReadiness(generic)).toEqual({ state: "requires-exact-approval" });
+    },
+  );
+
+  it("returns a fresh empty version 2 basket when storage is empty", () => {
     const storage = memoryStorage();
 
-    expect(loadBasket(storage)).toEqual(emptyBasketV1);
-    expect(loadBasket(storage)).not.toBe(emptyBasketV1);
+    expect(loadBasket(storage)).toEqual(emptyBasketV2);
+    expect(loadBasket(storage)).not.toBe(emptyBasketV2);
   });
 
   it.each([
     "not json",
-    JSON.stringify({ version: 2, needs: [], matchingRules: [], products: [], travel: {} }),
+    JSON.stringify({ version: 3, needs: [], matchingRules: [], products: [], travel: {} }),
     JSON.stringify({ ...populatedBasket, origin: "Storgata 1" }),
     JSON.stringify({ ...populatedBasket, needs: [{ ...populatedBasket.needs[0], quantity: 0 }] }),
   ])("recovers from corrupt, incompatible, or unsafe state", (value) => {
-    expect(loadBasket(memoryStorage(value))).toEqual(emptyBasketV1);
+    expect(loadBasket(memoryStorage(value))).toEqual(emptyBasketV2);
+  });
+
+  it("rejects overlong user-facing fields before they can reach rendering", () => {
+    const stored = JSON.stringify({
+      ...populatedBasket,
+      needs: [{ ...populatedBasket.needs[0], query: "x".repeat(501) }],
+    });
+
+    expect(loadBasket(memoryStorage(stored))).toEqual(emptyBasketV2);
+  });
+
+  it("drops an oversized stored payload before parsing it", () => {
+    const storage = memoryStorage("x".repeat(BASKET_STORAGE_MAX_CODE_UNITS + 1));
+
+    expect(loadBasket(storage)).toEqual(emptyBasketV2);
+    expect(storage.getItem(BASKET_STORAGE_KEY)).toBeNull();
   });
 
   it.each([
@@ -91,7 +162,7 @@ describe("browser basket persistence", () => {
 
     expect(loadBasket(memoryStorage(stored))).toEqual(valid
       ? { ...populatedBasket, needs: [{ ...populatedBasket.needs[0], quantity }] }
-      : emptyBasketV1);
+      : emptyBasketV2);
   });
 
   it.each([
@@ -132,7 +203,7 @@ describe("browser basket persistence", () => {
       },
     ],
   ])("resets stored state with %s", (_label, basket) => {
-    expect(loadBasket(memoryStorage(JSON.stringify(basket)))).toEqual(emptyBasketV1);
+    expect(loadBasket(memoryStorage(JSON.stringify(basket)))).toEqual(emptyBasketV2);
   });
 
   it("round-trips only the strict safe basket shape and never an origin", () => {
@@ -144,7 +215,7 @@ describe("browser basket persistence", () => {
     expect(storage.getItem(BASKET_STORAGE_KEY)).not.toContain("origin");
   });
 
-  it("resets a flexible or constrained v1 basket without a stored matching candidate", () => {
+  it("resets a flexible or constrained basket without a stored matching candidate", () => {
     const generic = {
       ...populatedBasket,
       needs: [{ ...populatedBasket.needs[0], query: "havregryn", matchRuleId: "rule-generic" }],
@@ -155,29 +226,33 @@ describe("browser basket persistence", () => {
       matchingRules: [{ id: "rule-generic", mode: "constrained" as const, productFamily: "lettmelk", allowedBrands: ["Q"], userApproved: true as const, explanation: "Bare Q" }],
     };
 
-    expect(loadBasket(memoryStorage(JSON.stringify(generic)))).toEqual(emptyBasketV1);
-    expect(loadBasket(memoryStorage(JSON.stringify(constrained)))).toEqual(emptyBasketV1);
+    expect(loadBasket(memoryStorage(JSON.stringify(generic)))).toEqual(emptyBasketV2);
+    expect(loadBasket(memoryStorage(JSON.stringify(constrained)))).toEqual(emptyBasketV2);
   });
 
-  it("round-trips only the selected plan ID without changing basket relationships", () => {
+  it("round-trips only a normalized preference rather than a brittle plan ID", () => {
     const storage = memoryStorage();
 
-    saveBasket({ ...populatedBasket, selectedPlanId: "plan-balanced" }, storage);
+    saveBasket({ ...populatedBasket, convenienceWeightBasisPoints: 2_500 }, storage);
 
-    expect(loadBasket(storage)).toEqual({ ...populatedBasket, selectedPlanId: "plan-balanced" });
+    expect(loadBasket(storage)).toEqual({
+      ...populatedBasket,
+      convenienceWeightBasisPoints: 2_500,
+    });
+    expect(storage.getItem(BASKET_STORAGE_KEY)).not.toContain("selectedPlanId");
     expect(storage.getItem(BASKET_STORAGE_KEY)).not.toContain("origin");
   });
 
-  it("adds a discovered product as an exact need, deduplicates it, and invalidates the selected plan", () => {
+  it("adds a discovered product as an exact need, deduplicates it, and retains preference", () => {
     const ids = ["need-discovered", "rule-discovered"];
-    const discovered = { ean: "7038010000020", name: "Ny vare", brand: "Test" };
+    const discovered = { ean: "7038010000027", name: "Ny vare", brand: "Test" };
     const basket = addExactProductToBasket(
-      { ...populatedBasket, selectedPlanId: "old-plan" },
+      { ...populatedBasket, convenienceWeightBasisPoints: 2_500 },
       discovered,
       () => ids.shift()!,
     );
 
-    expect(basket.selectedPlanId).toBeUndefined();
+    expect(basket.convenienceWeightBasisPoints).toBe(2_500);
     expect(basket.needs.at(-1)).toMatchObject({ id: "need-discovered", query: "Ny vare", matchRuleId: "rule-discovered" });
     expect(basket.matchingRules.at(-1)).toMatchObject({ mode: "exact", exactEan: discovered.ean });
     expect(basket.products.at(-1)).toEqual(discovered);
@@ -194,7 +269,7 @@ describe("browser basket persistence", () => {
       },
     } as unknown as Storage;
 
-    expect(loadBasket(unavailable)).toEqual(emptyBasketV1);
+    expect(loadBasket(unavailable)).toEqual(emptyBasketV2);
     expect(() => saveBasket(populatedBasket, unavailable)).not.toThrow();
   });
 
@@ -227,5 +302,26 @@ describe("browser basket persistence", () => {
     };
 
     expect(removeBasketNeed(basket, "need-1").products).toEqual(populatedBasket.products);
+  });
+
+  it("migrates a valid v1 basket once, drops its plan ID, and preserves local-only settings", () => {
+    const legacy = {
+      ...populatedBasket,
+      version: 1,
+      selectedPlanId: "plan-from-old-price-snapshot",
+    };
+    const { convenienceWeightBasisPoints: _preference, ...withoutV2Preference } = legacy;
+    void _preference;
+    const storage = memoryStorage(
+      JSON.stringify(withoutV2Preference),
+      LEGACY_BASKET_STORAGE_KEY,
+    );
+
+    expect(loadBasket(storage)).toEqual({
+      ...populatedBasket,
+      convenienceWeightBasisPoints: DEFAULT_CONVENIENCE_WEIGHT_BASIS_POINTS,
+    });
+    expect(storage.getItem(LEGACY_BASKET_STORAGE_KEY)).toBeNull();
+    expect(storage.getItem(BASKET_STORAGE_KEY)).not.toContain("selectedPlanId");
   });
 });

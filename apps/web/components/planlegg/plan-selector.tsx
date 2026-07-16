@@ -1,133 +1,41 @@
 "use client";
 
-import { formatNok, type PlanResult } from "@handleplan/domain";
+import { formatNok, type PlanResultV2 } from "@handleplan/domain";
 
 interface PlanSelectorProps {
-  plans: PlanResult[];
+  plans: readonly PlanResultV2[];
   selectedPlanId: string;
   onSelect: (planId: string) => void;
+  onPreferenceChange?: (convenienceWeightBasisPoints: number) => void;
 }
 
-function compareText(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
+export function balancedPlanId(plans: readonly PlanResultV2[]): string | undefined {
+  return planIdForPreference(plans, 5_000);
 }
 
-export function compareConvenience(left: PlanResult, right: PlanResult): number {
-  return (
-    left.chains.length - right.chains.length ||
-    left.totalOre - right.totalOre ||
-    left.substitutions.length - right.substitutions.length ||
-    compareText(left.id, right.id)
-  );
+function preferenceIndex(length: number, convenienceWeightBasisPoints: number): number {
+  if (length <= 1) return 0;
+  const bounded = Math.min(10_000, Math.max(0, convenienceWeightBasisPoints));
+  return Math.floor(((10_000 - bounded) / 10_000) * (length - 1));
 }
 
-export function compareSavings(left: PlanResult, right: PlanResult): number {
-  return (
-    left.totalOre - right.totalOre ||
-    left.substitutions.length - right.substitutions.length ||
-    left.chains.length - right.chains.length ||
-    compareText(left.id, right.id)
-  );
+export function planIdForPreference(
+  plans: readonly PlanResultV2[],
+  convenienceWeightBasisPoints: number,
+): string | undefined {
+  return plans[preferenceIndex(plans.length, convenienceWeightBasisPoints)]?.id;
 }
 
-function compareMiddle(left: PlanResult, right: PlanResult): number {
-  return (
-    left.chains.length - right.chains.length ||
-    right.totalOre - left.totalOre ||
-    left.substitutions.length - right.substitutions.length ||
-    compareText(left.id, right.id)
-  );
+export function convenienceWeightForPlanId(
+  plans: readonly PlanResultV2[],
+  planId: string,
+): number {
+  const index = plans.findIndex(({ id }) => id === planId);
+  if (index <= 0 || plans.length <= 1) return 10_000;
+  return Math.round((1 - index / (plans.length - 1)) * 10_000);
 }
 
-export function orderPlanFrontier(plans: readonly PlanResult[]): PlanResult[] {
-  if (plans.length < 2) return [...plans];
-  const stable = [...plans].sort(compareMiddle);
-  const convenience = [...stable].sort(compareConvenience)[0]!;
-  const savings = [...stable].sort(compareSavings)[0]!;
-
-  if (convenience.id === savings.id) {
-    const alternatives = stable
-      .filter(({ id }) => id !== convenience.id)
-      .sort((left, right) =>
-        left.substitutions.length - right.substitutions.length ||
-        left.totalOre - right.totalOre ||
-        left.chains.length - right.chains.length ||
-        compareText(left.id, right.id),
-      );
-    return [convenience, ...alternatives];
-  }
-  const middle = stable.filter(({ id }) => id !== convenience.id && id !== savings.id);
-  return [convenience, ...middle, savings];
-}
-
-export function balancedPlanId(plans: readonly PlanResult[]): string | undefined {
-  const ordered = orderPlanFrontier(plans);
-  if (ordered.length > 1) {
-    const convenience = [...ordered].sort(compareConvenience)[0];
-    const savings = [...ordered].sort(compareSavings)[0];
-    if (convenience?.id === savings?.id) return convenience?.id;
-  }
-  return ordered[Math.floor((ordered.length - 1) / 2)]?.id;
-}
-
-export const FRONTIER_DISPLAY_MAX = 7;
-
-export function projectPlanFrontier(plans: readonly PlanResult[]): PlanResult[] {
-  const maximum = FRONTIER_DISPLAY_MAX;
-  const ordered = orderPlanFrontier(plans);
-  if (ordered.length <= maximum) return ordered;
-  const indexes = new Set<number>();
-
-  const convenience = [...ordered].sort(compareConvenience)[0]!;
-  const savings = [...ordered].sort(compareSavings)[0]!;
-  indexes.add(ordered.findIndex(({ id }) => id === convenience.id));
-  indexes.add(ordered.findIndex(({ id }) => id === savings.id));
-
-  const transitions = ordered.flatMap((candidate, index) => {
-    const next = ordered[index + 1];
-    return next && candidate.chains.length !== next.chains.length ? [[index, index + 1] as const] : [];
-  });
-  const transitionAdjacency = (index: number) => transitions.reduce(
-    (count, pair) => count + (pair.includes(index) ? 1 : 0),
-    0,
-  );
-
-  const chainCounts = [...new Set(ordered.map(({ chains }) => chains.length))].sort((left, right) => left - right);
-  for (const chainCount of chainCounts) {
-    if ([...indexes].some((index) => ordered[index]?.chains.length === chainCount)) continue;
-    const representative = ordered
-      .map((_candidate, index) => index)
-      .filter((index) => ordered[index]!.chains.length === chainCount)
-      .sort((left, right) => transitionAdjacency(right) - transitionAdjacency(left) || left - right)[0];
-    if (representative !== undefined && indexes.size < maximum) indexes.add(representative);
-  }
-
-  for (const pair of transitions) {
-    const missing = pair.filter((index) => !indexes.has(index));
-    if (missing.length <= maximum - indexes.size) missing.forEach((index) => indexes.add(index));
-  }
-  for (const pair of transitions) {
-    for (const index of pair) {
-      if (indexes.size < maximum) indexes.add(index);
-    }
-  }
-
-  while (indexes.size < maximum) {
-    const remaining = ordered
-      .map((_candidate, index) => index)
-      .filter((index) => !indexes.has(index));
-    if (remaining.length === 0) break;
-    remaining.sort((left, right) => {
-      const leftDistance = Math.min(...[...indexes].map((index) => Math.abs(index - left)));
-      const rightDistance = Math.min(...[...indexes].map((index) => Math.abs(index - right)));
-      return rightDistance - leftDistance || left - right;
-    });
-    indexes.add(remaining[0]!);
-  }
-  return [...indexes].sort((left, right) => left - right).map((index) => ordered[index]!);
-}
-
-function equalObjective(plans: readonly PlanResult[]): boolean {
+function equalObjective(plans: readonly PlanResultV2[]): boolean {
   const first = plans[0];
   return first !== undefined && plans.every(
     (plan) =>
@@ -137,38 +45,65 @@ function equalObjective(plans: readonly PlanResult[]): boolean {
   );
 }
 
-function planName(index: number, plans: readonly PlanResult[]): string {
+function planName(index: number, plans: readonly PlanResultV2[]): string {
   if (plans.length === 1) return "Eneste komplette plan";
   if (equalObjective(plans)) return `Likeverdig alternativ ${index + 1}`;
-  const convenience = [...plans].sort(compareConvenience)[0]!;
-  const savings = [...plans].sort(compareSavings)[0]!;
-  if (convenience.id === savings.id && plans[index]?.id === convenience.id) return "Enklest og lavest pris";
-  if (convenience.id === savings.id && plans[index]!.substitutions.length < convenience.substitutions.length) return "Færre bytter";
   if (index === 0) return "Enklest";
   if (index === plans.length - 1) {
-    return plans[index]!.totalOre < plans[0]!.totalOre ? "Mest spart" : "Annet kompromiss";
+    return "Mest spart";
   }
   if (index === Math.floor((plans.length - 1) / 2)) return "Balansert";
   return `Alternativ ${index + 1}`;
 }
 
-const CHAIN_NAMES: Record<PlanResult["chains"][number], string> = {
+const CHAIN_NAMES: Record<PlanResultV2["chains"][number], string> = {
   bunnpris: "Bunnpris",
   extra: "Extra",
   "rema-1000": "REMA 1000",
 };
 
-export function PlanSelector({ plans, selectedPlanId, onSelect }: PlanSelectorProps) {
-  const ordered = projectPlanFrontier(plans);
-  const convenience = [...ordered].sort(compareConvenience)[0]!;
+export function PlanSelector({
+  plans,
+  selectedPlanId,
+  onSelect,
+  onPreferenceChange,
+}: PlanSelectorProps) {
+  if (plans.length === 0) return null;
+  const convenience = plans[0]!;
+  const selectedIndex = Math.max(0, plans.findIndex(({ id }) => id === selectedPlanId));
+
+  function select(planId: string): void {
+    onSelect(planId);
+    onPreferenceChange?.(convenienceWeightForPlanId(plans, planId));
+  }
+
+  const selectedName = planName(selectedIndex, plans);
 
   return (
     <fieldset className="plan-selector">
       <legend>Valgmuligheter</legend>
+      <div className="plan-preference-slider">
+        <label htmlFor="plan-preference">Enklest <span aria-hidden="true">↔</span> mest spart</label>
+        <input
+          id="plan-preference"
+          type="range"
+          min={0}
+          max={Math.max(0, plans.length - 1)}
+          step={1}
+          value={selectedIndex}
+          disabled={plans.length <= 1}
+          aria-valuetext={`${selectedName}, ${formatNok(plans[selectedIndex]!.totalOre)}`}
+          onChange={(event) => {
+            const plan = plans[Number(event.currentTarget.value)];
+            if (plan !== undefined) select(plan.id);
+          }}
+        />
+        <small>Velg bare mellom faktiske, komplette handleplaner.</small>
+      </div>
       <div className="plan-option-list">
         <span className="plan-connector" aria-hidden="true" />
-        {ordered.map((plan, index) => {
-          const name = planName(index, ordered);
+        {plans.map((plan, index) => {
+          const name = planName(index, plans);
           const selected = plan.id === selectedPlanId;
           const stores = `${plan.chains.length} ${plan.chains.length === 1 ? "butikk" : "butikker"}`;
           const difference = plan.totalOre - convenience.totalOre;
@@ -186,7 +121,7 @@ export function PlanSelector({ plans, selectedPlanId, onSelect }: PlanSelectorPr
                 value={plan.id}
                 checked={selected}
                 aria-label={accessibleName}
-                onChange={() => onSelect(plan.id)}
+                onChange={() => select(plan.id)}
               />
               <span className="plan-option-copy">
                 <span className="plan-option-heading">

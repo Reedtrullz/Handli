@@ -1,22 +1,92 @@
 "use client";
 
-import { productSchema, type Product } from "@handleplan/domain";
+import {
+  publicProductSearchResponseSchema,
+  type Product,
+  type PublicCatalogProduct,
+} from "@handleplan/domain";
 import { useEffect, useId, useRef, useState } from "react";
-import { z } from "zod";
 
 import { BASKET_QUANTITY_MAX, BASKET_QUANTITY_MIN } from "../../lib/browser-basket";
 
-const searchResponseSchema = z.object({ products: z.array(productSchema) }).strict();
+const MAX_SEARCH_RESPONSE_BYTES = 128 * 1024;
 
 export type ProductSearch = (query: string, signal: AbortSignal) => Promise<Product[]>;
+
+async function cancelBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
+  if (body === null) return;
+  try {
+    await body.cancel();
+  } catch {
+    // Cleanup is best effort; callers receive one sanitized search failure.
+  }
+}
+
+async function readBoundedJson(response: Response): Promise<unknown> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!/^application\/json(?:\s*;.*)?$/i.test(contentType)) {
+    await cancelBody(response.body);
+    throw new Error("PRODUCT_SEARCH_FAILED");
+  }
+  const contentLength = response.headers.get("content-length");
+  if (
+    contentLength !== null
+    && /^\d+$/.test(contentLength)
+    && Number(contentLength) > MAX_SEARCH_RESPONSE_BYTES
+  ) {
+    await cancelBody(response.body);
+    throw new Error("PRODUCT_SEARCH_FAILED");
+  }
+  if (response.body === null) throw new Error("PRODUCT_SEARCH_FAILED");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const fragments: string[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_SEARCH_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new Error("PRODUCT_SEARCH_FAILED");
+      }
+      fragments.push(decoder.decode(value, { stream: true }));
+    }
+    fragments.push(decoder.decode());
+    return JSON.parse(fragments.join("")) as unknown;
+  } catch {
+    try { await reader.cancel(); } catch { /* Cleanup only. */ }
+    throw new Error("PRODUCT_SEARCH_FAILED");
+  }
+}
+
+function legacyProductFromCatalog(product: PublicCatalogProduct): Product {
+  return {
+    ean: product.gtin,
+    name: product.displayName,
+    ...(product.brand === undefined ? {} : { brand: product.brand }),
+    packageQuantity: product.packageMeasure.amount,
+    packageUnit:
+      product.packageMeasure.unit === "g" || product.packageMeasure.unit === "ml"
+        ? product.packageMeasure.unit
+        : "each",
+  };
+}
 
 export async function searchProductsFromApi(
   query: string,
   signal: AbortSignal,
 ): Promise<Product[]> {
   const response = await fetch(`/api/products/search?q=${encodeURIComponent(query)}`, { signal });
-  if (!response.ok) throw new Error("PRODUCT_SEARCH_FAILED");
-  return searchResponseSchema.parse(await response.json()).products;
+  if (!response.ok) {
+    await cancelBody(response.body);
+    throw new Error("PRODUCT_SEARCH_FAILED");
+  }
+  const parsed = publicProductSearchResponseSchema.safeParse(await readBoundedJson(response));
+  if (!parsed.success) throw new Error("PRODUCT_SEARCH_FAILED");
+  return parsed.data.products.map(legacyProductFromCatalog);
 }
 
 interface NeedComposerProps {

@@ -1,18 +1,33 @@
 import type { PriceCache } from "@handleplan/db";
 import {
   calculatePlans,
+  enumerateCompletePlanCandidatesV2,
+  EXACT_PRODUCT_CATALOG_MAX_AGE_MS,
+  EXACT_PRODUCT_OFFER_MAX_AGE_MS,
+  exactProductPlanApiEvidenceEnvelopeSchema,
+  exactProductPlanApiProductSummarySchema,
+  exactProductPlanApiRequestSchema,
   matchProducts,
+  paretoFrontierV2,
+  projectRepresentativesV2,
+  type ExactProductPlanApiEvidenceEnvelope,
+  type ExactProductPlanApiProductSummary,
+  type ExactProductPlanApiRequest,
   type MatchRule,
   type Need,
   type PlanResult,
+  type PlanResultV2,
   type PriceObservation,
   type Product,
+  type ServerPlanningInputV2,
 } from "@handleplan/domain";
 import {
   type KassalappGateway,
   KassalappGatewayError,
 } from "@handleplan/kassalapp";
 import { z } from "zod";
+
+import { PriceService, PriceServiceError } from "./price-service";
 
 const MAX_NEEDS = 50;
 const MAX_RULES = 50;
@@ -137,14 +152,36 @@ export interface PlanServiceResult {
   priceDataSource: "upstream" | "cache";
 }
 
+export interface ExactProductPlanServiceResult {
+  evidence: ExactProductPlanApiEvidenceEnvelope;
+  generatedAt: string;
+  plans: PlanResultV2[];
+  priceDataSource: "cache";
+  products: ExactProductPlanApiProductSummary[];
+}
+
+export interface ActiveCatalogReader {
+  getMany(
+    gtins: readonly string[],
+    at: Date,
+    signal?: AbortSignal,
+  ): Promise<ExactProductPlanApiProductSummary[]>;
+}
+
 export interface PlanServiceContract {
   calculate(request: PlanApiRequest, signal?: AbortSignal): Promise<PlanServiceResult>;
+  calculateExact?(
+    request: ExactProductPlanApiRequest,
+    signal?: AbortSignal,
+  ): Promise<ExactProductPlanServiceResult>;
 }
 
 export interface PlanServiceDependencies {
-  cache: PriceCache;
-  gateway: KassalappGateway;
+  cache?: PriceCache;
+  catalog?: ActiveCatalogReader;
+  gateway?: KassalappGateway;
   now?: () => Date;
+  priceService?: Pick<PriceService, "readExact">;
 }
 
 export class PriceDataUnavailableError extends Error {
@@ -158,6 +195,20 @@ export class PlanRequestCancelledError extends Error {
   constructor() {
     super("Forespørselen ble avbrutt.");
     this.name = "PlanRequestCancelledError";
+  }
+}
+
+export class UnknownExactProductError extends Error {
+  constructor() {
+    super("Ett eller flere eksakte produkter er ukjente.");
+    this.name = "UnknownExactProductError";
+  }
+}
+
+export class CatalogUnavailableError extends Error {
+  constructor() {
+    super("Produktkatalogen er midlertidig utilgjengelig.");
+    this.name = "CatalogUnavailableError";
   }
 }
 
@@ -218,6 +269,130 @@ function toPlannerRequest(request: PlanApiRequest, prices: PriceObservation[]) {
   };
 }
 
+function exactRequestAsPlannerV2Input(
+  request: ExactProductPlanApiRequest,
+  products: readonly ExactProductPlanApiProductSummary[],
+  priceResult: Awaited<ReturnType<PriceService["readExact"]>>,
+): ServerPlanningInputV2 {
+  const catalogByGtin = new Map(products.map((product) => [product.gtin, product]));
+  const identityByGtin = new Map(
+    priceResult.products.map((product) => [product.gtin, product]),
+  );
+  const officialOffers = new Map(
+    priceResult.evidence.needs
+      .flatMap(({ officialOffers: offers }) => offers)
+      .map((offer) => [offer.id, offer]),
+  );
+  return {
+    contractVersion: 2,
+    matchingRules: request.needs.map((need) => ({
+      exactEan: need.match.product.value,
+      explanation: "Eksakt produkt valgt av brukeren",
+      id: need.id,
+      mode: "exact" as const,
+      userApproved: true as const,
+    })),
+    maxStores: request.maxStores,
+    needs: request.needs.map((need) => ({
+      id: need.id,
+      matchRuleId: need.id,
+      query: catalogByGtin.get(need.match.product.value)?.displayName
+        ?? need.match.product.value,
+      requested: {
+        amount: need.quantity,
+        unit: need.quantityUnit === "each" ? "package" as const : need.quantityUnit,
+      },
+      required: true,
+    })),
+    offerEligibility: {
+      channel: "in-store",
+      enabledMembershipProgramIds: [],
+      enabledSourceIds: priceResult.evidence.sources.map(({ id }) => id),
+      location: { countryCode: "NO" },
+      maxEvidenceAgeMs: EXACT_PRODUCT_OFFER_MAX_AGE_MS,
+    },
+    officialOffers: [...officialOffers.values()],
+    ordinaryPrices: priceResult.prices,
+    products: products.map((product) => {
+      const identity = identityByGtin.get(product.gtin);
+      if (identity === undefined) throw new PriceDataUnavailableError();
+      return {
+        ...(product.brand === undefined ? {} : { brand: product.brand }),
+        canonicalProductId: identity.canonicalProductId,
+        ean: product.gtin,
+        name: product.displayName,
+        packageMeasure: product.packageMeasure,
+      };
+    }),
+  };
+}
+
+function attachAssignmentEvidence(
+  evidence: ExactProductPlanApiEvidenceEnvelope,
+  plans: readonly PlanResultV2[],
+  products: readonly ExactProductPlanApiProductSummary[],
+): ExactProductPlanApiEvidenceEnvelope {
+  const needEvidence = new Map(evidence.needs.map((entry) => [entry.needId, entry]));
+  const assignmentEvidence = plans.flatMap((plan) => plan.assignments.map((assignment) => {
+    const entry = needEvidence.get(assignment.needId);
+    const ordinary = entry?.ordinaryPrices.find((candidate) =>
+      candidate.id.length > 0
+      && candidate.chainId === assignment.chain
+      && candidate.sourceId === assignment.source
+      && candidate.productMatch.kind === "exact"
+      && candidate.productMatch.canonicalProductId === assignment.canonicalProductId);
+    if (ordinary === undefined) throw new PriceDataUnavailableError();
+    return {
+      chainId: assignment.chain,
+      conditions: assignment.checkout.appliedOfferId === undefined
+        ? { kind: "ordinary-price" as const }
+        : {
+            kind: "official-offer" as const,
+            offerId: assignment.checkout.appliedOfferId,
+          },
+      evidenceId: ordinary.id,
+      needId: assignment.needId,
+      planId: plan.id,
+    };
+  }));
+  const sources = new Map(evidence.sources.map((source) => [source.id, source]));
+  for (const { catalogEvidence } of products) {
+    const source = catalogEvidence.source;
+    const existing = sources.get(source.id);
+    if (
+      existing !== undefined
+      && (
+        existing.contractVersion !== source.contractVersion
+        || existing.displayName !== source.displayName
+        || existing.sourceClass !== source.sourceClass
+        || existing.state !== source.state
+      )
+    ) {
+      throw new PriceDataUnavailableError();
+    }
+    sources.set(source.id, source);
+  }
+  const parsed = exactProductPlanApiEvidenceEnvelopeSchema.safeParse({
+    ...evidence,
+    assignmentEvidence,
+    sources: [...sources.values()].sort((left, right) => left.id.localeCompare(right.id)),
+  });
+  if (!parsed.success) throw new PriceDataUnavailableError();
+  return parsed.data;
+}
+
+function requestedExactGtins(request: ExactProductPlanApiRequest): string[] {
+  return [...new Set(request.needs.map(({ match }) => match.product.value))].sort();
+}
+
+function summariesExactlyCover(
+  gtins: readonly string[],
+  products: readonly ExactProductPlanApiProductSummary[],
+): boolean {
+  return products.length === gtins.length
+    && products.every((product, index) => product.gtin === gtins[index]);
+}
+
 export class PlanService implements PlanServiceContract {
   private readonly now: () => Date;
 
@@ -230,19 +405,97 @@ export class PlanService implements PlanServiceContract {
     if (!parsed.success) {
       throw new PriceDataUnavailableError();
     }
+    return this.calculateParsed(parsed.data, signal);
+  }
+
+  async calculateExact(
+    request: ExactProductPlanApiRequest,
+    signal?: AbortSignal,
+  ): Promise<ExactProductPlanServiceResult> {
+    const parsed = exactProductPlanApiRequestSchema.safeParse(request);
+    if (!parsed.success) throw new UnknownExactProductError();
+    if (this.dependencies.catalog === undefined) throw new CatalogUnavailableError();
+
     const input = parsed.data;
-    const eans = requiredCandidateEans(input);
+    const gtins = requestedExactGtins(input);
+    const catalogAt = this.now();
+    let products: ExactProductPlanApiProductSummary[];
+    try {
+      products = await this.dependencies.catalog.getMany(gtins, catalogAt, signal);
+    } catch {
+      if (signal?.aborted) throw new PlanRequestCancelledError();
+      throw new CatalogUnavailableError();
+    }
+    const parsedProducts = z.array(exactProductPlanApiProductSummarySchema).max(50)
+      .safeParse(products);
+    if (!parsedProducts.success) throw new CatalogUnavailableError();
+    products = parsedProducts.data;
+    if (products.some(({ catalogEvidence }) => {
+      const ageMs = catalogAt.getTime() - Date.parse(catalogEvidence.observedAt);
+      return ageMs < 0 || ageMs > EXACT_PRODUCT_CATALOG_MAX_AGE_MS;
+    })) {
+      throw new CatalogUnavailableError();
+    }
+    if (!summariesExactlyCover(gtins, products)) throw new UnknownExactProductError();
+    if (this.dependencies.priceService === undefined) throw new PriceDataUnavailableError();
 
     try {
-      const upstreamRows = await this.dependencies.gateway.getBulkPrices(eans, signal);
+      const priceResult = await this.dependencies.priceService.readExact(
+        input,
+        catalogAt,
+        signal,
+      );
+      if (signal?.aborted) throw new PlanRequestCancelledError();
+      const planningInput = exactRequestAsPlannerV2Input(input, products, priceResult);
+      // Keep every complete candidate until optional travel evidence has had a
+      // chance to participate. Price-only pruning at enumeration time would
+      // make a faster route impossible to recover later.
+      const completeCandidates = enumerateCompletePlanCandidatesV2(
+        planningInput,
+        catalogAt,
+      );
+      const plans = projectRepresentativesV2(
+        paretoFrontierV2(completeCandidates),
+        7,
+      );
+      return {
+        evidence: attachAssignmentEvidence(priceResult.evidence, plans, products),
+        generatedAt: catalogAt.toISOString(),
+        plans,
+        priceDataSource: "cache",
+        products,
+      };
+    } catch (error) {
+      if (error instanceof PlanRequestCancelledError || signal?.aborted) {
+        throw new PlanRequestCancelledError();
+      }
+      if (error instanceof PriceServiceError && error.code === "CANCELLED") {
+        throw new PlanRequestCancelledError();
+      }
+      throw new PriceDataUnavailableError();
+    }
+  }
+
+  private async calculateParsed(
+    input: PlanApiRequest,
+    signal?: AbortSignal,
+  ): Promise<PlanServiceResult> {
+    const eans = requiredCandidateEans(input);
+    const { cache, gateway } = this.dependencies;
+    if (cache === undefined || gateway === undefined) {
+      throw new PriceDataUnavailableError();
+    }
+
+    try {
+      const upstreamRows = await gateway.getBulkPrices(eans, signal);
       const evaluationNow = this.now();
       const prices = normalizePrices(
         upstreamRows,
         evaluationNow,
       );
-      await this.dependencies.cache.putMany(prices, evaluationNow);
+      await cache.putMany(prices, evaluationNow);
       const admittedPrices = normalizePrices(
-        await this.dependencies.cache.getMany(eans),
+        await cache.getMany(eans),
         evaluationNow,
       );
       return {
@@ -257,7 +510,7 @@ export class PlanService implements PlanServiceContract {
       const fallbackNow = this.now();
       try {
         const cached = normalizePrices(
-          await this.dependencies.cache.getMany(eans),
+          await cache.getMany(eans),
           fallbackNow,
         );
         const plans = calculatePlans(toPlannerRequest(input, cached), fallbackNow);

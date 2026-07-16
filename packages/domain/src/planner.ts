@@ -1,5 +1,6 @@
 import {
   sourceNeutralPlanRequestSchema,
+  MAX_PERSISTED_MONEY_ORE,
   type MatchRule,
   type MoneyOre,
   type Need,
@@ -7,6 +8,7 @@ import {
   type PlanResult,
   type PriceObservation,
 } from "./contracts";
+import { calculatePackageFulfilment, type Fulfilment } from "./fulfilment";
 import { matchProducts } from "./matching";
 import { classifyFreshness } from "./price-eligibility";
 
@@ -73,6 +75,8 @@ function assignmentKey<SourceId extends string>(assignment: Assignment<SourceId>
     assignment.chain,
     assignment.quantity,
     assignment.costOre,
+    assignment.fulfilment?.packageCount ?? "legacy",
+    assignment.fulfilment?.surplusAmount ?? "legacy",
   ].join(":");
 }
 
@@ -114,6 +118,7 @@ function planForSubset<SourceId extends string>(
     const matchingEans = new Set(
       matchProducts(need, rule, request.products).map(({ ean }) => ean),
     );
+    const productsByEan = new Map(request.products.map((product) => [product.ean, product]));
     const candidates: AssignmentCandidate<SourceId>[] = [];
 
     for (const observation of eligiblePrices) {
@@ -121,8 +126,37 @@ function planForSubset<SourceId extends string>(
         continue;
       }
 
-      const cost = observation.amountOre * need.quantity;
-      if (!Number.isSafeInteger(cost) || cost < 0) {
+      let packageCount = need.quantity;
+      let fulfilment: Fulfilment | undefined;
+      if (need.quantityUnit !== "each") {
+        const product = productsByEan.get(observation.ean);
+        if (
+          product?.packageQuantity === undefined
+          || product.packageUnit !== need.quantityUnit
+          || !Number.isSafeInteger(product.packageQuantity)
+        ) {
+          continue;
+        }
+        const calculated = calculatePackageFulfilment({
+          canonicalProductId: product.ean,
+          needId: need.id,
+          requested: { amount: need.quantity, unit: need.quantityUnit },
+          packageMeasure: {
+            amount: product.packageQuantity,
+            unit: product.packageUnit,
+          },
+        });
+        if (calculated.state !== "complete") continue;
+        fulfilment = calculated.fulfilment;
+        packageCount = fulfilment.packageCount;
+      }
+
+      const cost = observation.amountOre * packageCount;
+      if (
+        !Number.isSafeInteger(cost)
+        || cost < 0
+        || cost > MAX_PERSISTED_MONEY_ORE
+      ) {
         continue;
       }
 
@@ -135,6 +169,7 @@ function planForSubset<SourceId extends string>(
           costOre: cost as MoneyOre,
           observedAt: observation.observedAt,
           source: observation.source,
+          ...(fulfilment === undefined ? {} : { fulfilment }),
         },
       });
     }
@@ -155,7 +190,7 @@ function planForSubset<SourceId extends string>(
   substitutions.sort(compareText);
 
   const total = assignments.reduce((sum, assignment) => sum + assignment.costOre, 0);
-  if (!Number.isSafeInteger(total) || total < 0) {
+  if (!Number.isSafeInteger(total) || total < 0 || total > MAX_PERSISTED_MONEY_ORE) {
     return undefined;
   }
 
@@ -221,7 +256,7 @@ export function calculatePlans<SourceId extends string = "kassalapp">(
   if (
     !hasUniqueIds(validated.needs) ||
     !hasUniqueIds(validated.matchingRules) ||
-    validated.needs.some(({ quantity, quantityUnit, required }) => !Number.isSafeInteger(quantity) || (required && quantityUnit !== "each"))
+    validated.needs.some(({ quantity }) => !Number.isSafeInteger(quantity))
   ) {
     return [];
   }

@@ -9,6 +9,7 @@
     "build": "pnpm --filter web build",
     "dev": "pnpm --filter web dev",
     "e2e": "playwright test",
+    "e2e:handlemodus": "pnpm --filter web test:handlemodus:browser",
     "lint": "pnpm -r lint",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",

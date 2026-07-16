@@ -16,10 +16,10 @@ corepack pnpm install --frozen-lockfile
 ## Deterministic fake mode
 
 ```bash
-KASSAL_MODE=fake corepack pnpm dev
+HANDLEPLAN_MODE=fake corepack pnpm dev
 ```
 
-Fake mode is an explicit server-only composition. It uses fixed Bunnpris, REMA 1000, and Extra catalog/price fixtures, a fixed evaluation clock, and an in-memory cache. It performs no Kassalapp or database network request. It is not the production default and no fake-mode flag is placed in browser storage, browser bundles, requests, or responses.
+Fake mode is an explicit server-only composition. It uses fixed Bunnpris, REMA 1000, and Extra catalog/evidence fixtures and a fixed evaluation clock. It performs no Kassalapp or database network request. It is not the production default and no fake-mode flag is placed in browser storage, browser bundles, requests, or responses.
 
 The committed Playwright journey starts this mode automatically. It needs no secrets:
 
@@ -30,7 +30,7 @@ corepack pnpm exec playwright test
 
 ## Real mode and PostgreSQL
 
-Real mode is the default and fails closed unless all three variables are valid: `KASSAL_API_KEY`, `KASSAL_BASE_URL` (HTTPS), and `DATABASE_URL` (PostgreSQL). `KASSAL_MODE=real` may be set explicitly.
+Real web mode is the default and requires only `DATABASE_URL` for the read-only `handleplan_web` role. The public web process never receives Kassalapp credentials; scheduled ingestion is owned by `apps/worker`.
 
 The local Compose file defines PostgreSQL 16:
 
@@ -43,24 +43,24 @@ corepack pnpm dev
 
 This repository does not assume Docker Compose is installed. Without it, the pure/unit suites and fake E2E remain reproducible; live cache round trips remain unverified.
 
-For the real environment, activate the 1Password Developer Environment named `Clankus`. The required variable names are `KASSAL_API_KEY`, `KASSAL_BASE_URL`, and `DATABASE_URL`. Do not paste, print, log, or commit their values. The application reads them only in server modules.
+For the real environment, activate the 1Password Developer Environment named `Clankus`. `DATABASE_URL` is consumed by the public web process, while `KASSAL_API_KEY` and `KASSAL_BASE_URL` are consumed only by the scheduled worker. Do not paste, print, log, or commit their values.
 
-## Cache and freshness behavior
+## Persisted evidence and freshness behavior
 
-- Valid upstream rows are evaluated after the upstream request finishes and then written to cache best-effort.
-- If upstream fails, the cache is used only when eligible rows still form a complete required-item plan.
+- Public web requests never fetch or persist upstream rows.
+- The worker writes append-only evidence; readers admit only completed ingestion runs from currently approved sources.
 - Observations are eligible through exactly 72 hours.
 - Rows older than 72 hours through 14 days are stale-visible but ineligible for recommendations.
 - Rows older than 14 days are historical. Future timestamps are invalid.
-- A cache failure or incomplete/stale cache produces a sanitized unavailable state; the app never recommends a partial plan.
+- Incomplete coverage stays explicit; the app never recommends a partial basket.
 
 ## Anonymous privacy
 
-The basket, explicit match approvals, disabled travel-compatibility field, and selected plan ID are stored under `handleplan:basket:v1` in local storage. Phase 1 exposes no location or travel control. Core use has no account or consent wall.
+The basket and normalized convenience preference are stored locally in the browser. An active Handlemodus trip is an immutable IndexedDB snapshot; only checklist completion mutates. No origin/address/coordinates are stored. Core use has no account or consent wall.
 
-## Phase 1 quantity limitation
+## Quantity semantics
 
-Public plan requests and the domain planner accept required needs only in purchasable package counts (`each`). Required `g` and `ml` needs are rejected rather than multiplying a package price by a weight or volume. Package/unit normalization is a release prerequisite before those units can be planned.
+Strict public plan requests accept package counts, grams, and millilitres for exact products. The server rehydrates package measures from its approved catalog, buys whole packages, and exposes package count and surplus; browser-supplied product metadata cannot change fulfilment.
 
 ## Public-release gates
 

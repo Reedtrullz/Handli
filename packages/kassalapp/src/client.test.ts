@@ -8,8 +8,9 @@ import {
   KassalappGatewayError,
   resetKassalappRequestCoordinationForTests,
 } from "./client";
+import { isValidGtin } from "./source-contracts";
 
-const EAN = "7038010000013";
+const EAN = "7038010000010";
 const API_KEY = "synthetic-test-key";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -17,6 +18,15 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { "content-type": "application/json" },
     status,
   });
+}
+
+function gtin13(sequence: number): string {
+  const body = String(sequence).padStart(12, "0");
+  const weighted = [...body].reduce(
+    (sum, digit, index) => sum + Number(digit) * (index % 2 === 0 ? 1 : 3),
+    0,
+  );
+  return `${body}${(10 - (weighted % 10)) % 10}`;
 }
 
 function createClient(fetchImplementation: typeof fetch): KassalappClient {
@@ -30,6 +40,14 @@ function createClient(fetchImplementation: typeof fetch): KassalappClient {
 describe("KassalappClient contract", () => {
   beforeEach(() => {
     resetKassalappRequestCoordinationForTests();
+  });
+
+  it("keeps intended-valid compatibility fixtures checksum-valid", () => {
+    expect([
+      EAN,
+      searchFixture.data[0]?.ean,
+      pricesFixture.data[0]?.ean,
+    ].every((ean) => typeof ean === "string" && isValidGtin(ean))).toBe(true);
   });
 
   it("browses documented ProductResource rows with store arrays and opaque update metadata", async () => {
@@ -75,13 +93,13 @@ describe("KassalappClient contract", () => {
       const store = new URL(String(input)).searchParams.get("store");
       return jsonResponse({ data: [
         {
-          ...officialProductFixture.data, ean: "7038010000020", name: "Vanlig pris",
+          ...officialProductFixture.data, ean: "7038010000027", name: "Vanlig pris",
           current_price: 10, price_history: [{ price: 10, date: "2026-07-15T10:00:00Z" }],
           store: [{ name: "Fixture", code: store, url: "https://example.invalid", logo: "https://example.invalid/logo.svg" }],
           updated_at: null,
         },
         {
-          ...officialProductFixture.data, ean: "7038010000037", name: "Dokumentert prisfall",
+          ...officialProductFixture.data, ean: "7038010000034", name: "Dokumentert prisfall",
           current_price: 8, price_history: [
             { price: 8, date: "2026-07-15T10:00:00Z" },
             { price: 16, date: "2026-07-10T10:00:00Z" },
@@ -192,7 +210,7 @@ describe("KassalappClient contract", () => {
       jsonResponse({
         data: [
           searchFixture.data[0],
-          { ...searchFixture.data[0], ean: "7038010000020", name: "Annen lettmelk" },
+          { ...searchFixture.data[0], ean: "7038010000027", name: "Annen lettmelk" },
         ],
       });
 
@@ -223,9 +241,7 @@ describe("KassalappClient contract", () => {
       batchSizes.push(body.eans.length);
       return jsonResponse({ data: [] });
     };
-    const eans = Array.from({ length: 101 }, (_, index) =>
-      String(1_000_000_000_000 + index),
-    );
+    const eans = Array.from({ length: 101 }, (_, index) => gtin13(index + 1));
 
     await expect(createClient(injectedFetch).getBulkPrices(eans)).resolves.toEqual([]);
     expect(batchSizes).toEqual([100, 1]);
@@ -277,7 +293,7 @@ describe("KassalappClient contract", () => {
   it("rejects upstream envelopes beyond request-derived safe maxima", async () => {
     const overproduced = Array.from({ length: 101 }, (_, index) => ({
       ...searchFixture.data[0],
-      ean: String(1_000_000_000_000 + index),
+      ean: gtin13(index + 1),
     }));
     await expect(createClient(async () => jsonResponse({ data: overproduced })).searchProducts("melk", 100)).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
   });
@@ -309,7 +325,7 @@ describe("KassalappClient contract", () => {
         data: [
           {
             ...pricesFixture.data[0],
-            ean: "7038010000020",
+            ean: "7038010000027",
           },
         ],
       });
@@ -344,9 +360,7 @@ describe("KassalappClient contract", () => {
   });
 
   it("returns bulk rows in requested EAN, Phase 1 chain, then newest-observation order", async () => {
-    const eans = Array.from({ length: 101 }, (_, index) =>
-      String(1_000_000_000_000 + index),
-    );
+    const eans = Array.from({ length: 101 }, (_, index) => gtin13(index + 1));
     const row = (
       ean: string,
       chain: "bunnpris" | "rema-1000" | "extra",

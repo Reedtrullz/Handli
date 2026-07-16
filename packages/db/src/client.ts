@@ -19,6 +19,6 @@ export function createDatabase(databaseUrl: string): DatabaseConnection {
   return {
     db: drizzle(sql, { schema }),
     sql,
-    close: () => sql.end(),
+    close: () => sql.end({ timeout: 5 }),
   };
 }

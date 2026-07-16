@@ -21,7 +21,9 @@ jobs:
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The worker readback allows one bounded 55-minute cycle, with margin for
+    # image build/pull, migrations, verification, and a possible rollback.
+    timeout-minutes: 120
     environment:
       name: preview
       url: https://handle.reidar.tech
@@ -52,10 +54,23 @@ jobs:
 
       - name: Build and deploy the verified commit on the VPS
         shell: bash
+        env:
+          REMOTE_BUNDLE_ROOT: /opt/apps/handleplan/deploy-bundles
         run: |
           set -euo pipefail
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+          git diff --quiet
+          git diff --cached --quiet
+          remote_bundle="$REMOTE_BUNDLE_ROOT/$DEPLOY_SHA"
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            deploy@198.23.137.16 "sh -s -- '$DEPLOY_SHA'" < deploy/deploy-on-vps.sh
+            deploy@198.23.137.16 "install -d -m 700 '$remote_bundle'"
+          scp -q -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy/deploy-on-vps.sh deploy/deployment-state.sh \
+            "deploy@198.23.137.16:$remote_bundle/"
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy@198.23.137.16 \
+            "chmod 700 '$remote_bundle/deploy-on-vps.sh' && chmod 600 '$remote_bundle/deployment-state.sh' && '$remote_bundle/deploy-on-vps.sh' '$DEPLOY_SHA'"
 
       - name: Verify container and exact local health
         shell: bash
@@ -63,4 +78,4 @@ jobs:
           set -euo pipefail
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
             deploy@198.23.137.16 \
-            "test \"\$(cat /opt/apps/handleplan/state/current-revision)\" = '$DEPLOY_SHA' && curl --fail --silent --show-error http://127.0.0.1:3004/api/health | grep -F '\"commit\":\"$DEPLOY_SHA\"'"
+            "test \"\$(cat /opt/apps/handleplan/state/current-deployment)\" = 'v1 $DEPLOY_SHA current' && test \"\$(cat /opt/apps/handleplan/state/current-revision)\" = '$DEPLOY_SHA' && curl --fail --silent --show-error http://127.0.0.1:3004/api/health | grep -F '\"commit\":\"$DEPLOY_SHA\"'"
