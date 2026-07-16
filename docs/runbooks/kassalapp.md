@@ -9,7 +9,8 @@ The 1Password Developer Environment is named `Clankus`. Use the variable names a
 ## Adapter behavior
 
 - Search input is bounded and URL-encoded by the server route.
-- `GET /api/discovery/search` browses up to 36 newly catalogued unique products;
+- `GET /api/discovery/search` browses up to 36 newly catalogued unique products
+  using bounded store-scoped catalog requests for Bunnpris, REMA 1000, and Extra;
   the optional `q` parameter narrows this to at most 12 search matches. Both
   modes combine catalog rows with bulk prices and include only observations no
   older than 72 hours. If upstream prices fail, only still-fresh validated

@@ -12,6 +12,7 @@ const CHAIN_ORDER: Record<PriceObservation["chain"], number> = {
   "rema-1000": 1,
   extra: 2,
 };
+const BROWSE_STORE_CODES = ["BUNNPRIS", "REMA_1000", "COOP_EXTRA"] as const;
 const eanSchema = z.string().regex(/^(?:\d{8}|\d{13})$/);
 
 export type KassalappGatewayErrorCode =
@@ -165,16 +166,19 @@ export class KassalappClient implements KassalappGateway {
     const parsed = z.number().int().min(1).max(100).safeParse(limit);
     if (!parsed.success) throw new KassalappGatewayError("INVALID_REQUEST");
 
-    const url = new URL(`${this.baseUrl}/products`);
-    url.searchParams.set("size", String(parsed.data));
-    url.searchParams.set("sort", "date_desc");
-    url.searchParams.set("unique", "1");
-    url.searchParams.set("exclude_without_ean", "1");
-
     try {
-      return normalizeSearchResponse(
-        await this.requestJson(url, { method: "GET" }, signal),
-      ).slice(0, parsed.data);
+      const perStoreLimit = Math.ceil(parsed.data / BROWSE_STORE_CODES.length);
+      const batches = await Promise.all(BROWSE_STORE_CODES.map(async (store) => {
+        const url = new URL(`${this.baseUrl}/products`);
+        url.searchParams.set("store", store);
+        url.searchParams.set("size", String(perStoreLimit));
+        url.searchParams.set("sort", "date_desc");
+        url.searchParams.set("unique", "1");
+        url.searchParams.set("exclude_without_ean", "1");
+        return normalizeSearchResponse(await this.requestJson(url, { method: "GET" }, signal));
+      }));
+      return [...new Map(batches.flat().map((product) => [product.ean, product])).values()]
+        .slice(0, parsed.data);
     } catch (error) {
       throw toGatewayError(error);
     }

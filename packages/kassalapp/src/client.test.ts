@@ -37,7 +37,9 @@ describe("KassalappClient contract", () => {
       expect.objectContaining({ ean: EAN, name: "Tine Lettmelk 1 %" }),
     ]);
     expect(seenUrls).toEqual([
-      "https://fixture.invalid/api/v1/products?size=36&sort=date_desc&unique=1&exclude_without_ean=1",
+      "https://fixture.invalid/api/v1/products?store=BUNNPRIS&size=12&sort=date_desc&unique=1&exclude_without_ean=1",
+      "https://fixture.invalid/api/v1/products?store=REMA_1000&size=12&sort=date_desc&unique=1&exclude_without_ean=1",
+      "https://fixture.invalid/api/v1/products?store=COOP_EXTRA&size=12&sort=date_desc&unique=1&exclude_without_ean=1",
     ]);
   });
 
