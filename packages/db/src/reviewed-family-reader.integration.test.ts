@@ -27,11 +27,21 @@ function withCheckDigit(body: string): string {
   return `${body}${(10 - (weighted % 10)) % 10}`;
 }
 
-const nonceDigits = String((Date.now() + process.pid) % 10_000_000).padStart(7, "0");
+// Reserve the leading digit for this integration file so parallel Vitest files
+// cannot manufacture the same valid GTIN from one process/millisecond nonce.
+const nonceDigits = `2${String((Date.now() + process.pid) % 1_000_000).padStart(6, "0")}`;
 const gtin13 = (variant: number) =>
   withCheckDigit(`704${nonceDigits}${String(variant).padStart(2, "0")}`);
 const gtin8 = (variant: number) =>
   withCheckDigit(`${nonceDigits.slice(0, 5)}${String(variant).padStart(2, "0")}`);
+
+function databaseDate(value: unknown): Date {
+  const parsed = value instanceof Date ? value : new Date(String(value));
+  if (!Number.isFinite(parsed.getTime())) {
+    throw new Error("Reviewed-family integration fixture returned an invalid database timestamp");
+  }
+  return parsed;
+}
 
 describe.skipIf(!runDatabaseIntegration).sequential(
   "reviewed family reader integration",
@@ -351,7 +361,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       const [snapshotClock] = await connection.sql`
         select clock_timestamp() as snapshot_at
       `;
-      const snapshotAt = snapshotClock!.snapshot_at as Date;
+      const snapshotAt = databaseDate(snapshotClock!.snapshot_at);
       const baseline = await reader.getMany(["family:melk"], 20, snapshotAt);
       expect(baseline.map(({ canonicalProductId }) => canonicalProductId))
         .not.toContain(`product:${candidateProductId}`);
@@ -484,7 +494,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
               ${versionId}, 'handleplan-reviewed-families', ${taxonomyVersion}, 1,
               ${new Date(Date.now() - 1_000).toISOString()},
               ${checksum(publication.content)},
-              ${transaction.json(publication.content)},
+              ${JSON.stringify(publication.content)}::jsonb,
               ${publication.content.length}, 0
             )
           `;

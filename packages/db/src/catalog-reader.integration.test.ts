@@ -15,7 +15,10 @@ const STARTED_AT = new Date(fixtureNow - 20 * 60_000);
 const COMPLETED_AT = new Date(fixtureNow - 5 * 60_000);
 const SOURCE_REVIEWED_AT = new Date(fixtureNow - 30 * 60_000);
 const SOURCE_EXPIRES_AT = new Date(fixtureNow + 24 * 60 * 60_000);
-const nonceDigits = String((Date.now() + process.pid) % 10_000_000).padStart(7, "0");
+// Reserve the leading digit for this integration file. Vitest can execute files
+// in parallel in the same worker/process millisecond, so a time-only GTIN body
+// can otherwise collide with reviewed-family fixtures.
+const nonceDigits = `1${String((Date.now() + process.pid) % 1_000_000).padStart(6, "0")}`;
 const catalogSourceId = `catalog-observation-test-${nonceDigits}-${process.pid}`;
 const observedMilkName = `Observed ${nonceDigits} milk`;
 const observedCoffeeName = `Observed ${nonceDigits} coffee`;
@@ -35,6 +38,14 @@ function gtin13(variant: number): string {
 
 function gtin8(variant: number): string {
   return withCheckDigit(`${nonceDigits.slice(0, 5)}${String(variant).padStart(2, "0")}`);
+}
+
+function databaseDate(value: unknown): Date {
+  const parsed = value instanceof Date ? value : new Date(String(value));
+  if (!Number.isFinite(parsed.getTime())) {
+    throw new Error("Catalog integration fixture returned an invalid database timestamp");
+  }
+  return parsed;
 }
 
 describe.skipIf(!runDatabaseIntegration).sequential(
@@ -370,7 +381,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       const [snapshotClock] = await first.sql`
         select clock_timestamp() as snapshot_at
       `;
-      const snapshotAt = snapshotClock!.snapshot_at as Date;
+      const snapshotAt = databaseDate(snapshotClock!.snapshot_at);
       await expect(
         appendObservation({
           canonicalProductId: productId,
@@ -391,7 +402,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       const [snapshotClock] = await first.sql`
         select clock_timestamp() as snapshot_at
       `;
-      const snapshotAt = snapshotClock!.snapshot_at as Date;
+      const snapshotAt = databaseDate(snapshotClock!.snapshot_at);
       const baseline = await firstReader.getMany([gtins.milk], snapshotAt);
       expect(baseline).toHaveLength(1);
 
@@ -436,7 +447,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       const [snapshotClock] = await first.sql`
         select clock_timestamp() as snapshot_at
       `;
-      const snapshotAt = snapshotClock!.snapshot_at as Date;
+      const snapshotAt = databaseDate(snapshotClock!.snapshot_at);
 
       try {
         await first.sql`
@@ -459,7 +470,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         expect(sourceClock?.changed_later).toBe(true);
         const current = await firstReader.getMany(
           [gtins.milk],
-          sourceClock!.current_at as Date,
+          databaseDate(sourceClock!.current_at),
         );
         expect(current[0]?.catalogEvidence.source.displayName).toBe(changedDisplayName);
       } finally {

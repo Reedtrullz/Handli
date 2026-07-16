@@ -13,15 +13,15 @@ const GTIN_ALIAS = "7038010000027";
 interface TestRow {
   amount_ore: number | null;
   chain: string | null;
-  checked_at: Date | null;
+  checked_at: Date | string | null;
   claim_eligibility: "historical_eligible" | "ordinary_only" | null;
   country_code: string | null;
   coverage_reason: string | null;
   coverage_state: string | null;
   display_name: string | null;
-  fetched_at: Date | null;
+  fetched_at: Date | string | null;
   gtin: string;
-  observed_at: Date | null;
+  observed_at: Date | string | null;
   product_id: number;
   raw_record_hash: string | null;
   record_id: number | null;
@@ -254,6 +254,22 @@ describe("PostgresPlanningEvidenceReader", () => {
 
     expect(result.priceEvidence.map(({ id }) => id)).toEqual(["price:101", "price:102"]);
     expect(result.historicalEligibleEvidenceIds).toEqual(["price:102"]);
+  });
+
+  it("normalizes raw timestamp text from the Drizzle-owned postgres client", async () => {
+    const { db } = databaseWith(() => resolved([
+      productRow(),
+      priceRow({
+        fetched_at: "2026-07-16 11:05:00+00",
+        observed_at: "2026-07-16 11:00:00+00",
+      }),
+      coverageRow({ checked_at: "2026-07-16 11:30:00+00" }),
+    ]));
+
+    const result = await new PostgresPlanningEvidenceReader(db).getMany([GTIN], AT);
+
+    expect(result.priceEvidence[0]?.observedAt).toBe("2026-07-16T11:00:00.000Z");
+    expect(result.coverageChecks[0]?.checkedAt).toBe("2026-07-16T11:30:00.000Z");
   });
 
   it("preserves requested GTIN aliases while deduplicating identical canonical evidence", async () => {

@@ -64,7 +64,10 @@ jobs:
           DATABASE_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
           RUN_DB_INTEGRATION: "1"
           WEB_DATABASE_URL: postgresql://handleplan_web:ci_web_url_safe_0000000000000000001@127.0.0.1:5432/handleplan
-        run: corepack pnpm --filter @handleplan/db test
+        # Integration files share one ephemeral database and deliberately append
+        # immutable audit rows, so file-level parallelism would invalidate their
+        # isolation contract even when every individual test is sequential.
+        run: corepack pnpm --filter @handleplan/db exec vitest run --no-file-parallelism
       - run: corepack pnpm typecheck
       - run: corepack pnpm lint
       - run: corepack pnpm test

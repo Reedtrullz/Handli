@@ -63,15 +63,15 @@ export interface PlanningEvidenceReader {
 interface PlanningEvidenceRow {
   amount_ore: number | null;
   chain: string | null;
-  checked_at: Date | null;
+  checked_at: Date | string | null;
   claim_eligibility: "historical_eligible" | "ordinary_only" | null;
   country_code: string | null;
   coverage_reason: string | null;
   coverage_state: string | null;
   display_name: string | null;
-  fetched_at: Date | null;
+  fetched_at: Date | string | null;
   gtin: string;
-  observed_at: Date | null;
+  observed_at: Date | string | null;
   product_id: number;
   raw_record_hash: string | null;
   record_id: number | null;
@@ -203,22 +203,27 @@ function sourceFor(row: PlanningEvidenceRow): ExactProductPlanApiEvidenceSource 
   return parsed.data;
 }
 
-function finiteDate(value: unknown): value is Date {
-  return value instanceof Date && isFiniteDate(value);
+function databaseDate(value: unknown): Date | undefined {
+  if (value instanceof Date) return isFiniteDate(value) ? value : undefined;
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  const parsed = new Date(value);
+  return isFiniteDate(parsed) ? parsed : undefined;
 }
 
 function priceFor(row: PlanningEvidenceRow, at: Date): PriceEvidence {
+  const observedAt = databaseDate(row.observed_at);
+  const fetchedAt = databaseDate(row.fetched_at);
   if (
     typeof row.record_id !== "number"
     || !Number.isSafeInteger(row.record_id)
     || row.record_id <= 0
     || typeof row.chain !== "string"
     || typeof row.amount_ore !== "number"
-    || !finiteDate(row.observed_at)
-    || !finiteDate(row.fetched_at)
-    || row.observed_at.getTime() > at.getTime()
-    || row.fetched_at.getTime() > at.getTime()
-    || row.fetched_at.getTime() < row.observed_at.getTime()
+    || observedAt === undefined
+    || fetchedAt === undefined
+    || observedAt.getTime() > at.getTime()
+    || fetchedAt.getTime() > at.getTime()
+    || fetchedAt.getTime() < observedAt.getTime()
     || typeof row.raw_record_hash !== "string"
     || !/^[0-9a-f]{64}$/.test(row.raw_record_hash)
     || typeof row.source_id !== "string"
@@ -235,7 +240,7 @@ function priceFor(row: PlanningEvidenceRow, at: Date): PriceEvidence {
     geographicScope: geographicScopeFor(row),
     id: `price:${row.record_id}`,
     kind: "price-evidence",
-    observedAt: row.observed_at.toISOString(),
+    observedAt: observedAt.toISOString(),
     priceKind: "ordinary",
     productMatch: {
       canonicalProductId: `product:${row.product_id}`,
@@ -255,13 +260,14 @@ function coverageFor(row: PlanningEvidenceRow, at: Date): CoverageCheck | undefi
       ? "source-unavailable"
       : undefined;
   if (state === undefined) return undefined;
+  const checkedAt = databaseDate(row.checked_at);
   if (
     typeof row.record_id !== "number"
     || !Number.isSafeInteger(row.record_id)
     || row.record_id <= 0
     || typeof row.chain !== "string"
-    || !finiteDate(row.checked_at)
-    || row.checked_at.getTime() > at.getTime()
+    || checkedAt === undefined
+    || checkedAt.getTime() > at.getTime()
     || typeof row.source_id !== "string"
   ) {
     throw new PlanningEvidenceReaderError("UNAVAILABLE");
@@ -269,7 +275,7 @@ function coverageFor(row: PlanningEvidenceRow, at: Date): CoverageCheck | undefi
   const parsed = coverageCheckSchema.safeParse({
     canonicalProductId: `product:${row.product_id}`,
     chainId: row.chain,
-    checkedAt: row.checked_at.toISOString(),
+    checkedAt: checkedAt.toISOString(),
     contractVersion: 1,
     geographicScope: geographicScopeFor(row),
     id: `coverage:${row.record_id}`,

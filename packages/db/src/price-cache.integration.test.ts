@@ -113,6 +113,14 @@ function integrationEan(suffix: number): string {
   return `703${integrationNonce.slice(0, 8)}${String(suffix).padStart(2, "0")}`;
 }
 
+function databaseDate(value: unknown): Date {
+  const parsed = value instanceof Date ? value : new Date(String(value));
+  if (!Number.isFinite(parsed.getTime())) {
+    throw new Error("Price-cache integration fixture returned an invalid database timestamp");
+  }
+  return parsed;
+}
+
 describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () => {
   let connection: DatabaseConnection;
   let cache: PostgresPriceCache;
@@ -583,7 +591,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       const [snapshotClock] = await connection.sql`
         select clock_timestamp() as snapshot_at
       `;
-      const snapshotAt = snapshotClock!.snapshot_at as Date;
+      const snapshotAt = databaseDate(snapshotClock!.snapshot_at);
       const persistedAt = new Date(snapshotAt.getTime() - 1_000).toISOString();
       const completedBeforeSnapshot = new Date(snapshotAt.getTime() - 500).toISOString();
       const observedBeforeSnapshot = new Date(snapshotAt.getTime() - 2_000).toISOString();
@@ -620,7 +628,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       const [identifierSnapshotClock] = await connection.sql`
         select clock_timestamp() as snapshot_at
       `;
-      const identifierSnapshotAt = identifierSnapshotClock!.snapshot_at as Date;
+      const identifierSnapshotAt = databaseDate(identifierSnapshotClock!.snapshot_at);
       await connection.sql`
         update product_identifiers
         set verified_at = ${new Date(identifierSnapshotAt.getTime() - 1_000).toISOString()}
@@ -646,7 +654,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       const [productSnapshotClock] = await connection.sql`
         select clock_timestamp() as snapshot_at
       `;
-      const productSnapshotAt = productSnapshotClock!.snapshot_at as Date;
+      const productSnapshotAt = databaseDate(productSnapshotClock!.snapshot_at);
       await connection.sql`
         update canonical_products set status = 'active'
         where id = ${mutableProduct!.product_id}
@@ -666,7 +674,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       const [scopeSnapshotClock] = await connection.sql`
         select clock_timestamp() as snapshot_at
       `;
-      const scopeSnapshotAt = scopeSnapshotClock!.snapshot_at as Date;
+      const scopeSnapshotAt = databaseDate(scopeSnapshotClock!.snapshot_at);
       await connection.sql`
         update geographic_scopes set status = 'active'
         where id = ${scope!.id}
@@ -686,7 +694,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       const [sourceSnapshotClock] = await connection.sql`
         select clock_timestamp() as snapshot_at
       `;
-      const sourceSnapshotAt = sourceSnapshotClock!.snapshot_at as Date;
+      const sourceSnapshotAt = databaseDate(sourceSnapshotClock!.snapshot_at);
       await connection.sql`
         update data_sources set runtime_state = 'approved' where id = 'kassalapp'
       `;
@@ -768,7 +776,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       returning created_at
     `;
 
-    expect((membership!.created_at as Date).getTime()).toBeGreaterThan(
+    expect(databaseDate(membership!.created_at).getTime()).toBeGreaterThan(
       new Date("2000-01-01T00:00:00Z").getTime(),
     );
     await expect(

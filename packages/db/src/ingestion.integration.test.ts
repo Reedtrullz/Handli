@@ -22,6 +22,14 @@ function expectSameInstant(actual: unknown, expected: Date): void {
   expect(parsed.toISOString()).toBe(expected.toISOString());
 }
 
+function databaseDate(value: unknown): Date {
+  const parsed = value instanceof Date ? value : new Date(String(value));
+  if (!Number.isFinite(parsed.getTime())) {
+    throw new Error("Ingestion integration fixture returned an invalid database timestamp");
+  }
+  return parsed;
+}
+
 function gtin13(variant: number): string {
   const digits = String(Date.now() % 100_000_000).padStart(8, "0");
   const body = `704${digits}${variant}`;
@@ -179,11 +187,11 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         from ingestion_runs
         where id = ${handle.id}
       `;
-      expect(terminalClock?.terminalized_at).toBeInstanceOf(Date);
-      expect(terminalClock?.terminalized_at.getTime())
-        .toBeGreaterThanOrEqual(terminalClock!.created_at.getTime());
-      expect(terminalClock?.terminalized_at.getTime())
-        .toBeGreaterThanOrEqual(terminalClock!.completed_at.getTime());
+      const terminalizedAt = databaseDate(terminalClock?.terminalized_at);
+      const createdAt = databaseDate(terminalClock?.created_at);
+      const completedAt = databaseDate(terminalClock?.completed_at);
+      expect(terminalizedAt.getTime()).toBeGreaterThanOrEqual(createdAt.getTime());
+      expect(terminalizedAt.getTime()).toBeGreaterThanOrEqual(completedAt.getTime());
     });
 
     it("canonicalizes catalog records only by exact valid GTIN", async () => {
@@ -653,7 +661,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         )
         returning created_at
       `;
-      expect((persisted!.created_at as Date).getTime()).toBeGreaterThan(
+      expect(databaseDate(persisted!.created_at).getTime()).toBeGreaterThan(
         new Date("2000-01-01T00:00:00Z").getTime(),
       );
 
