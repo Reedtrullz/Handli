@@ -87,6 +87,21 @@ describe("KassalappClient contract", () => {
     ]);
   });
 
+  it("omits search rows that cannot be used by the EAN-8/EAN-13 price contract", async () => {
+    const injectedFetch: typeof fetch = async () =>
+      jsonResponse({
+        data: [
+          searchFixture.data[0],
+          { ...searchFixture.data[0], ean: "16229001704", name: "Vendor-ID product" },
+          { ...searchFixture.data[0], ean: "17037154346104", name: "GTIN-14 product" },
+        ],
+      });
+
+    await expect(createClient(injectedFetch).searchProducts("melk", 10)).resolves.toEqual([
+      expect.objectContaining({ ean: EAN }),
+    ]);
+  });
+
   it("batches 101 EANs into requests of at most 100", async () => {
     const batchSizes: number[] = [];
     const injectedFetch: typeof fetch = async (_input, init) => {

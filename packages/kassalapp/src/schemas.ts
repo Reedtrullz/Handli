@@ -77,16 +77,22 @@ function normalizedPackage(
 export function normalizeSearchResponse(input: unknown): Product[] {
   const response = upstreamSearchResponseSchema.parse(input);
 
-  return response.data.map((product) =>
-    productSchema.parse({
+  return response.data.flatMap((product) => {
+    const normalized = productSchema.safeParse({
       ean: product.ean,
       name: product.name,
       ...(product.brand === undefined || product.brand === null || product.brand.trim() === ""
         ? {}
         : { brand: product.brand }),
       ...normalizedPackage(product.weight, product.weight_unit),
-    }),
-  );
+    });
+
+    // Kassalapp's search endpoint can return otherwise usable rows whose `ean`
+    // is a vendor identifier rather than an EAN-8/EAN-13. Such rows cannot be
+    // used by the bulk-price contract, so omit them without discarding the
+    // valid search results in the same response.
+    return normalized.success ? [normalized.data] : [];
+  });
 }
 
 export function normalizeBulkPriceResponse(input: unknown): PriceObservation[] {
