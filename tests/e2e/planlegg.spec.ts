@@ -93,7 +93,7 @@ function collectPublicEvidence(page: Page): PublicEvidence {
       stats.frameworkFontBodiesNotInspected += 1;
       return;
     }
-    if (BODYLESS_STATUSES.has(response.status())) {
+    if (BODYLESS_STATUSES.has(response.status()) || (response.status() >= 300 && response.status() < 400)) {
       stats.bodylessSameOriginResponses += 1;
       return;
     }
@@ -230,8 +230,9 @@ test("the leak detector sees authorization, cookie, and set-cookie values", asyn
 
 test("anonymous shopper approves matching and chooses every complete frontier plan", async ({ page }) => {
   const evidence = collectPublicEvidence(page);
-  await page.goto("/planlegg");
+  await page.goto("/");
 
+  await expect(page).toHaveURL(`${BASE_ORIGIN}/planlegg`);
   await expect(page).toHaveTitle("Handleplan");
   await expect(page.getByRole("heading", { name: "Hva skal du handle?" })).toBeVisible();
   await expect(page.getByText("Ingen konto nødvendig.")).toBeVisible();
