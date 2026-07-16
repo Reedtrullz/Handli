@@ -4,7 +4,11 @@
   "type": "module",
   "exports": {
     ".": "./src/price-cache.ts",
-    "./client": "./src/client.ts"
+    "./client": "./src/client.ts",
+    "./evidence": "./src/price-evidence.ts",
+    "./read-model": "./src/price-read-model.ts",
+    "./request-budget": "./src/request-budget.ts",
+    "./schema": "./src/schema.ts"
   },
   "scripts": {
     "db:migrate": "drizzle-kit push",

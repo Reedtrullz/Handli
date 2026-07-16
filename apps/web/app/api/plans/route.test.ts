@@ -107,6 +107,7 @@ describe("POST /api/plans", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       caveats: [
+        "Resultatet gjelder prisene Handleplan kunne verifisere; ukjent kjededekning kan påvirke sammenligningen.",
         "Kjedepris betyr ikke at varen er på lager eller har samme hyllepris i din butikk.",
         "Medlemspriser og kundeavis-tilbud er ikke med i denne beregningen.",
       ],

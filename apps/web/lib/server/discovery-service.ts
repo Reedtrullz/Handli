@@ -21,6 +21,7 @@ export interface DiscoveryOpportunity {
 export interface DiscoveryResult {
   generatedAt: string;
   opportunities: DiscoveryOpportunity[];
+  /** Both variants are read through the configured persisted read model. */
   priceDataSource: "upstream" | "cache";
 }
 
@@ -106,19 +107,29 @@ export class DiscoveryService implements DiscoveryServiceContract {
 
   async browse(signal?: AbortSignal): Promise<DiscoveryResult> {
     if (this.dependencies.gateway.browseCatalog) {
+      let items: Awaited<ReturnType<NonNullable<KassalappGateway["browseCatalog"]>>>;
       try {
-        const items = await this.dependencies.gateway.browseCatalog(BROWSE_LIMIT, signal);
-        const generatedAt = (this.dependencies.now ?? (() => new Date()))();
-        const products = [...new Map(items.map(({ product }) => [product.ean, product])).values()];
-        const prices = items.map(({ price }) => price);
-        const previousPrices = items.flatMap(({ previousPrice }) => previousPrice ? [previousPrice] : []);
-        try { await this.dependencies.cache.putMany(prices, generatedAt); } catch { /* Browse remains usable. */ }
-        return resultFor(products, prices, generatedAt, "upstream", previousPrices);
+        items = await this.dependencies.gateway.browseCatalog(BROWSE_LIMIT, signal);
       } catch (error) {
         if (error instanceof KassalappGatewayError && error.code === "CANCELLED") {
           throw new DiscoveryRequestCancelledError();
         }
         throw new DiscoveryUnavailableError();
+      }
+      const generatedAt = (this.dependencies.now ?? (() => new Date()))();
+      const products = [...new Map(items.map(({ product }) => [product.ean, product])).values()];
+      if (products.length === 0) {
+        return { generatedAt: generatedAt.toISOString(), opportunities: [], priceDataSource: "upstream" };
+      }
+      const eans = products.map(({ ean }) => ean);
+      const prices = items.map(({ price }) => price);
+      const previousPrices = items.flatMap(({ previousPrice }) => previousPrice ? [previousPrice] : []);
+      try {
+        await this.dependencies.cache.putMany([...prices, ...previousPrices], generatedAt);
+        const admittedPrices = await this.dependencies.cache.getMany(eans);
+        return resultFor(products, admittedPrices, generatedAt, "upstream", previousPrices);
+      } catch {
+        return this.cachedResultOrUnavailable(products, eans, generatedAt);
       }
     }
     return this.loadProductsAndPrices(
@@ -158,27 +169,34 @@ export class DiscoveryService implements DiscoveryServiceContract {
     try {
       const rows = await this.dependencies.gateway.getBulkPrices(eans, signal);
       const generatedAt = now();
-      try {
-        await this.dependencies.cache.putMany(rows, generatedAt);
-      } catch {
-        // Fresh validated upstream data remains usable when the cache write fails.
-      }
-      return resultFor(products, rows, generatedAt, "upstream");
+      await this.dependencies.cache.putMany(rows, generatedAt);
+      const admittedRows = await this.dependencies.cache.getMany(eans);
+      return resultFor(products, admittedRows, generatedAt, "upstream");
     } catch (error) {
       if (error instanceof KassalappGatewayError && error.code === "CANCELLED") {
         throw new DiscoveryRequestCancelledError();
       }
       const generatedAt = now();
-      try {
-        return resultFor(
-          products,
-          await this.dependencies.cache.getMany(eans),
-          generatedAt,
-          "cache",
-        );
-      } catch {
-        throw new DiscoveryUnavailableError();
-      }
+      return this.cachedResultOrUnavailable(products, eans, generatedAt);
     }
+  }
+
+  private async cachedResultOrUnavailable(
+    products: Product[],
+    eans: string[],
+    generatedAt: Date,
+  ): Promise<DiscoveryResult> {
+    try {
+      const result = resultFor(
+        products,
+        await this.dependencies.cache.getMany(eans),
+        generatedAt,
+        "cache",
+      );
+      if (result.opportunities.length > 0) return result;
+    } catch {
+      // Collapse storage details into the public unavailable state.
+    }
+    throw new DiscoveryUnavailableError();
   }
 }

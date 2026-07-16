@@ -32,7 +32,33 @@ describe("readServerEnv", () => {
       KASSAL_API_KEY: "test-key",
       DATABASE_URL: "postgresql://localhost/handleplan",
       KASSAL_BASE_URL: "https://kassal.app/api/v1",
+      PRICE_EVIDENCE_READ_MODEL: "legacy",
     });
+  });
+
+  it.each(["legacy", "shadow", "evidence"] as const)(
+    "accepts the %s price evidence read model",
+    (PRICE_EVIDENCE_READ_MODEL) => {
+      expect(
+        readServerEnv({
+          KASSAL_API_KEY: "test-key",
+          DATABASE_URL: "postgresql://localhost/handleplan",
+          KASSAL_BASE_URL: "https://kassal.app/api/v1",
+          PRICE_EVIDENCE_READ_MODEL,
+        }),
+      ).toEqual(expect.objectContaining({ PRICE_EVIDENCE_READ_MODEL }));
+    },
+  );
+
+  it("rejects an unknown price evidence read model", () => {
+    expect(() =>
+      readServerEnv({
+        KASSAL_API_KEY: "test-key",
+        DATABASE_URL: "postgresql://localhost/handleplan",
+        KASSAL_BASE_URL: "https://kassal.app/api/v1",
+        PRICE_EVIDENCE_READ_MODEL: "prefer-newest",
+      }),
+    ).toThrow(/PRICE_EVIDENCE_READ_MODEL/);
   });
 
   it("allows an explicit fake mode without production credentials", () => {

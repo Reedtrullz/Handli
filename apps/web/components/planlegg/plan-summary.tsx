@@ -28,7 +28,7 @@ export function PlanSummary({
       </div>
       <dl className="result-metrics">
         <div><dt>Butikker</dt><dd>{plan.chains.length}</dd></div>
-        <div><dt>Komplett dekning</dt><dd>Alle {requiredItems} nødvendige varer er med</dd></div>
+        <div><dt>Komplett handlekurv</dt><dd>Alle {requiredItems} nødvendige varer er med</dd></div>
         <div><dt>Bytter</dt><dd>{plan.substitutions.length}</dd></div>
       </dl>
     </section>

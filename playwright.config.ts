@@ -19,7 +19,7 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: "pnpm --filter web exec next dev --hostname 127.0.0.1 --port 3109",
+    command: "corepack pnpm --filter web exec next dev --hostname 127.0.0.1 --port 3109",
     env: {
       KASSAL_MODE: "fake",
       KASSAL_API_KEY: leakSentinel,

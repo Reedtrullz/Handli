@@ -27,10 +27,11 @@ The 1Password Developer Environment is named `Clankus`. Use the variable names a
   become Phase 1 observations.
 - Public errors use allow-listed codes and never include upstream URLs, headers, bodies, stack causes, or credentials.
 
-The adapter was reconciled against Kassalapp's published OpenAPI contract and a
-live, value-redacted search plus bulk-price probe on 16 July 2026. Synthetic
-fixtures mirror only the fields Handleplan consumes; live values and credentials
-are never committed.
+The adapter was reconciled against Kassalapp's published OpenAPI contract.
+Synthetic fixtures mirror only the fields Handleplan consumes; live values and
+credentials are never committed. No credentialed live probe is recorded as
+release evidence yet; when one is run, store only dated, value-redacted contract
+results under `docs/evidence/v1`.
 
 ## Price meaning and non-claims
 

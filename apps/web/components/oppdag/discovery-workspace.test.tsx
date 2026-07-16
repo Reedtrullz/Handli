@@ -63,12 +63,18 @@ describe("Oppdag discovery workspace", () => {
 
     expect(await screen.findByRole("heading", { name: "TINE Lettmelk 1 % 1 l" })).toBeVisible();
     expect(search).toHaveBeenCalledWith(undefined, expect.any(AbortSignal));
-    expect(screen.getByRole("heading", { name: "Beste prisfunn akkurat nå" })).toBeVisible();
-    expect(screen.getByText("prisfall observert hos REMA 1000")).toBeVisible();
-    expect(screen.getByText(/Forrige observert:/)).toHaveTextContent("Forrige observert: 29,90 kr");
-    expect(screen.getByText("Spar 6,00 kr (20,1 %)")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Prisoversikt akkurat nå" })).toBeVisible();
+    expect(screen.getByText(/Beskyttet alfa:/)).toHaveTextContent(
+      "Beskyttet alfa: Dekningen er ufullstendig",
+    );
+    expect(screen.getByText("lavere enn en tidligere observasjon hos REMA 1000")).toBeVisible();
+    expect(screen.getByText(/Tidligere observert:/)).toHaveTextContent("Tidligere observert: 29,90 kr");
+    expect(screen.getByText("6,00 kr lavere enn denne observasjonen (20,1 %)")).toBeVisible();
+    expect(screen.queryByText(/^Spar /)).not.toBeInTheDocument();
+    expect(document.querySelector(".previous-observation s")).toBeNull();
+    expect(screen.queryByText(/Dokumenterte prisfall/)).not.toBeInTheDocument();
     expect(screen.getByText(/lavere enn høyeste kjedepris/)).toBeVisible();
-    expect(screen.getByText(/Kassalapp direkte/)).toBeVisible();
+    expect(screen.getByText(/Kassalapp via kontrollert prisgrunnlag/)).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "Bunnpris" }));
     expect(screen.getByRole("button", { name: "Bunnpris" })).toHaveAttribute("aria-pressed", "true");
@@ -95,7 +101,7 @@ describe("Oppdag discovery workspace", () => {
     const user = userEvent.setup();
     const search = vi.fn<DiscoverySearch>().mockResolvedValue(response);
     render(<DiscoveryWorkspace searchDiscovery={search} storage={memoryStorage()} />);
-    await screen.findByRole("heading", { name: "Beste prisfunn akkurat nå" });
+    await screen.findByRole("heading", { name: "Prisoversikt akkurat nå" });
 
     await user.type(screen.getByLabelText("Filtrer varene (valgfritt)"), "kaffe");
     await user.click(screen.getByRole("button", { name: "Søk" }));
@@ -104,7 +110,7 @@ describe("Oppdag discovery workspace", () => {
 
     await user.click(screen.getByRole("button", { name: "Vis alle prisfunn" }));
     await waitFor(() => expect(search).toHaveBeenLastCalledWith(undefined, expect.any(AbortSignal)));
-    expect(screen.getByRole("heading", { name: "Beste prisfunn akkurat nå" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Prisoversikt akkurat nå" })).toBeVisible();
   });
 
   it("adds an exact product to the basket shared with Planlegg", async () => {

@@ -183,9 +183,13 @@ function DiscoveryWorkspaceClient({
         <div>
           <p>Live kjedepriser</p>
           <h1 id="oppdag-title">Oppdag</h1>
-          <span>Bla gjennom ferske kjedepriser, se hvor varen er billigst og legg funn rett i handlelisten.</span>
+          <span>Bla gjennom ferske kjedepriser, sammenlign de prisene som faktisk er vist og legg funn rett i handlelisten.</span>
         </div>
         <span className="discovery-badge">Ikke sponset</span>
+      </section>
+
+      <section className="coverage-notice" aria-label="Dekningsstatus">
+        <p>Beskyttet alfa: Dekningen er ufullstendig. En kjede kan mangle for enkelte varer, og Handleplan kårer derfor ikke en landsdekkende vinner.</p>
       </section>
 
       <div className="oppdag-grid">
@@ -218,7 +222,7 @@ function DiscoveryWorkspaceClient({
                   key={option}
                   type="button"
                   onClick={() => setChain(option)}
-                >{option === "all" ? "Beste på tvers" : chainLabels[option]}</button>
+                >{option === "all" ? "Alle viste kjeder" : chainLabels[option]}</button>
               ))}
             </div>
           </section>
@@ -228,10 +232,10 @@ function DiscoveryWorkspaceClient({
               <div>
                 <h2 id="discovery-results-title">{submittedQuery
                   ? `Prisfunn for «${submittedQuery}»`
-                  : chain === "all" ? "Beste prisfunn akkurat nå" : `Aktuelle priser hos ${chainLabels[chain]}`}</h2>
+                  : chain === "all" ? "Prisoversikt akkurat nå" : `Aktuelle priser hos ${chainLabels[chain]}`}</h2>
                 <p>{chain === "all"
-                  ? "Dokumenterte prisfall vises først, deretter største observerte prisforskjell mellom kjedene."
-                  : `Dokumenterte prisfall og ferske prisobservasjoner fra ${chainLabels[chain]} – ingen søk nødvendig.`}</p>
+                  ? "Observerte prisendringer vises først, deretter prisforskjeller mellom kjedene som finnes i datagrunnlaget."
+                  : `Tidligere og ferske prisobservasjoner fra ${chainLabels[chain]} – ingen søk nødvendig.`}</p>
               </div>
               {status === "ready" ? <span>{visible.length} funn</span> : null}
             </div>
@@ -270,12 +274,12 @@ function DiscoveryWorkspaceClient({
                           <div className="opportunity-best-price">
                             <strong>{formatNok(best.amountOre)}</strong>
                             <span>{previous
-                              ? `prisfall observert hos ${chainLabels[best.chain]}`
+                              ? `lavere enn en tidligere observasjon hos ${chainLabels[best.chain]}`
                               : chain === "all" && prices.length > 1
-                              ? `lavest hos ${chainLabels[best.chain]}`
+                              ? `lavest av viste priser hos ${chainLabels[best.chain]}`
                               : `observert hos ${chainLabels[best.chain]}`}</span>
-                            {previous ? <small className="previous-observation">Forrige observert: <s>{formatNok(previous.amountOre)}</s></small> : null}
-                            {previous ? <small className="opportunity-saving">Spar {formatNok(savingOre)} ({formatPercent(savingOre / previous.amountOre)})</small> : null}
+                            {previous ? <small className="previous-observation">Tidligere observert: {formatNok(previous.amountOre)}</small> : null}
+                            {previous ? <small className="observation-change">{formatNok(savingOre)} lavere enn denne observasjonen ({formatPercent(savingOre / previous.amountOre)})</small> : null}
                             {spread > 0 ? <small>{formatNok(spread)} lavere enn høyeste kjedepris</small> : null}
                           </div>
                         </div>
@@ -319,8 +323,8 @@ function DiscoveryWorkspaceClient({
           <div className="discovery-trust-card">
             <h2>Hva betyr et prisfunn?</h2>
             <p>Dette er observerte kjedepriser og prisforskjeller, ikke nødvendigvis en offisiell rabatt eller et løfte om lager og hyllepris.</p>
-            <p>«Forrige observert» kommer fra Kassalapps prishistorikk og er ikke nødvendigvis butikkens offisielle førpris. Medlemspriser og kundeavistilbud vises først når Handleplan har et verifisert datagrunnlag.</p>
-            {result ? <small>Datakilde: {result.priceDataSource === "upstream" ? "Kassalapp direkte" : "lokal reservebuffer"} • beregnet {formatObservedAt(result.generatedAt)}</small> : null}
+            <p>«Tidligere observert» er én eldre prisobservasjon, ikke butikkens offisielle førpris og ikke en rabattberegning. Medlemspriser og kundeavistilbud vises først når Handleplan har et rettighetsavklart og verifisert datagrunnlag.</p>
+            {result ? <small>Datakilde: {result.priceDataSource === "upstream" ? "Kassalapp via kontrollert prisgrunnlag" : "kontrollert lokal reservebuffer"} • beregnet {formatObservedAt(result.generatedAt)}</small> : null}
           </div>
         </aside>
       </div>

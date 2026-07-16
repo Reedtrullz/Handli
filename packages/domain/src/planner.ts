@@ -1,5 +1,5 @@
 import {
-  planRequestSchema,
+  sourceNeutralPlanRequestSchema,
   type MatchRule,
   type MoneyOre,
   type Need,
@@ -11,10 +11,10 @@ import { matchProducts } from "./matching";
 import { classifyFreshness } from "./price-eligibility";
 
 type Chain = PriceObservation["chain"];
-type Assignment = PlanResult["assignments"][number];
+type Assignment<SourceId extends string> = PlanResult<SourceId>["assignments"][number];
 
-interface AssignmentCandidate {
-  assignment: Assignment;
+interface AssignmentCandidate<SourceId extends string> {
+  assignment: Assignment<SourceId>;
 }
 
 const CHAIN_ORDER: readonly Chain[] = ["bunnpris", "extra", "rema-1000"];
@@ -54,7 +54,10 @@ function combinations(chains: readonly Chain[], maximum: number): Chain[][] {
   return result;
 }
 
-function compareCandidates(left: AssignmentCandidate, right: AssignmentCandidate): number {
+function compareCandidates<SourceId extends string>(
+  left: AssignmentCandidate<SourceId>,
+  right: AssignmentCandidate<SourceId>,
+): number {
   return (
     left.assignment.costOre - right.assignment.costOre ||
     compareText(left.assignment.ean, right.assignment.ean) ||
@@ -63,7 +66,7 @@ function compareCandidates(left: AssignmentCandidate, right: AssignmentCandidate
   );
 }
 
-function assignmentKey(assignment: Assignment): string {
+function assignmentKey<SourceId extends string>(assignment: Assignment<SourceId>): string {
   return [
     assignment.needId,
     assignment.ean,
@@ -73,7 +76,7 @@ function assignmentKey(assignment: Assignment): string {
   ].join(":");
 }
 
-function planIdentity(assignments: readonly Assignment[]): string {
+function planIdentity<SourceId extends string>(assignments: readonly Assignment<SourceId>[]): string {
   return assignments.map(assignmentKey).join("|");
 }
 
@@ -90,15 +93,15 @@ function stableHash(value: string): string {
   return `${(first >>> 0).toString(36)}${(second >>> 0).toString(36)}`;
 }
 
-function planForSubset(
+function planForSubset<SourceId extends string>(
   requiredNeeds: readonly Need[],
   rulesById: ReadonlyMap<string, MatchRule>,
-  request: PlanRequest,
-  eligiblePrices: readonly PriceObservation[],
+  request: PlanRequest<SourceId>,
+  eligiblePrices: readonly PriceObservation<SourceId>[],
   subset: readonly Chain[],
-): PlanResult | undefined {
+): PlanResult<SourceId> | undefined {
   const subsetSet = new Set(subset);
-  const assignments: Assignment[] = [];
+  const assignments: Assignment<SourceId>[] = [];
   const substitutions: string[] = [];
   const freshness: Record<string, string> = {};
 
@@ -111,7 +114,7 @@ function planForSubset(
     const matchingEans = new Set(
       matchProducts(need, rule, request.products).map(({ ean }) => ean),
     );
-    const candidates: AssignmentCandidate[] = [];
+    const candidates: AssignmentCandidate<SourceId>[] = [];
 
     for (const observation of eligiblePrices) {
       if (!subsetSet.has(observation.chain) || !matchingEans.has(observation.ean)) {
@@ -173,7 +176,10 @@ function planForSubset(
   };
 }
 
-function dominates(left: PlanResult, right: PlanResult): boolean {
+function dominates<SourceId extends string>(
+  left: PlanResult<SourceId>,
+  right: PlanResult<SourceId>,
+): boolean {
   const noWorse =
     left.totalOre <= right.totalOre &&
     left.chains.length <= right.chains.length &&
@@ -186,7 +192,10 @@ function dominates(left: PlanResult, right: PlanResult): boolean {
   return noWorse && strictlyBetter;
 }
 
-function comparePlans(left: PlanResult, right: PlanResult): number {
+function comparePlans<SourceId extends string>(
+  left: PlanResult<SourceId>,
+  right: PlanResult<SourceId>,
+): number {
   return (
     left.chains.length - right.chains.length ||
     left.substitutions.length - right.substitutions.length ||
@@ -195,16 +204,19 @@ function comparePlans(left: PlanResult, right: PlanResult): number {
   );
 }
 
-export function calculatePlans(request: PlanRequest, now: Date): PlanResult[] {
+export function calculatePlans<SourceId extends string = "kassalapp">(
+  request: PlanRequest<SourceId>,
+  now: Date,
+): PlanResult<SourceId>[] {
   if (!Number.isFinite(now.getTime())) {
     return [];
   }
 
-  const parsed = planRequestSchema.safeParse(request);
+  const parsed = sourceNeutralPlanRequestSchema.safeParse(request);
   if (!parsed.success) {
     return [];
   }
-  const validated = parsed.data;
+  const validated = parsed.data as PlanRequest<SourceId>;
 
   if (
     !hasUniqueIds(validated.needs) ||
@@ -233,9 +245,9 @@ export function calculatePlans(request: PlanRequest, now: Date): PlanResult[] {
     .map((subset) =>
       planForSubset(requiredNeeds, rulesById, validated, eligiblePrices, subset),
     )
-    .filter((plan): plan is PlanResult => plan !== undefined);
+    .filter((plan): plan is PlanResult<SourceId> => plan !== undefined);
 
-  const uniqueAssignments = new Map<string, PlanResult>();
+  const uniqueAssignments = new Map<string, PlanResult<SourceId>>();
   for (const plan of plans.sort(comparePlans)) {
     uniqueAssignments.set(planIdentity(plan.assignments), plan);
   }

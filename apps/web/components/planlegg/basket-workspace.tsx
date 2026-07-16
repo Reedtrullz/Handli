@@ -286,9 +286,9 @@ function BasketWorkspaceClient({
                 href={basket.needs.length > 0 ? "/planlegg/resultat" : undefined}
                 aria-disabled={basket.needs.length === 0}
               >
-                Finn beste handleplan <span aria-hidden="true">→</span>
+                Finn handleplan <span aria-hidden="true">→</span>
               </a>
-              <p className="plan-note">Vi sammenligner komplette kurver på tvers av inntil 3 butikker for å gi deg lavest mulig totalpris.</p>
+              <p className="plan-note">Vi sammenligner komplette kurver blant prisene vi kan verifisere, på tvers av inntil 3 butikker. Ukjent dekning vises i resultatet.</p>
             </div>
             <p className="local-note">Dine preferanser lagres lokalt i nettleseren. Ingen konto nødvendig.</p>
         </aside>

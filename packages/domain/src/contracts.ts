@@ -1,6 +1,9 @@
 import { z } from "zod";
 
+import { sourceIdSchema } from "./contract-primitives";
+
 export type MoneyOre = number & { readonly __moneyOre: unique symbol };
+export const MAX_PERSISTED_MONEY_ORE = 2_147_483_647;
 
 export type MatchMode = "exact" | "constrained" | "flexible";
 
@@ -33,23 +36,23 @@ export interface Product {
   productFamily?: string;
 }
 
-export interface PriceObservation {
+export interface PriceObservation<SourceId extends string = "kassalapp"> {
   ean: string;
   chain: "bunnpris" | "rema-1000" | "extra";
   amountOre: MoneyOre;
   observedAt: string;
-  source: "kassalapp";
+  source: SourceId;
 }
 
-export interface PlanRequest {
+export interface PlanRequest<SourceId extends string = "kassalapp"> {
   needs: Need[];
   matchingRules: MatchRule[];
   products: Product[];
-  prices: PriceObservation[];
+  prices: PriceObservation<SourceId>[];
   maxStores: 1 | 2 | 3;
 }
 
-export interface PlanResult {
+export interface PlanResult<SourceId extends string = "kassalapp"> {
   id: string;
   assignments: Array<{
     needId: string;
@@ -58,7 +61,7 @@ export interface PlanResult {
     quantity: number;
     costOre: MoneyOre;
     observedAt: string;
-    source: PriceObservation["source"];
+    source: SourceId;
   }>;
   totalOre: MoneyOre;
   chains: PriceObservation["chain"][];
@@ -69,10 +72,11 @@ export interface PlanResult {
 
 const nonEmptyStringSchema = z.string().min(1);
 const eanSchema = z.string().regex(/^(?:\d{8}|\d{13})$/);
-const moneyOreSchema = z
+export const moneyOreSchema = z
   .number()
   .int()
   .nonnegative()
+  .max(MAX_PERSISTED_MONEY_ORE)
   .transform((amount) => amount as MoneyOre);
 const chainSchema = z.enum(["bunnpris", "rema-1000", "extra"]);
 const sizeRangeSchema = z
@@ -143,12 +147,32 @@ export const productSchema: z.ZodType<Product> = z.object({
   productFamily: nonEmptyStringSchema.optional(),
 });
 
-export const priceObservationSchema: z.ZodType<PriceObservation> = z.object({
+const priceObservationBaseShape = {
   ean: eanSchema,
   chain: chainSchema,
   amountOre: moneyOreSchema,
   observedAt: z.iso.datetime({ offset: false, precision: 3 }),
+};
+
+export const sourceNeutralPriceObservationSchema: z.ZodType<PriceObservation<string>> = z.object({
+  ...priceObservationBaseShape,
+  source: sourceIdSchema,
+});
+
+// Compatibility schemas deliberately preserve the Kassalapp-only runtime
+// boundary used by existing clients. New callers opt into the explicitly named
+// source-neutral schemas instead of receiving a wider value through a narrow type.
+export const priceObservationSchema: z.ZodType<PriceObservation> = z.object({
+  ...priceObservationBaseShape,
   source: z.literal("kassalapp"),
+});
+
+export const sourceNeutralPlanRequestSchema: z.ZodType<PlanRequest<string>> = z.object({
+  needs: z.array(needSchema),
+  matchingRules: z.array(matchRuleSchema),
+  products: z.array(productSchema),
+  prices: z.array(sourceNeutralPriceObservationSchema),
+  maxStores: z.union([z.literal(1), z.literal(2), z.literal(3)]),
 });
 
 export const planRequestSchema: z.ZodType<PlanRequest> = z.object({
@@ -157,6 +181,31 @@ export const planRequestSchema: z.ZodType<PlanRequest> = z.object({
   products: z.array(productSchema),
   prices: z.array(priceObservationSchema),
   maxStores: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+});
+
+export const sourceNeutralPlanResultSchema: z.ZodType<PlanResult<string>> = z.object({
+  id: nonEmptyStringSchema,
+  assignments: z.array(
+    z.object({
+      needId: nonEmptyStringSchema,
+      ean: eanSchema,
+      chain: chainSchema,
+      quantity: z.number().positive(),
+      costOre: moneyOreSchema,
+      observedAt: z.iso.datetime({ offset: false, precision: 3 }),
+      source: sourceIdSchema,
+    }),
+  ),
+  totalOre: moneyOreSchema,
+  chains: z
+    .array(chainSchema)
+    .max(3)
+    .refine((chains) => new Set(chains).size === chains.length, {
+      message: "Plan result chains must be unique",
+    }),
+  substitutions: z.array(z.string()),
+  coverage: z.literal(1),
+  freshness: z.record(z.string(), z.string()),
 });
 
 export const planResultSchema: z.ZodType<PlanResult> = z.object({

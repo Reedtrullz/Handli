@@ -42,15 +42,18 @@ docker build --pull --build-arg "APP_COMMIT_SHA=$revision" --tag "$image" "$sour
 
 deploy() {
   target_revision=$1
+  migration_revision=$2
   target_image="handleplan:$target_revision"
+  migration_image="handleplan:$migration_revision"
   APP_COMMIT_SHA="$target_revision" HANDLEPLAN_IMAGE="$target_image" \
+    HANDLEPLAN_MIGRATION_IMAGE="$migration_image" \
     docker compose --env-file "$env_file" -f "$source_dir/deploy/compose.production.yml" up -d --wait --remove-orphans
 }
 
-if ! deploy "$revision"; then
+if ! deploy "$revision" "$revision"; then
   if [ -n "$previous_revision" ] && docker image inspect "handleplan:$previous_revision" >/dev/null 2>&1; then
     echo "Deployment failed; restoring $previous_revision" >&2
-    deploy "$previous_revision"
+    deploy "$previous_revision" "$revision"
   fi
   exit 1
 fi

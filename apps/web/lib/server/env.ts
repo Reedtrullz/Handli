@@ -13,6 +13,10 @@ const realServerEnvSchema = z.object({
   KASSAL_BASE_URL: z.url().refine((value) => new URL(value).protocol === "https:", {
     message: "KASSAL_BASE_URL must use https://",
   }),
+  PRICE_EVIDENCE_READ_MODEL: z
+    .enum(["legacy", "shadow", "evidence"])
+    .optional()
+    .default("legacy"),
 });
 
 const fakeServerEnvSchema = z.object({
@@ -26,6 +30,7 @@ export type ServerEnv =
       KASSAL_API_KEY: string;
       DATABASE_URL: string;
       KASSAL_BASE_URL: string;
+      PRICE_EVIDENCE_READ_MODEL: "legacy" | "shadow" | "evidence";
     };
 
 export function readServerEnv(
@@ -47,5 +52,6 @@ export function readServerEnv(
     KASSAL_API_KEY: parsed.KASSAL_API_KEY,
     DATABASE_URL: parsed.DATABASE_URL,
     KASSAL_BASE_URL: parsed.KASSAL_BASE_URL,
+    PRICE_EVIDENCE_READ_MODEL: parsed.PRICE_EVIDENCE_READ_MODEL,
   };
 }

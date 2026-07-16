@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://handle.reidar.tech/schemas/source-registry.v1.schema.json",
+  "title": "Handleplan source registry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["registryVersion", "reviewedAt", "intendedUse", "states", "policy", "sources"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "registryVersion": { "type": "string", "const": "1.0.0" },
+    "reviewedAt": { "type": "string", "format": "date" },
+    "intendedUse": { "type": "string", "minLength": 1 },
+    "states": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approved", "conditional", "blocked", "revoked"],
+      "properties": {
+        "approved": { "type": "string", "minLength": 1 },
+        "conditional": { "type": "string", "minLength": 1 },
+        "blocked": { "type": "string", "minLength": 1 },
+        "revoked": { "type": "string", "minLength": 1 }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "required": ["defaultState", "defaultRuntimeEnabled", "publicRankingRequires", "unknownPermissionBehavior", "stateChangeRequires"],
+      "properties": {
+        "defaultState": { "const": "blocked" },
+        "defaultRuntimeEnabled": { "const": false },
+        "publicRankingRequires": { "const": "approved" },
+        "unknownPermissionBehavior": { "const": "blocked" },
+        "stateChangeRequires": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/source" }
+    }
+  },
+  "$defs": {
+    "rightState": {
+      "enum": ["permitted", "conditional", "unknown", "prohibited", "required", "not_applicable"]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "owner", "runtimeState", "runtimeDefaultEnabled", "publicRankingEligible",
+        "intendedUse", "dataClasses", "rights", "rateLimit", "terminationRisk", "killSwitchKey",
+        "requiredActions", "knownUnknowns", "evidence", "revocationDisposition"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$" },
+        "owner": { "type": "string", "minLength": 1 },
+        "runtimeState": { "enum": ["approved", "conditional", "blocked", "revoked"] },
+        "runtimeDefaultEnabled": { "const": false },
+        "publicRankingEligible": { "type": "boolean" },
+        "intendedUse": { "type": "string", "minLength": 1 },
+        "dataClasses": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "rights": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["access", "processing", "retention", "derivedDisplay", "redistribution", "imagery", "marks", "attribution"],
+          "properties": {
+            "access": { "$ref": "#/$defs/rightState" },
+            "processing": { "$ref": "#/$defs/rightState" },
+            "retention": { "$ref": "#/$defs/rightState" },
+            "derivedDisplay": { "$ref": "#/$defs/rightState" },
+            "redistribution": { "$ref": "#/$defs/rightState" },
+            "imagery": { "$ref": "#/$defs/rightState" },
+            "marks": { "$ref": "#/$defs/rightState" },
+            "attribution": { "$ref": "#/$defs/rightState" }
+          }
+        },
+        "rateLimit": { "type": "string", "minLength": 1 },
+        "terminationRisk": { "type": "string", "minLength": 1 },
+        "killSwitchKey": { "type": "string", "pattern": "^source\\.[a-z0-9.-]+\\.enabled$" },
+        "requiredActions": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "knownUnknowns": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["url", "kind", "accessedAt", "finding"],
+            "properties": {
+              "url": { "type": "string", "format": "uri" },
+              "kind": { "type": "string", "minLength": 1 },
+              "accessedAt": { "type": "string", "format": "date" },
+              "finding": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "revocationDisposition": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

@@ -8,6 +8,7 @@ import {
 const MAX_BODY_BYTES = 64 * 1024;
 
 export const PLAN_CAVEATS = [
+  "Resultatet gjelder prisene Handleplan kunne verifisere; ukjent kjededekning kan påvirke sammenligningen.",
   "Kjedepris betyr ikke at varen er på lager eller har samme hyllepris i din butikk.",
   "Medlemspriser og kundeavis-tilbud er ikke med i denne beregningen.",
 ] as const;

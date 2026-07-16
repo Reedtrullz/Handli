@@ -51,8 +51,11 @@ function price(observedAt = "2026-07-15T10:00:00.000Z"): PriceObservation {
 class MemoryCache implements PriceCache {
   writes: PriceObservation[][] = [];
   writeTimes: Date[] = [];
+  private readonly rows: PriceObservation[];
 
-  constructor(private readonly rows: PriceObservation[] = []) {}
+  constructor(rows: PriceObservation[] = []) {
+    this.rows = [...rows];
+  }
 
   async getMany(eans: string[]): Promise<PriceObservation[]> {
     const selected = new Set(eans);
@@ -62,6 +65,16 @@ class MemoryCache implements PriceCache {
   async putMany(rows: PriceObservation[], now?: Date): Promise<void> {
     this.writes.push(rows);
     if (now !== undefined) this.writeTimes.push(now);
+    for (const row of rows) {
+      const existingIndex = this.rows.findIndex(
+        (existing) => existing.ean === row.ean && existing.chain === row.chain,
+      );
+      if (existingIndex === -1) {
+        this.rows.push(row);
+      } else if (this.rows[existingIndex]!.observedAt < row.observedAt) {
+        this.rows[existingIndex] = row;
+      }
+    }
   }
 }
 
@@ -95,6 +108,56 @@ describe("PlanService", () => {
     expect(cache.writes).toEqual([[price()]]);
     expect(result.generatedAt).toBe(NOW.toISOString());
     expect(seenSignal).toBe(signal);
+  });
+
+  it("never plans from upstream rows that the configured read model rejects", async () => {
+    const rejectingReadModel: PriceCache = {
+      getMany: async () => [],
+      putMany: async () => undefined,
+    };
+
+    const result = await new PlanService({
+      cache: rejectingReadModel,
+      gateway: new FakeKassalappGateway([product], [price()]),
+      now: () => NOW,
+    }).calculate(request);
+
+    expect(result).toMatchObject({ plans: [], priceDataSource: "upstream" });
+  });
+
+  it("does not use raw upstream rows when evidence persistence fails", async () => {
+    const failingPersistence: PriceCache = {
+      getMany: async () => [],
+      putMany: async () => {
+        throw new Error("database unavailable");
+      },
+    };
+
+    await expect(
+      new PlanService({
+        cache: failingPersistence,
+        gateway: new FakeKassalappGateway([product], [price()]),
+        now: () => NOW,
+      }).calculate(request),
+    ).rejects.toBeInstanceOf(PriceDataUnavailableError);
+  });
+
+  it("uses previously admitted evidence when a refresh cannot be persisted", async () => {
+    const admitted = price("2026-07-15T09:00:00.000Z");
+    const failingRefresh: PriceCache = {
+      getMany: async () => [admitted],
+      putMany: async () => {
+        throw new Error("database unavailable");
+      },
+    };
+
+    const result = await new PlanService({
+      cache: failingRefresh,
+      gateway: new FakeKassalappGateway([product], [price()]),
+      now: () => NOW,
+    }).calculate(request);
+
+    expect(result).toMatchObject({ priceDataSource: "cache", plans: [{ totalOre: 2_190 }] });
   });
 
   it("evaluates successful upstream rows after the awaited response", async () => {

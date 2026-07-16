@@ -1,0 +1,45 @@
+{
+  "data": [
+    {
+      "ean": "7038010000010",
+      "name": "Tine Lettmelk 1 % 1l",
+      "weight": 1,
+      "weight_unit": "l",
+      "stores": [
+        {
+          "store": "COOP_EXTRA",
+          "name": "Extra",
+          "current_price": 21.9,
+          "current_unit_price": 21.9,
+          "current_unit_price_unit": "l",
+          "last_checked": "2026-07-15T08:30:00Z"
+        },
+        {
+          "store": "FUTURE_CHAIN",
+          "name": "Fremtid",
+          "current_price": 20,
+          "current_unit_price": 20,
+          "current_unit_price_unit": "l",
+          "last_checked": "2026-07-15T08:30:00Z"
+        },
+        {
+          "store": "REMA_1000",
+          "name": "REMA 1000",
+          "current_price": null,
+          "current_unit_price": null,
+          "current_unit_price_unit": null,
+          "last_checked": "2026-07-15T08:30:00Z"
+        }
+      ],
+      "price_history": [
+        { "price": 21.9, "date": "2026-07-15", "store": "COOP_EXTRA" }
+      ]
+    }
+  ],
+  "meta": {
+    "requested_eans": 1,
+    "found_products": 1,
+    "days_included": 30,
+    "is_premium": false
+  }
+}

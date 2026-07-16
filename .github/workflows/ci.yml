@@ -8,6 +8,20 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16.10-alpine@sha256:ab8380566c3ea09690a9ecaa85a59d82bfc6eb86744151a2a54335866c83a3e9
+        env:
+          POSTGRES_DB: handleplan
+          POSTGRES_PASSWORD: ci_admin_url_safe_0000000000000001
+          POSTGRES_USER: handleplan
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U handleplan -d handleplan"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0, Node 24 action runtime
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0, Node 24 action runtime
@@ -15,6 +29,38 @@ jobs:
           node-version: 22.22.3
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
+      - name: Validate V1 data
+        run: corepack pnpm validate:v1-data
+      - name: Apply production migrations twice
+        env:
+          APP_DATABASE_PASSWORD: ci_app_url_safe_0000000000000000001
+          DATABASE_MIGRATION_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
+          MIGRATIONS_DIR: ${{ github.workspace }}/deploy/migrations
+        run: |
+          node deploy/migrate.mjs
+          node deploy/migrate.mjs
+      - name: Prove migration upgrade and backup restore
+        env:
+          APP_DATABASE_PASSWORD: ci_app_url_safe_0000000000000000001
+          CI: "true"
+          DATABASE_ADMIN_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
+          MIGRATIONS_DIR: ${{ github.workspace }}/deploy/migrations
+          POSTGRES_CLIENT_HOST: 127.0.0.1
+          POSTGRES_CLIENT_NETWORK: host
+        run: node tests/acceptance/prove-database-upgrade.mjs
+      - name: Prove runtime database least privilege
+        env:
+          APP_DATABASE_PASSWORD: ci_app_url_safe_0000000000000000001
+          CI: "true"
+          DATABASE_ADMIN_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
+          MIGRATIONS_DIR: ${{ github.workspace }}/deploy/migrations
+          RUNTIME_ROLE_PROOF_DATABASE: handleplan_runtime_role_proof_ci
+        run: node tests/acceptance/prove-runtime-database-role.mjs
+      - name: Run PostgreSQL integration tests
+        env:
+          DATABASE_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
+          RUN_DB_INTEGRATION: "1"
+        run: corepack pnpm --filter @handleplan/db test
       - run: corepack pnpm typecheck
       - run: corepack pnpm lint
       - run: corepack pnpm test
@@ -22,9 +68,11 @@ jobs:
       - name: Validate deployment assets
         env:
           APP_COMMIT_SHA: ${{ github.sha }}
+          APP_DATABASE_PASSWORD: ci_app_url_safe_0000000000000000001
           HANDLEPLAN_IMAGE: handleplan:ci
+          HANDLEPLAN_MIGRATION_IMAGE: handleplan:ci
           KASSAL_API_KEY: ci-placeholder
-          POSTGRES_PASSWORD: ci-placeholder
+          POSTGRES_PASSWORD: ci_admin_url_safe_0000000000000001
         run: |
           sh -n deploy/*.sh
           node --check deploy/migrate.mjs

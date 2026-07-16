@@ -133,6 +133,7 @@ export type PlanApiRequest = z.infer<typeof planApiRequestSchema>;
 export interface PlanServiceResult {
   generatedAt: string;
   plans: PlanResult[];
+  /** Both variants are read through the configured persisted read model. */
   priceDataSource: "upstream" | "cache";
 }
 
@@ -239,14 +240,14 @@ export class PlanService implements PlanServiceContract {
         upstreamRows,
         evaluationNow,
       );
-      try {
-        await this.dependencies.cache.putMany(prices, evaluationNow);
-      } catch {
-        // A cache write is best-effort; fresh validated upstream data is still usable.
-      }
+      await this.dependencies.cache.putMany(prices, evaluationNow);
+      const admittedPrices = normalizePrices(
+        await this.dependencies.cache.getMany(eans),
+        evaluationNow,
+      );
       return {
         generatedAt: evaluationNow.toISOString(),
-        plans: calculatePlans(toPlannerRequest(input, prices), evaluationNow),
+        plans: calculatePlans(toPlannerRequest(input, admittedPrices), evaluationNow),
         priceDataSource: "upstream",
       };
     } catch (error) {

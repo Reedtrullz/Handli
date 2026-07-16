@@ -36,16 +36,21 @@ const upstreamBrowseResponseSchema = z.object({
     price_history: z.array(z.object({
       price: upstreamPriceAmountSchema,
       date: z.iso.datetime({ offset: true }),
-    })).max(366).optional().default([]),
-    store: z.object({ code: z.string() }),
-    updated_at: z.iso.datetime({ offset: true }),
+    })).max(366),
+    store: z.array(z.object({
+      name: z.string(),
+      code: z.string(),
+      url: z.string(),
+      logo: z.string(),
+    })).max(100),
+    updated_at: z.union([z.object({}).passthrough(), z.null()]),
   })).max(100),
 });
 
 const upstreamBulkStoreSchema = z.object({
   store: z.string(),
   current_price: upstreamPriceAmountSchema.nullable(),
-  last_checked: z.iso.datetime({ offset: true }),
+  last_checked: z.iso.datetime({ offset: true }).nullable(),
 });
 
 const upstreamBulkPriceResponseSchema = z.object({
@@ -107,7 +112,7 @@ export function normalizeSearchResponse(input: unknown): Product[] {
   });
 }
 
-export function normalizeBrowseResponse(input: unknown): Array<{
+export function normalizeBrowseResponse(input: unknown, expectedStoreCode?: string): Array<{
   product: Product;
   price: PriceObservation;
   previousPrice?: PriceObservation;
@@ -115,15 +120,23 @@ export function normalizeBrowseResponse(input: unknown): Array<{
   const response = upstreamBrowseResponseSchema.parse(input);
   return response.data.flatMap((row) => {
     const [product] = normalizeSearchResponse({ data: [row] });
-    const chain = chainByStoreCode[row.store.code];
+    const store = expectedStoreCode === undefined
+      ? row.store.filter(({ code }) => chainByStoreCode[code] !== undefined).length === 1
+        ? row.store.find(({ code }) => chainByStoreCode[code] !== undefined)
+        : undefined
+      : row.store.find(({ code }) => code === expectedStoreCode);
+    const chain = store === undefined ? undefined : chainByStoreCode[store.code];
     if (!product || !chain || row.current_price === null) return [];
     const currentAmountOre = Math.round(row.current_price * 100);
-    const currentObservedAt = new Date(row.updated_at).toISOString();
-    const previous = [...row.price_history]
-      .sort((left, right) => Date.parse(right.date) - Date.parse(left.date))
+    const history = [...row.price_history]
+      .sort((left, right) => Date.parse(right.date) - Date.parse(left.date));
+    const current = history.find(({ price }) => Math.round(price * 100) === currentAmountOre);
+    if (current === undefined) return [];
+    const currentObservedAt = new Date(current.date).toISOString();
+    const previous = history
       .find((candidate) => {
         const amountOre = Math.round(candidate.price * 100);
-        return Date.parse(candidate.date) < Date.parse(row.updated_at) && amountOre !== currentAmountOre;
+        return Date.parse(candidate.date) < Date.parse(current.date) && amountOre !== currentAmountOre;
       });
     const previousAmountOre = previous === undefined ? undefined : Math.round(previous.price * 100);
     return [{
@@ -156,7 +169,7 @@ export function normalizeBulkPriceResponse(input: unknown): PriceObservation[] {
   return response.data.flatMap((product) =>
     product.stores.flatMap((store) => {
       const chain = chainByStoreCode[store.store];
-      if (chain === undefined || store.current_price === null) return [];
+      if (chain === undefined || store.current_price === null || store.last_checked === null) return [];
       return [
         priceObservationSchema.parse({
           ean: product.ean,

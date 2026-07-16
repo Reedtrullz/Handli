@@ -6,6 +6,8 @@ import {
   planRequestSchema,
   planResultSchema,
   priceObservationSchema,
+  sourceNeutralPlanRequestSchema,
+  sourceNeutralPlanResultSchema,
 } from "./index";
 
 const validNeed = {
@@ -65,6 +67,30 @@ describe("domain schemas", () => {
 
   it("rejects a request allowing more than three stores", () => {
     expect(planRequestSchema.safeParse({ ...validRequest, maxStores: 4 }).success).toBe(false);
+  });
+
+  it("keeps legacy plan schemas Kassalapp-only while neutral schemas accept registered sources", () => {
+    const neutralPrice = { ...validPrice, source: "licensed-retailer-feed" };
+    const neutralRequest = { ...validRequest, prices: [neutralPrice] };
+    const neutralResult = {
+      ...validPlanResult,
+      assignments: [
+        {
+          needId: validNeed.id,
+          ean: validProduct.ean,
+          chain: validPrice.chain,
+          quantity: 1,
+          costOre: validPrice.amountOre,
+          observedAt: validPrice.observedAt,
+          source: neutralPrice.source,
+        },
+      ],
+    };
+
+    expect(sourceNeutralPlanRequestSchema.safeParse(neutralRequest).success).toBe(true);
+    expect(planRequestSchema.safeParse(neutralRequest).success).toBe(false);
+    expect(sourceNeutralPlanResultSchema.safeParse(neutralResult).success).toBe(true);
+    expect(planResultSchema.safeParse(neutralResult).success).toBe(false);
   });
 
   it("rejects an unapproved flexible matching rule", () => {

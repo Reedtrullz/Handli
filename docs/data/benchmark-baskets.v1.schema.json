@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://handle.reidar.tech/schemas/benchmark-baskets.v1.schema.json",
+  "title": "Handleplan benchmark basket corpus v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["corpusVersion", "createdAt", "description", "privacy", "defaultAssertions", "scenarios", "runs", "knownGaps"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "corpusVersion": { "const": "1.0.0" },
+    "createdAt": { "type": "string", "format": "date" },
+    "description": { "type": "string", "minLength": 1 },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["synthetic", "containsPersonalData", "containsOrigin", "containsLiveProviderData"],
+      "properties": {
+        "synthetic": { "const": true },
+        "containsPersonalData": { "const": false },
+        "containsOrigin": { "const": false },
+        "containsLiveProviderData": { "const": false }
+      }
+    },
+    "defaultAssertions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completeBasketRequired", "maximumStores", "integerOreRequired", "integerBaseUnitsRequired", "unknownMustRemainExplicit", "partialComparisonMustBeQualified"],
+      "properties": {
+        "completeBasketRequired": { "const": true },
+        "maximumStores": { "const": 3 },
+        "integerOreRequired": { "const": true },
+        "integerBaseUnitsRequired": { "const": true },
+        "unknownMustRemainExplicit": { "const": true },
+        "partialComparisonMustBeQualified": { "const": true }
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 20,
+      "maxItems": 20,
+      "items": { "$ref": "#/$defs/scenario" }
+    },
+    "runs": {
+      "type": "array",
+      "minItems": 60,
+      "items": { "$ref": "#/$defs/run" }
+    },
+    "knownGaps": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+  },
+  "$defs": {
+    "amount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "unit"],
+      "properties": {
+        "value": { "type": "integer", "minimum": 1 },
+        "unit": { "enum": ["g", "ml", "piece"] }
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["needId", "query", "requiredAmount", "matchMode", "constraints"],
+      "properties": {
+        "needId": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "query": { "type": "string", "minLength": 2 },
+        "requiredAmount": { "$ref": "#/$defs/amount" },
+        "matchMode": { "enum": ["flexible", "constrained"] },
+        "constraints": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "tags", "acceptanceFocus", "items"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^s[0-9]{2}-[a-z0-9-]+$" },
+        "name": { "type": "string", "minLength": 1 },
+        "tags": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "acceptanceFocus": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "items": { "type": "array", "minItems": 4, "items": { "$ref": "#/$defs/item" } }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "regionId", "scenarioId", "status"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "regionId": { "enum": ["no-0301-oslo", "no-4601-bergen", "no-5001-trondheim"] },
+        "scenarioId": { "type": "string", "pattern": "^s[0-9]{2}-[a-z0-9-]+$" },
+        "status": { "enum": ["pending_rights_and_measurement", "measured", "accepted", "failed", "suspended"] }
+      }
+    }
+  }
+}

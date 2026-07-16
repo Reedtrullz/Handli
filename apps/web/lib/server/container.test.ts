@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PostgresProviderRequestBudget } from "@handleplan/db/request-budget";
 
 vi.mock("server-only", () => ({}));
 
@@ -85,6 +86,36 @@ describe("fake server container", () => {
     });
 
     expect(result.plans).toEqual([]);
+  });
+});
+
+describe("real server container", () => {
+  it("injects the shared PostgreSQL Kassalapp request budget", () => {
+    const container = createServerContainer({
+      mode: "real",
+      DATABASE_URL: "postgresql://handleplan_app:password@127.0.0.1:5432/handleplan",
+      KASSAL_API_KEY: "test-only-key",
+      KASSAL_BASE_URL: "https://kassal.app/api/v1",
+      PRICE_EVIDENCE_READ_MODEL: "legacy",
+    });
+    const gateway = container.gateway as unknown as {
+      options: { requestCoordinator?: PostgresProviderRequestBudget };
+    };
+    const coordinator = gateway.options.requestCoordinator;
+
+    expect(coordinator).toBeInstanceOf(PostgresProviderRequestBudget);
+    expect(
+      coordinator as unknown as {
+        options: Record<string, unknown>;
+      },
+    ).toMatchObject({
+      options: {
+        limit: 60,
+        maxWaitMs: 1_500,
+        providerKey: "kassalapp",
+        windowMs: 60_000,
+      },
+    });
   });
 });
 

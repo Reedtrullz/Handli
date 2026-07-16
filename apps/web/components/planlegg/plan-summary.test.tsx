@@ -14,6 +14,8 @@ function summary(totalOre: number) {
 describe("PlanSummary price comparison", () => {
   it("describes positive, zero, and negative savings truthfully", () => {
     const view = render(summary(9_000));
+    expect(screen.getByText("Komplett handlekurv")).toBeVisible();
+    expect(screen.queryByText("Komplett dekning")).not.toBeInTheDocument();
     expect(screen.getByText("10,00 kr spart")).toBeVisible();
     view.rerender(summary(10_000));
     expect(screen.getByText("Samme pris")).toBeVisible();

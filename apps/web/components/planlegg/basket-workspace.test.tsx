@@ -39,6 +39,21 @@ afterEach(() => {
 });
 
 describe("Planlegg basket workspace", () => {
+  it("qualifies planning claims before comparison coverage is known", () => {
+    render(
+      <BasketWorkspace
+        createId={idFactory()}
+        searchProducts={async () => []}
+        searchDelayMs={0}
+      />,
+    );
+
+    expect(screen.getByText("Finn handleplan")).toBeVisible();
+    expect(screen.getByText(/komplette kurver blant prisene vi kan verifisere/i)).toBeVisible();
+    expect(screen.queryByText(/lavest mulig totalpris/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/beste handleplan/i)).not.toBeInTheDocument();
+  });
+
   it("supports combobox arrows, enter, escape, and locks an exact selection", async () => {
     const user = userEvent.setup();
     render(

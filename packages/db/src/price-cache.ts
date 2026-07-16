@@ -2,6 +2,10 @@ import { priceObservationSchema, type PriceObservation } from "@handleplan/domai
 import { asc, inArray, lt, sql } from "drizzle-orm";
 
 import type { HandleplanDatabase } from "./client";
+import {
+  PostgresPriceEvidenceMirror,
+  type PriceEvidenceMirror,
+} from "./price-evidence";
 import { priceCache, type NewPriceCacheRow, type PriceCacheRow } from "./schema";
 
 export interface PriceCache {
@@ -62,7 +66,14 @@ export function filterCacheablePriceObservations(
 }
 
 export class PostgresPriceCache implements PriceCache {
-  constructor(private readonly db: HandleplanDatabase) {}
+  private readonly evidenceMirror: PriceEvidenceMirror;
+
+  constructor(
+    private readonly db: HandleplanDatabase,
+    evidenceMirror?: PriceEvidenceMirror,
+  ) {
+    this.evidenceMirror = evidenceMirror ?? new PostgresPriceEvidenceMirror(db);
+  }
 
   async getMany(eans: string[]): Promise<PriceObservation[]> {
     const uniqueEans = [...new Set(eans)];
@@ -78,20 +89,38 @@ export class PostgresPriceCache implements PriceCache {
   }
 
   async putMany(rows: PriceObservation[], now: Date = new Date()): Promise<void> {
-    const dedupedRows = dedupePriceObservations(filterCacheablePriceObservations(rows, now));
+    const cacheableRows = filterCacheablePriceObservations(rows, now);
+    const dedupedRows = dedupePriceObservations(cacheableRows);
     if (dedupedRows.length === 0) return;
 
-    await this.db
-      .insert(priceCache)
-      .values(dedupedRows.map(toPriceCacheRow))
-      .onConflictDoUpdate({
-        target: [priceCache.ean, priceCache.chain],
-        set: {
-          amountOre: sql`excluded.amount_ore`,
-          observedAt: sql`excluded.observed_at`,
-          fetchedAt: sql`now()`,
-        },
-        setWhere: cacheReplacementCondition,
-      });
+    await this.db.transaction(async (transaction) => {
+      await transaction
+        .insert(priceCache)
+        .values(dedupedRows.map(toPriceCacheRow))
+        .onConflictDoUpdate({
+          target: [priceCache.ean, priceCache.chain],
+          set: {
+            amountOre: sql`excluded.amount_ore`,
+            observedAt: sql`excluded.observed_at`,
+            fetchedAt: sql`now()`,
+          },
+          setWhere: cacheReplacementCondition,
+        });
+      await this.evidenceMirror.append(cacheableRows, now, transaction);
+    });
   }
 }
+
+export {
+  PostgresPriceEvidenceMirror,
+  evidenceKeyForObservation,
+  type EvidenceMirrorResult,
+  type PriceEvidenceMirror,
+} from "./price-evidence";
+export {
+  EvidenceReadModelPriceCache,
+  PostgresEvidencePriceReader,
+  comparePriceReadModels,
+  type EvidenceReadModelMode,
+  type ReadModelComparison,
+} from "./price-read-model";

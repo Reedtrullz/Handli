@@ -1,7 +1,13 @@
 import "server-only";
 
-import { PostgresPriceCache, type PriceCache } from "@handleplan/db";
+import {
+  EvidenceReadModelPriceCache,
+  PostgresEvidencePriceReader,
+  PostgresPriceCache,
+  type PriceCache,
+} from "@handleplan/db";
 import { createDatabase } from "@handleplan/db/client";
+import { PostgresProviderRequestBudget } from "@handleplan/db/request-budget";
 import type { PriceObservation, Product } from "@handleplan/domain";
 import { FakeKassalappGateway, KassalappClient, type KassalappGateway } from "@handleplan/kassalapp";
 
@@ -92,12 +98,34 @@ export function createServerContainer(env: ServerEnv): ServerContainer {
   }
 
   const connection = createDatabase(env.DATABASE_URL);
+  const requestCoordinator = new PostgresProviderRequestBudget(connection.db, {
+    limit: 60,
+    maxWaitMs: 1_500,
+    providerKey: "kassalapp",
+    windowMs: 60_000,
+  });
   const gateway = new KassalappClient({
     apiKey: env.KASSAL_API_KEY,
     baseUrl: env.KASSAL_BASE_URL,
     fetch,
+    requestCoordinator,
   });
-  const cache = new PostgresPriceCache(connection.db);
+  const legacyCache = new PostgresPriceCache(connection.db);
+  const cache = new EvidenceReadModelPriceCache({
+    evidence: new PostgresEvidencePriceReader(connection.db),
+    legacy: legacyCache,
+    mode: env.PRICE_EVIDENCE_READ_MODEL,
+    onComparison: ({ evidenceOnly, legacyOnly, valueMismatch }) => {
+      console.info("price_read_model_comparison", {
+        evidenceOnly,
+        legacyOnly,
+        valueMismatch,
+      });
+    },
+    onEvidenceError: () => {
+      console.warn("price_read_model_shadow_unavailable");
+    },
+  });
   return {
     discoveryService: new DiscoveryService({ cache, gateway }),
     gateway,

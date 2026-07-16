@@ -3,7 +3,9 @@ import postgres from "postgres";
 
 import * as schema from "./schema";
 
-export type HandleplanDatabase = PostgresJsDatabase<typeof schema>;
+export type HandleplanDatabase = PostgresJsDatabase<typeof schema> & {
+  $client: ReturnType<typeof postgres>;
+};
 
 export interface DatabaseConnection {
   db: HandleplanDatabase;

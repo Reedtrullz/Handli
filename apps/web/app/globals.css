@@ -91,7 +91,7 @@ a { color: inherit; }
 
 .planlegg-main { flex: 1; width: min(1180px, calc(100% - 64px)); margin: 0 auto; padding: 40px 0; }
 .planner-grid { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 32px; align-items: start; }
-.basket-column { min-width: 0; display: grid; gap: 32px; }
+.basket-column { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 32px; }
 
 .need-composer-section { position: relative; }
 .need-composer-section h1 { margin: 0 0 24px; color: var(--forest-950); font: 650 32px/38px var(--font-display); letter-spacing: -.02em; }
@@ -238,6 +238,8 @@ a { color: inherit; }
 .oppdag-heading h1 { margin: 0; color: var(--forest-950); font: 650 34px/40px var(--font-display); letter-spacing: -.03em; }
 .oppdag-heading div > span { display: block; max-width: 680px; margin-top: 6px; color: var(--muted); line-height: 23px; }
 .discovery-badge { flex: 0 0 auto; padding: 6px 10px; color: var(--forest-650); background: var(--mint-100); border-radius: 999px; font-size: 11px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+.coverage-notice { margin: -8px 0 28px; padding: 13px 16px; color: var(--forest-800); background: var(--mint-100); border: 1px solid var(--mint-300); border-radius: var(--radius); }
+.coverage-notice p { margin: 0; font-size: 12px; line-height: 18px; }
 .oppdag-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 32px; align-items: start; }
 .discovery-column { min-width: 0; display: grid; gap: 34px; }
 .discovery-controls { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 20px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
@@ -271,7 +273,7 @@ a { color: inherit; }
 .opportunity-best-price span { display: block; margin-top: 3px; color: var(--forest-650); font-size: 11px; font-weight: 700; }
 .opportunity-best-price small { display: block; max-width: 170px; margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 14px; }
 .opportunity-best-price .previous-observation { color: var(--muted); }
-.opportunity-best-price .opportunity-saving { color: var(--forest-650); font-size: 11px; font-weight: 750; }
+.opportunity-best-price .observation-change { color: var(--forest-650); font-size: 11px; font-weight: 750; }
 .chain-price-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 0; padding: 0; list-style: none; }
 .chain-price-list li { min-width: 130px; display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; padding: 9px 11px; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; }
 .chain-price-list span { color: var(--muted); font-size: 11px; }

@@ -38,6 +38,7 @@ function resultResponse() {
     generatedAt: "2026-07-15T07:12:00.000Z",
     priceDataSource: "upstream",
     caveats: [
+      "Resultatet gjelder prisene Handleplan kunne verifisere; ukjent kjededekning kan påvirke sammenligningen.",
       "Kjedepris betyr ikke at varen er på lager eller har samme hyllepris i din butikk.",
       "Medlemspriser og kundeavis-tilbud er ikke med i denne beregningen.",
     ],
@@ -113,7 +114,7 @@ describe("Planlegg result workspace", () => {
     expect(screen.getByText(/garanterer ikke lagerstatus/i)).toBeVisible();
     expect(screen.getByText(/Kjedepriser/)).toBeVisible();
     expect(screen.getByText(/15\. juli 2026 kl\. 09:12/)).toBeVisible();
-    expect(screen.getByText(/Hentet direkte fra Kassalapp/)).toBeVisible();
+    expect(screen.getByText(/lest tilbake gjennom kontrollert prisgrunnlag/)).toBeVisible();
     expect(screen.getByText(/observert 15\. juli 2026 kl\. 08:12/)).toBeVisible();
     expect(screen.queryByText(/Reisetid/)).not.toBeInTheDocument();
     expect(screen.queryByText(/konto/i)).not.toBeInTheDocument();
@@ -136,7 +137,7 @@ describe("Planlegg result workspace", () => {
     vi.stubGlobal("fetch", okFetch({ ...resultResponse(), priceDataSource: "cache" }));
     render(<ResultPage />);
 
-    expect(await screen.findByText(/Hentet fra lokal reservebuffer/)).toBeVisible();
+    expect(await screen.findByText(/Hentet fra kontrollert lokal reservebuffer/)).toBeVisible();
     expect(screen.getByText(/Beregnet 15\. juli 2026 kl\. 09:12/)).toBeVisible();
   });
 

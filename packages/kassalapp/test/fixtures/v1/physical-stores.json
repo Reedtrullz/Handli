@@ -1,0 +1,48 @@
+{
+  "data": [
+    {
+      "id": 501,
+      "group": "BUNNPRIS",
+      "name": "Bunnpris Bislett",
+      "address": "Thereses gate 16, 0452 Oslo",
+      "phone": null,
+      "email": null,
+      "fax": null,
+      "logo": "https://example.invalid/logos/bunnpris.svg",
+      "website": "https://example.invalid/bunnpris-bislett",
+      "detailUrl": "https://kassal.app/butikker/501",
+      "position": { "lat": 59.9271, "lng": 10.7342 },
+      "openingHours": {
+        "monday": "07:00-23:00",
+        "tuesday": "07:00-23:00",
+        "wednesday": "07:00-23:00",
+        "thursday": "07:00-23:00",
+        "friday": "07:00-23:00",
+        "saturday": "08:00-22:00",
+        "sunday": null
+      }
+    },
+    {
+      "id": 502,
+      "group": "FUTURE_CHAIN",
+      "name": "Ukjent butikk",
+      "address": "Eksempelgata 1, 0001 Oslo",
+      "phone": null,
+      "email": null,
+      "fax": null,
+      "logo": "https://example.invalid/logos/future.svg",
+      "website": null,
+      "detailUrl": "https://kassal.app/butikker/502",
+      "position": { "lat": null, "lng": null },
+      "openingHours": {
+        "monday": null,
+        "tuesday": null,
+        "wednesday": null,
+        "thursday": null,
+        "friday": null,
+        "saturday": null,
+        "sunday": null
+      }
+    }
+  ]
+}

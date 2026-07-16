@@ -11,10 +11,16 @@
     "e2e": "playwright test",
     "lint": "pnpm -r lint",
     "test": "pnpm -r test",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "validate:v1-data": "node tests/acceptance/validate-v1-data.mjs"
+  },
+  "dependencies": {
+    "postgres": "3.4.9"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.11.0",
-    "@playwright/test": "1.58.0"
+    "@playwright/test": "1.58.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1"
   }
 }
