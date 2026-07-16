@@ -69,6 +69,19 @@ describe("Oppdag discovery workspace", () => {
     expect(screen.getByRole("heading", { name: "Aktuelle priser hos Bunnpris" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "TINE Lettmelk 1 % 1 l" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Lettmelk Bunnpris" })).toBeVisible();
+    expect(screen.getByText("observert hos Bunnpris")).toBeVisible();
+
+  });
+
+  it("explains when a store has no fresh catalog prices", async () => {
+    const user = userEvent.setup();
+    render(<DiscoveryWorkspace
+      searchDiscovery={vi.fn<DiscoverySearch>().mockResolvedValue({ ...response, opportunities: [] })}
+      storage={memoryStorage()}
+    />);
+
+    await user.click(await screen.findByRole("button", { name: "Extra" }));
+    expect(screen.getByText("Kassalapp har ingen ferske katalogpriser fra Extra akkurat nå.")).toBeVisible();
   });
 
   it("keeps search as an optional filter and can return to browsing", async () => {

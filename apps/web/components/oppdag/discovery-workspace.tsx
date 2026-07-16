@@ -222,7 +222,11 @@ function DiscoveryWorkspaceClient({
               </div>
             ) : null}
             {status === "ready" && visible.length === 0 ? (
-              <div className="discovery-message">Ingen ferske priser i denne visningen. Prøv en annen butikk eller fjern søkefilteret.</div>
+              <div className="discovery-message">{submittedQuery
+                ? "Ingen ferske priser traff dette filteret. Prøv et annet søk eller vis alle prisfunn."
+                : chain === "all"
+                  ? "Ingen ferske katalogpriser er tilgjengelige akkurat nå."
+                  : `Kassalapp har ingen ferske katalogpriser fra ${chainLabels[chain]} akkurat nå.`}</div>
             ) : null}
             {status === "ready" && visible.length > 0 ? (
               <div className="opportunity-list">
@@ -241,7 +245,9 @@ function DiscoveryWorkspaceClient({
                           </div>
                           <div className="opportunity-best-price">
                             <strong>{formatNok(best.amountOre)}</strong>
-                            <span>{chain === "all" ? `lavest hos ${chainLabels[best.chain]}` : `observert hos ${chainLabels[best.chain]}`}</span>
+                            <span>{chain === "all" && prices.length > 1
+                              ? `lavest hos ${chainLabels[best.chain]}`
+                              : `observert hos ${chainLabels[best.chain]}`}</span>
                             {spread > 0 ? <small>{formatNok(spread)} lavere enn høyeste kjedepris</small> : null}
                           </div>
                         </div>
