@@ -95,6 +95,21 @@ export class DiscoveryService implements DiscoveryServiceContract {
   ) {}
 
   async browse(signal?: AbortSignal): Promise<DiscoveryResult> {
+    if (this.dependencies.gateway.browseCatalog) {
+      try {
+        const items = await this.dependencies.gateway.browseCatalog(BROWSE_LIMIT, signal);
+        const generatedAt = (this.dependencies.now ?? (() => new Date()))();
+        const products = [...new Map(items.map(({ product }) => [product.ean, product])).values()];
+        const prices = items.map(({ price }) => price);
+        try { await this.dependencies.cache.putMany(prices, generatedAt); } catch { /* Browse remains usable. */ }
+        return resultFor(products, prices, generatedAt, "upstream");
+      } catch (error) {
+        if (error instanceof KassalappGatewayError && error.code === "CANCELLED") {
+          throw new DiscoveryRequestCancelledError();
+        }
+        throw new DiscoveryUnavailableError();
+      }
+    }
     return this.loadProductsAndPrices(
       () => this.dependencies.gateway.browseProducts(BROWSE_LIMIT, signal),
       signal,

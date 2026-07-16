@@ -1,7 +1,7 @@
 import type { PriceObservation, Product } from "@handleplan/domain";
 import { z } from "zod";
 
-import { normalizeBulkPriceResponse, normalizeSearchResponse } from "./schemas";
+import { normalizeBrowseResponse, normalizeBulkPriceResponse, normalizeSearchResponse } from "./schemas";
 
 const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 const DEFAULT_TIMEOUT_MS = 8_000;
@@ -30,6 +30,7 @@ export class KassalappGatewayError extends Error {
 }
 
 export interface KassalappGateway {
+  browseCatalog?(limit: number, signal?: AbortSignal): Promise<Array<{ product: Product; price: PriceObservation }>>;
   browseProducts(limit: number, signal?: AbortSignal): Promise<Product[]>;
   searchProducts(query: string, limit: number, signal?: AbortSignal): Promise<Product[]>;
   getBulkPrices(eans: string[], signal?: AbortSignal): Promise<PriceObservation[]>;
@@ -163,6 +164,11 @@ export class KassalappClient implements KassalappGateway {
   }
 
   async browseProducts(limit: number, signal?: AbortSignal): Promise<Product[]> {
+    return [...new Map((await this.browseCatalog(limit, signal)).map(({ product }) => [product.ean, product])).values()]
+      .slice(0, limit);
+  }
+
+  async browseCatalog(limit: number, signal?: AbortSignal): Promise<Array<{ product: Product; price: PriceObservation }>> {
     const parsed = z.number().int().min(1).max(100).safeParse(limit);
     if (!parsed.success) throw new KassalappGatewayError("INVALID_REQUEST");
 
@@ -175,10 +181,9 @@ export class KassalappClient implements KassalappGateway {
         url.searchParams.set("sort", "date_desc");
         url.searchParams.set("unique", "1");
         url.searchParams.set("exclude_without_ean", "1");
-        return normalizeSearchResponse(await this.requestJson(url, { method: "GET" }, signal));
+        return normalizeBrowseResponse(await this.requestJson(url, { method: "GET" }, signal));
       }));
-      return [...new Map(batches.flat().map((product) => [product.ean, product])).values()]
-        .slice(0, parsed.data);
+      return batches.flat().slice(0, parsed.data);
     } catch (error) {
       throw toGatewayError(error);
     }

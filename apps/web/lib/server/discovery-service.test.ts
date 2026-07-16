@@ -32,6 +32,14 @@ function gateway(prices: PriceObservation[] = [fresh]): KassalappGateway {
 }
 
 describe("DiscoveryService", () => {
+  it("uses store-scoped catalog prices when the gateway exposes them", async () => {
+    const catalogGateway = gateway();
+    catalogGateway.browseCatalog = async () => [{ product, price: fresh }];
+    catalogGateway.getBulkPrices = async () => { throw new Error("bulk should not run"); };
+    const result = await new DiscoveryService({ cache: cache(), gateway: catalogGateway, now: () => now }).browse();
+    expect(result.opportunities).toEqual([{ product, prices: [fresh] }]);
+  });
+
   it("browses current priced products without a search query", async () => {
     const result = await new DiscoveryService({ cache: cache(), gateway: gateway(), now: () => now }).browse();
     expect(result.opportunities).toEqual([{ product, prices: [fresh] }]);

@@ -29,8 +29,14 @@ describe("KassalappClient contract", () => {
   it("browses the newest unique catalog products without requiring a search query", async () => {
     const seenUrls: string[] = [];
     const injectedFetch: typeof fetch = async (input) => {
-      seenUrls.push(String(input));
-      return jsonResponse(searchFixture);
+      const url = new URL(String(input));
+      seenUrls.push(url.toString());
+      return jsonResponse({ data: [{
+        ...searchFixture.data[0],
+        current_price: 21.9,
+        store: { code: url.searchParams.get("store") },
+        updated_at: "2026-07-16T10:00:00Z",
+      }] });
     };
 
     await expect(createClient(injectedFetch).browseProducts(36)).resolves.toEqual([

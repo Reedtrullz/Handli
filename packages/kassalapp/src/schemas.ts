@@ -30,6 +30,14 @@ const upstreamPriceAmountSchema = z
     ),
   );
 
+const upstreamBrowseResponseSchema = z.object({
+  data: z.array(upstreamProductSchema.extend({
+    current_price: upstreamPriceAmountSchema.nullable(),
+    store: z.object({ code: z.string() }),
+    updated_at: z.iso.datetime({ offset: true }),
+  })).max(100),
+});
+
 const upstreamBulkStoreSchema = z.object({
   store: z.string(),
   current_price: upstreamPriceAmountSchema.nullable(),
@@ -92,6 +100,25 @@ export function normalizeSearchResponse(input: unknown): Product[] {
     // used by the bulk-price contract, so omit them without discarding the
     // valid search results in the same response.
     return normalized.success ? [normalized.data] : [];
+  });
+}
+
+export function normalizeBrowseResponse(input: unknown): Array<{ product: Product; price: PriceObservation }> {
+  const response = upstreamBrowseResponseSchema.parse(input);
+  return response.data.flatMap((row) => {
+    const [product] = normalizeSearchResponse({ data: [row] });
+    const chain = chainByStoreCode[row.store.code];
+    if (!product || !chain || row.current_price === null) return [];
+    return [{
+      product,
+      price: priceObservationSchema.parse({
+        ean: product.ean,
+        chain,
+        amountOre: Math.round(row.current_price * 100),
+        observedAt: new Date(row.updated_at).toISOString(),
+        source: "kassalapp",
+      }),
+    }];
   });
 }
 
