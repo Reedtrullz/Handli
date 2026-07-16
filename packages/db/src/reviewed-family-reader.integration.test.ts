@@ -281,7 +281,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
 
       expect(matches).toHaveLength(3);
       expect(matches.map(({ family, product }) => [family.id, product.gtin])).toEqual([
-        ["family:melk", gtins.aliasRepresentative],
+        ["family:melk", gtins.aliasLarge],
         ["family:melk", gtins.deterministic],
         ["family:kaffe", gtins.deterministic],
       ]);

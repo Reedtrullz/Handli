@@ -420,8 +420,11 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
     `;
     try {
       const [scope] = await connection.sql`
-        insert into geographic_scopes (scope_key, scope_kind, label, status)
-        values (${`test:national:${integrationNonce}`}, 'national', 'Test national', 'active')
+        insert into geographic_scopes (
+          scope_key, scope_kind, label, country_code, status
+        ) values (
+          ${`test:national:${integrationNonce}`}, 'national', 'Test national', 'NO', 'active'
+        )
         returning id
       `;
 
