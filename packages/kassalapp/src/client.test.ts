@@ -34,19 +34,68 @@ describe("KassalappClient contract", () => {
       return jsonResponse({ data: [{
         ...searchFixture.data[0],
         current_price: 21.9,
+        price_history: [
+          { price: 21.9, date: "2026-07-15T10:00:00Z" },
+          { price: 29.9, date: "2026-07-10T10:00:00Z" },
+        ],
         store: { code: url.searchParams.get("store") },
         updated_at: "2026-07-16T10:00:00Z",
       }] });
     };
 
-    await expect(createClient(injectedFetch).browseProducts(36)).resolves.toEqual([
-      expect.objectContaining({ ean: EAN, name: "Tine Lettmelk 1 %" }),
-    ]);
+    const catalog = await createClient(injectedFetch).browseCatalog(36);
+    expect(catalog).toHaveLength(3);
+    expect(catalog[0]).toEqual({
+      product: expect.objectContaining({ ean: EAN, name: "Tine Lettmelk 1 %" }),
+      price: expect.objectContaining({ amountOre: 2190, chain: "bunnpris" }),
+      previousPrice: expect.objectContaining({ amountOre: 2990, chain: "bunnpris" }),
+    });
     expect(seenUrls).toEqual([
-      "https://fixture.invalid/api/v1/products?store=BUNNPRIS&size=12&sort=date_desc&unique=1&exclude_without_ean=1",
-      "https://fixture.invalid/api/v1/products?store=REMA_1000&size=12&sort=date_desc&unique=1&exclude_without_ean=1",
-      "https://fixture.invalid/api/v1/products?store=COOP_EXTRA&size=12&sort=date_desc&unique=1&exclude_without_ean=1",
+      "https://fixture.invalid/api/v1/products?store=BUNNPRIS&size=100&sort=date_desc&unique=1&exclude_without_ean=1",
+      "https://fixture.invalid/api/v1/products?store=REMA_1000&size=100&sort=date_desc&unique=1&exclude_without_ean=1",
+      "https://fixture.invalid/api/v1/products?store=COOP_EXTRA&size=100&sort=date_desc&unique=1&exclude_without_ean=1",
     ]);
+  });
+
+  it("prioritizes documented price drops inside each store catalog", async () => {
+    const injectedFetch: typeof fetch = async (input) => {
+      const store = new URL(String(input)).searchParams.get("store");
+      return jsonResponse({ data: [
+        {
+          ...searchFixture.data[0], ean: "7038010000020", name: "Vanlig pris",
+          current_price: 10, price_history: [{ price: 10, date: "2026-07-15T10:00:00Z" }],
+          store: { code: store }, updated_at: "2026-07-16T10:00:00Z",
+        },
+        {
+          ...searchFixture.data[0], ean: "7038010000037", name: "Dokumentert prisfall",
+          current_price: 8, price_history: [{ price: 16, date: "2026-07-10T10:00:00Z" }],
+          store: { code: store }, updated_at: "2026-07-16T10:00:00Z",
+        },
+      ] });
+    };
+
+    const catalog = await createClient(injectedFetch).browseCatalog(3);
+    expect(catalog.map(({ product }) => product.name)).toEqual([
+      "Dokumentert prisfall", "Dokumentert prisfall", "Dokumentert prisfall",
+    ]);
+    expect(catalog.every(({ previousPrice }) => previousPrice?.amountOre === 1600)).toBe(true);
+  });
+
+  it("does not cherry-pick an older high price after a more recent price increase", async () => {
+    const injectedFetch: typeof fetch = async (input) => jsonResponse({ data: [{
+      ...searchFixture.data[0],
+      current_price: 10,
+      price_history: [
+        { price: 9, date: "2026-07-15T10:00:00Z" },
+        { price: 20, date: "2026-07-10T10:00:00Z" },
+      ],
+      store: { code: new URL(String(input)).searchParams.get("store") },
+      updated_at: "2026-07-16T10:00:00Z",
+    }] });
+
+    const catalog = await createClient(injectedFetch).browseCatalog(3);
+    expect(catalog).toHaveLength(3);
+    expect(catalog.every((item) => item.previousPrice === undefined)).toBe(true);
   });
 
   it("searches with the injected fetch and normalizes a validated product fixture", async () => {

@@ -34,15 +34,16 @@ function gateway(prices: PriceObservation[] = [fresh]): KassalappGateway {
 describe("DiscoveryService", () => {
   it("uses store-scoped catalog prices when the gateway exposes them", async () => {
     const catalogGateway = gateway();
-    catalogGateway.browseCatalog = async () => [{ product, price: fresh }];
+    const previous = { ...fresh, amountOre: 2990 as PriceObservation["amountOre"], observedAt: "2026-07-10T09:00:00.000Z" };
+    catalogGateway.browseCatalog = async () => [{ product, price: fresh, previousPrice: previous }];
     catalogGateway.getBulkPrices = async () => { throw new Error("bulk should not run"); };
     const result = await new DiscoveryService({ cache: cache(), gateway: catalogGateway, now: () => now }).browse();
-    expect(result.opportunities).toEqual([{ product, prices: [fresh] }]);
+    expect(result.opportunities).toEqual([{ product, prices: [fresh], previousPrices: [previous] }]);
   });
 
   it("browses current priced products without a search query", async () => {
     const result = await new DiscoveryService({ cache: cache(), gateway: gateway(), now: () => now }).browse();
-    expect(result.opportunities).toEqual([{ product, prices: [fresh] }]);
+    expect(result.opportunities).toEqual([{ product, prices: [fresh], previousPrices: [] }]);
   });
 
   it("returns only fresh current prices and preserves search relevance", async () => {
@@ -52,7 +53,7 @@ describe("DiscoveryService", () => {
 
     expect(result).toEqual({
       generatedAt: now.toISOString(),
-      opportunities: [{ product, prices: [fresh] }],
+      opportunities: [{ product, prices: [fresh], previousPrices: [] }],
       priceDataSource: "upstream",
     });
   });

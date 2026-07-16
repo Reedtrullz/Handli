@@ -15,6 +15,7 @@ const BROWSE_LIMIT = 36;
 export interface DiscoveryOpportunity {
   product: Product;
   prices: PriceObservation[];
+  previousPrices: PriceObservation[];
 }
 
 export interface DiscoveryResult {
@@ -67,6 +68,7 @@ function resultFor(
   rows: PriceObservation[],
   generatedAt: Date,
   priceDataSource: DiscoveryResult["priceDataSource"],
+  previousRows: PriceObservation[] = [],
 ): DiscoveryResult {
   const eligible = eligibleLatestPrices(rows, generatedAt);
   const pricesByEan = new Map<string, PriceObservation[]>();
@@ -75,11 +77,19 @@ function resultFor(
     prices.push(row);
     pricesByEan.set(row.ean, prices);
   }
+  const previousByPrice = new Map(previousRows.map((row) => [`${row.ean}\u0000${row.chain}`, row]));
   return {
     generatedAt: generatedAt.toISOString(),
     opportunities: products.flatMap((product) => {
       const prices = pricesByEan.get(product.ean);
-      return prices && prices.length > 0 ? [{ product, prices }] : [];
+      if (!prices || prices.length === 0) return [];
+      const previousPrices = prices.flatMap((price) => {
+        const previous = previousByPrice.get(`${price.ean}\u0000${price.chain}`);
+        return previous && previous.amountOre > price.amountOre && previous.observedAt < price.observedAt
+          ? [previous]
+          : [];
+      });
+      return [{ product, prices, previousPrices }];
     }),
     priceDataSource,
   };
@@ -101,8 +111,9 @@ export class DiscoveryService implements DiscoveryServiceContract {
         const generatedAt = (this.dependencies.now ?? (() => new Date()))();
         const products = [...new Map(items.map(({ product }) => [product.ean, product])).values()];
         const prices = items.map(({ price }) => price);
+        const previousPrices = items.flatMap(({ previousPrice }) => previousPrice ? [previousPrice] : []);
         try { await this.dependencies.cache.putMany(prices, generatedAt); } catch { /* Browse remains usable. */ }
-        return resultFor(products, prices, generatedAt, "upstream");
+        return resultFor(products, prices, generatedAt, "upstream", previousPrices);
       } catch (error) {
         if (error instanceof KassalappGatewayError && error.code === "CANCELLED") {
           throw new DiscoveryRequestCancelledError();

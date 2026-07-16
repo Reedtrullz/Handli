@@ -27,12 +27,16 @@ const response = {
         { ean: "7038010000013", chain: "rema-1000" as const, amountOre: 2_390 as MoneyOre, observedAt: "2026-07-15T09:00:00.000Z", source: "kassalapp" as const },
         { ean: "7038010000013", chain: "extra" as const, amountOre: 2_590 as MoneyOre, observedAt: "2026-07-15T09:00:00.000Z", source: "kassalapp" as const },
       ],
+      previousPrices: [
+        { ean: "7038010000013", chain: "rema-1000" as const, amountOre: 2_990 as MoneyOre, observedAt: "2026-07-10T09:00:00.000Z", source: "kassalapp" as const },
+      ],
     },
     {
       product: { ean: "7038010000020", name: "Lettmelk Bunnpris", brand: "Butikk" },
       prices: [
         { ean: "7038010000020", chain: "bunnpris" as const, amountOre: 2_490 as MoneyOre, observedAt: "2026-07-15T09:00:00.000Z", source: "kassalapp" as const },
       ],
+      previousPrices: [],
     },
   ],
 };
@@ -60,7 +64,9 @@ describe("Oppdag discovery workspace", () => {
     expect(await screen.findByRole("heading", { name: "TINE Lettmelk 1 % 1 l" })).toBeVisible();
     expect(search).toHaveBeenCalledWith(undefined, expect.any(AbortSignal));
     expect(screen.getByRole("heading", { name: "Beste prisfunn akkurat nå" })).toBeVisible();
-    expect(screen.getByText("lavest hos REMA 1000")).toBeVisible();
+    expect(screen.getByText("prisfall observert hos REMA 1000")).toBeVisible();
+    expect(screen.getByText(/Forrige observert:/)).toHaveTextContent("Forrige observert: 29,90 kr");
+    expect(screen.getByText("Spar 6,00 kr (20,1 %)")).toBeVisible();
     expect(screen.getByText(/lavere enn høyeste kjedepris/)).toBeVisible();
     expect(screen.getByText(/Kassalapp direkte/)).toBeVisible();
 
@@ -70,6 +76,7 @@ describe("Oppdag discovery workspace", () => {
     expect(screen.queryByRole("heading", { name: "TINE Lettmelk 1 % 1 l" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Lettmelk Bunnpris" })).toBeVisible();
     expect(screen.getByText("observert hos Bunnpris")).toBeVisible();
+    expect(screen.queryByText(/^Spar /)).not.toBeInTheDocument();
 
   });
 

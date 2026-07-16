@@ -21,6 +21,7 @@ const discoveryResponseSchema = z.object({
   opportunities: z.array(z.object({
     product: productSchema,
     prices: z.array(priceObservationSchema).min(1).max(3),
+    previousPrices: z.array(priceObservationSchema).max(3).optional().default([]),
   }).strict()).max(36),
   priceDataSource: z.enum(["upstream", "cache"]),
 }).strict();
@@ -73,6 +74,19 @@ function priceSpread(prices: PriceObservation[]): number {
   return Math.max(...amounts) - Math.min(...amounts);
 }
 
+function priceDrop(prices: PriceObservation[], previousPrices: PriceObservation[]) {
+  return prices.flatMap((price) => {
+    const previous = previousPrices.find((candidate) => candidate.chain === price.chain);
+    if (!previous || previous.amountOre <= price.amountOre) return [];
+    const savingOre = previous.amountOre - price.amountOre;
+    return [{ price, previous, savingOre, rate: savingOre / previous.amountOre }];
+  }).sort((left, right) => right.rate - left.rate || right.savingOre - left.savingOre)[0];
+}
+
+function formatPercent(rate: number): string {
+  return new Intl.NumberFormat("nb-NO", { maximumFractionDigits: 1 }).format(rate * 100) + " %";
+}
+
 interface DiscoveryWorkspaceProps {
   createId?: () => string;
   searchDiscovery?: DiscoverySearch;
@@ -121,11 +135,19 @@ function DiscoveryWorkspaceClient({
     const prices = chain === "all"
       ? opportunity.prices
       : opportunity.prices.filter((price) => price.chain === chain);
-    return prices.length > 0 ? [{ ...opportunity, prices }] : [];
-  }).sort((left, right) =>
-    priceSpread(right.prices) - priceSpread(left.prices) ||
-    Math.min(...left.prices.map(({ amountOre }) => amountOre)) - Math.min(...right.prices.map(({ amountOre }) => amountOre)) ||
-    left.product.name.localeCompare(right.product.name, "nb-NO")), [chain, result]);
+    const previousPrices = chain === "all"
+      ? opportunity.previousPrices
+      : opportunity.previousPrices.filter((price) => price.chain === chain);
+    return prices.length > 0 ? [{ ...opportunity, prices, previousPrices }] : [];
+  }).sort((left, right) => {
+    const leftDrop = priceDrop(left.prices, left.previousPrices);
+    const rightDrop = priceDrop(right.prices, right.previousPrices);
+    return (rightDrop?.rate ?? 0) - (leftDrop?.rate ?? 0) ||
+      (rightDrop?.savingOre ?? 0) - (leftDrop?.savingOre ?? 0) ||
+      priceSpread(right.prices) - priceSpread(left.prices) ||
+      Math.min(...left.prices.map(({ amountOre }) => amountOre)) - Math.min(...right.prices.map(({ amountOre }) => amountOre)) ||
+      left.product.name.localeCompare(right.product.name, "nb-NO");
+  }), [chain, result]);
   const basketEans = new Set(basket.matchingRules.flatMap((rule) =>
     rule.mode === "exact" && rule.exactEan ? [rule.exactEan] : [],
   ));
@@ -208,8 +230,8 @@ function DiscoveryWorkspaceClient({
                   ? `Prisfunn for «${submittedQuery}»`
                   : chain === "all" ? "Beste prisfunn akkurat nå" : `Aktuelle priser hos ${chainLabels[chain]}`}</h2>
                 <p>{chain === "all"
-                  ? "Sortert etter størst observerte prisforskjell mellom kjedene, der sammenligning finnes."
-                  : `Ferske prisobservasjoner fra ${chainLabels[chain]} – ingen søk nødvendig.`}</p>
+                  ? "Dokumenterte prisfall vises først, deretter største observerte prisforskjell mellom kjedene."
+                  : `Dokumenterte prisfall og ferske prisobservasjoner fra ${chainLabels[chain]} – ingen søk nødvendig.`}</p>
               </div>
               {status === "ready" ? <span>{visible.length} funn</span> : null}
             </div>
@@ -230,8 +252,10 @@ function DiscoveryWorkspaceClient({
             ) : null}
             {status === "ready" && visible.length > 0 ? (
               <div className="opportunity-list">
-                {visible.map(({ product, prices }) => {
+                {visible.map(({ product, prices, previousPrices }) => {
                   const best = [...prices].sort((left, right) => left.amountOre - right.amountOre)[0]!;
+                  const previous = previousPrices.find((candidate) => candidate.chain === best.chain);
+                  const savingOre = previous ? previous.amountOre - best.amountOre : 0;
                   const spread = priceSpread(prices);
                   const added = basketEans.has(product.ean);
                   return (
@@ -245,9 +269,13 @@ function DiscoveryWorkspaceClient({
                           </div>
                           <div className="opportunity-best-price">
                             <strong>{formatNok(best.amountOre)}</strong>
-                            <span>{chain === "all" && prices.length > 1
+                            <span>{previous
+                              ? `prisfall observert hos ${chainLabels[best.chain]}`
+                              : chain === "all" && prices.length > 1
                               ? `lavest hos ${chainLabels[best.chain]}`
                               : `observert hos ${chainLabels[best.chain]}`}</span>
+                            {previous ? <small className="previous-observation">Forrige observert: <s>{formatNok(previous.amountOre)}</s></small> : null}
+                            {previous ? <small className="opportunity-saving">Spar {formatNok(savingOre)} ({formatPercent(savingOre / previous.amountOre)})</small> : null}
                             {spread > 0 ? <small>{formatNok(spread)} lavere enn høyeste kjedepris</small> : null}
                           </div>
                         </div>
@@ -291,7 +319,7 @@ function DiscoveryWorkspaceClient({
           <div className="discovery-trust-card">
             <h2>Hva betyr et prisfunn?</h2>
             <p>Dette er observerte kjedepriser og prisforskjeller, ikke nødvendigvis en offisiell rabatt eller et løfte om lager og hyllepris.</p>
-            <p>Historiske prisfall, medlemspriser og kundeavistilbud vises først når Handleplan har et verifisert datagrunnlag.</p>
+            <p>«Forrige observert» kommer fra Kassalapps prishistorikk og er ikke nødvendigvis butikkens offisielle førpris. Medlemspriser og kundeavistilbud vises først når Handleplan har et verifisert datagrunnlag.</p>
             {result ? <small>Datakilde: {result.priceDataSource === "upstream" ? "Kassalapp direkte" : "lokal reservebuffer"} • beregnet {formatObservedAt(result.generatedAt)}</small> : null}
           </div>
         </aside>

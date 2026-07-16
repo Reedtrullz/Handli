@@ -33,6 +33,10 @@ const upstreamPriceAmountSchema = z
 const upstreamBrowseResponseSchema = z.object({
   data: z.array(upstreamProductSchema.extend({
     current_price: upstreamPriceAmountSchema.nullable(),
+    price_history: z.array(z.object({
+      price: upstreamPriceAmountSchema,
+      date: z.iso.datetime({ offset: true }),
+    })).max(366).optional().default([]),
     store: z.object({ code: z.string() }),
     updated_at: z.iso.datetime({ offset: true }),
   })).max(100),
@@ -103,21 +107,45 @@ export function normalizeSearchResponse(input: unknown): Product[] {
   });
 }
 
-export function normalizeBrowseResponse(input: unknown): Array<{ product: Product; price: PriceObservation }> {
+export function normalizeBrowseResponse(input: unknown): Array<{
+  product: Product;
+  price: PriceObservation;
+  previousPrice?: PriceObservation;
+}> {
   const response = upstreamBrowseResponseSchema.parse(input);
   return response.data.flatMap((row) => {
     const [product] = normalizeSearchResponse({ data: [row] });
     const chain = chainByStoreCode[row.store.code];
     if (!product || !chain || row.current_price === null) return [];
+    const currentAmountOre = Math.round(row.current_price * 100);
+    const currentObservedAt = new Date(row.updated_at).toISOString();
+    const previous = [...row.price_history]
+      .sort((left, right) => Date.parse(right.date) - Date.parse(left.date))
+      .find((candidate) => {
+        const amountOre = Math.round(candidate.price * 100);
+        return Date.parse(candidate.date) < Date.parse(row.updated_at) && amountOre !== currentAmountOre;
+      });
+    const previousAmountOre = previous === undefined ? undefined : Math.round(previous.price * 100);
     return [{
       product,
       price: priceObservationSchema.parse({
         ean: product.ean,
         chain,
-        amountOre: Math.round(row.current_price * 100),
-        observedAt: new Date(row.updated_at).toISOString(),
+        amountOre: currentAmountOre,
+        observedAt: currentObservedAt,
         source: "kassalapp",
       }),
+      ...(previous !== undefined && previousAmountOre !== undefined && previousAmountOre > currentAmountOre
+        ? {
+            previousPrice: priceObservationSchema.parse({
+              ean: product.ean,
+              chain,
+              amountOre: previousAmountOre,
+              observedAt: new Date(previous.date).toISOString(),
+              source: "kassalapp",
+            }),
+          }
+        : {}),
     }];
   });
 }

@@ -24,7 +24,7 @@ describe("GET /api/discovery/search", () => {
     const service: DiscoveryServiceContract = {
       browse: async () => {
         called = true;
-        return { generatedAt: "2026-07-16T10:00:00.000Z", opportunities: [{ product, prices: [price] }], priceDataSource: "upstream" };
+        return { generatedAt: "2026-07-16T10:00:00.000Z", opportunities: [{ product, prices: [price], previousPrices: [] }], priceDataSource: "upstream" };
       },
       search: async () => { throw new Error("search should not run"); },
     };
@@ -39,7 +39,7 @@ describe("GET /api/discovery/search", () => {
       browse: async () => { throw new Error("unused"); },
       search: async (_query, incoming) => {
         signal = incoming;
-        return { generatedAt: "2026-07-16T10:00:00.000Z", opportunities: [{ product, prices: [price] }], priceDataSource: "upstream" };
+        return { generatedAt: "2026-07-16T10:00:00.000Z", opportunities: [{ product, prices: [price], previousPrices: [] }], priceDataSource: "upstream" };
       },
     };
     const incoming = request("melk");

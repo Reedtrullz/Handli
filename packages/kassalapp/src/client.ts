@@ -15,6 +15,12 @@ const CHAIN_ORDER: Record<PriceObservation["chain"], number> = {
 const BROWSE_STORE_CODES = ["BUNNPRIS", "REMA_1000", "COOP_EXTRA"] as const;
 const eanSchema = z.string().regex(/^(?:\d{8}|\d{13})$/);
 
+export interface BrowseCatalogItem {
+  product: Product;
+  price: PriceObservation;
+  previousPrice?: PriceObservation;
+}
+
 export type KassalappGatewayErrorCode =
   | "INVALID_REQUEST"
   | "INVALID_RESPONSE"
@@ -30,7 +36,7 @@ export class KassalappGatewayError extends Error {
 }
 
 export interface KassalappGateway {
-  browseCatalog?(limit: number, signal?: AbortSignal): Promise<Array<{ product: Product; price: PriceObservation }>>;
+  browseCatalog?(limit: number, signal?: AbortSignal): Promise<BrowseCatalogItem[]>;
   browseProducts(limit: number, signal?: AbortSignal): Promise<Product[]>;
   searchProducts(query: string, limit: number, signal?: AbortSignal): Promise<Product[]>;
   getBulkPrices(eans: string[], signal?: AbortSignal): Promise<PriceObservation[]>;
@@ -168,7 +174,7 @@ export class KassalappClient implements KassalappGateway {
       .slice(0, limit);
   }
 
-  async browseCatalog(limit: number, signal?: AbortSignal): Promise<Array<{ product: Product; price: PriceObservation }>> {
+  async browseCatalog(limit: number, signal?: AbortSignal): Promise<BrowseCatalogItem[]> {
     const parsed = z.number().int().min(1).max(100).safeParse(limit);
     if (!parsed.success) throw new KassalappGatewayError("INVALID_REQUEST");
 
@@ -177,11 +183,24 @@ export class KassalappClient implements KassalappGateway {
       const batches = await Promise.all(BROWSE_STORE_CODES.map(async (store) => {
         const url = new URL(`${this.baseUrl}/products`);
         url.searchParams.set("store", store);
-        url.searchParams.set("size", String(perStoreLimit));
+        // Inspect a wider, still API-bounded catalog window so documented price
+        // drops are not hidden merely because they are not the newest products.
+        url.searchParams.set("size", "100");
         url.searchParams.set("sort", "date_desc");
         url.searchParams.set("unique", "1");
         url.searchParams.set("exclude_without_ean", "1");
-        return normalizeBrowseResponse(await this.requestJson(url, { method: "GET" }, signal));
+        return normalizeBrowseResponse(await this.requestJson(url, { method: "GET" }, signal))
+          .sort((left, right) => {
+            const leftPrevious = left.previousPrice?.amountOre ?? left.price.amountOre;
+            const rightPrevious = right.previousPrice?.amountOre ?? right.price.amountOre;
+            const leftSaving = leftPrevious - left.price.amountOre;
+            const rightSaving = rightPrevious - right.price.amountOre;
+            const byDiscountRate = rightSaving * leftPrevious - leftSaving * rightPrevious;
+            if (byDiscountRate !== 0) return byDiscountRate;
+            if (rightSaving !== leftSaving) return rightSaving - leftSaving;
+            return right.price.observedAt.localeCompare(left.price.observedAt);
+          })
+          .slice(0, perStoreLimit);
       }));
       return batches.flat().slice(0, parsed.data);
     } catch (error) {
