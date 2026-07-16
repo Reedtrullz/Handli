@@ -6,7 +6,7 @@ import {
   type DiscoveryServiceContract,
 } from "../../../../lib/server/discovery-service";
 
-const searchParamsSchema = z.object({ q: z.string().trim().min(2).max(80) }).strict();
+const searchParamsSchema = z.object({ q: z.string().trim().min(2).max(80).optional() }).strict();
 type ServiceProvider = () => DiscoveryServiceContract | Promise<DiscoveryServiceContract>;
 
 function errorResponse(code: string, status: number): Response {
@@ -24,7 +24,10 @@ export function createDiscoverySearchHandler(getService: ServiceProvider) {
     if (!parsed.success) return errorResponse("INVALID_REQUEST", 400);
 
     try {
-      return Response.json(await (await getService()).search(parsed.data.q, request.signal));
+      const service = await getService();
+      return Response.json(parsed.data.q === undefined
+        ? await service.browse(request.signal)
+        : await service.search(parsed.data.q, request.signal));
     } catch (error) {
       if (error instanceof DiscoveryRequestCancelledError) {
         return errorResponse("REQUEST_CANCELLED", 499);

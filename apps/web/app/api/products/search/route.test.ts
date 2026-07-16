@@ -16,6 +16,7 @@ describe("GET /api/products/search", () => {
   it("returns normalized products and forwards the request signal", async () => {
     let seenSignal: AbortSignal | undefined;
     const gateway: KassalappGateway = {
+      browseProducts: async () => [],
       getBulkPrices: async () => [],
       searchProducts: async (_query, _limit, signal) => {
         seenSignal = signal;
@@ -33,6 +34,7 @@ describe("GET /api/products/search", () => {
 
   it.each(["", "m", " "])('rejects the too-short query "%s"', async (query) => {
     const response = await createSearchHandler(() => ({
+      browseProducts: async () => [],
       getBulkPrices: async () => [],
       searchProducts: async () => [],
     }))(request(query));
@@ -43,6 +45,7 @@ describe("GET /api/products/search", () => {
 
   it("rejects oversized and unexpected query parameters", async () => {
     const handler = createSearchHandler(() => ({
+      browseProducts: async () => [],
       getBulkPrices: async () => [],
       searchProducts: async () => [],
     }));
@@ -61,6 +64,7 @@ describe("GET /api/products/search", () => {
     ["INVALID_RESPONSE", 502, "PRICE_DATA_UNAVAILABLE"],
   ] as const)("maps %s without exposing upstream details", async (gatewayCode, status, code) => {
     const response = await createSearchHandler(() => ({
+      browseProducts: async () => [],
       getBulkPrices: async () => [],
       searchProducts: async () => {
         const error = new KassalappGatewayError(gatewayCode);

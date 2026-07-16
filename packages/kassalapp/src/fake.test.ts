@@ -16,6 +16,11 @@ const price: PriceObservation = {
 };
 
 describe("FakeKassalappGateway", () => {
+  it("browses products without a query", async () => {
+    const gateway = new FakeKassalappGateway([product], [price]);
+    await expect(gateway.browseProducts(10)).resolves.toEqual([product]);
+  });
+
   it("returns deterministic query and EAN-filtered copies", async () => {
     const gateway = new FakeKassalappGateway([product], [price]);
 

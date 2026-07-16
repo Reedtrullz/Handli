@@ -42,7 +42,7 @@ Actions secrets and must never be committed or printed.
 
 ## Scope
 
-Oppdag searches live Kassalapp observations, compares current prices across the three supported chains, and can add an exact product to the same local basket used by Planlegg. It does not claim historical price drops, branch inventory, branch-specific shelf prices, member prices, flyer offers, travel-time routing, or plan impact. The current VPS deployment is an owner-only protected preview. Anonymous basket, matching preferences, and selected plan stay in local browser storage; volunteered origin is transient and is not persisted.
+Oppdag browses live Kassalapp observations without requiring a search, compares current prices across the three supported chains, supports optional product filtering, and can add an exact product to the same local basket used by Planlegg. Cross-chain differences are not labeled as retailer discounts. It does not claim historical price drops, branch inventory, branch-specific shelf prices, member prices, flyer offers, travel-time routing, or plan impact. The current VPS deployment is an owner-only protected preview. Anonymous basket, matching preferences, and selected plan stay in local browser storage; volunteered origin is transient and is not persisted.
 
 Required quantities are package counts (`each`) in Phase 1. Gram and millilitre needs fail closed until package-size normalization can prove how many purchasable packages are required.
 

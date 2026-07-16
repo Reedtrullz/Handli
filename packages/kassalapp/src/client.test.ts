@@ -26,6 +26,21 @@ function createClient(fetchImplementation: typeof fetch): KassalappClient {
 }
 
 describe("KassalappClient contract", () => {
+  it("browses the newest unique catalog products without requiring a search query", async () => {
+    const seenUrls: string[] = [];
+    const injectedFetch: typeof fetch = async (input) => {
+      seenUrls.push(String(input));
+      return jsonResponse(searchFixture);
+    };
+
+    await expect(createClient(injectedFetch).browseProducts(36)).resolves.toEqual([
+      expect.objectContaining({ ean: EAN, name: "Tine Lettmelk 1 %" }),
+    ]);
+    expect(seenUrls).toEqual([
+      "https://fixture.invalid/api/v1/products?size=36&sort=date_desc&unique=1&exclude_without_ean=1",
+    ]);
+  });
+
   it("searches with the injected fetch and normalizes a validated product fixture", async () => {
     let seenAuthorization: string | null = null;
     const seenUrls: string[] = [];

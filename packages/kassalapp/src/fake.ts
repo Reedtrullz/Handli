@@ -8,6 +8,11 @@ export class FakeKassalappGateway implements KassalappGateway {
     private readonly prices: readonly PriceObservation[],
   ) {}
 
+  async browseProducts(limit: number, signal?: AbortSignal): Promise<Product[]> {
+    if (signal?.aborted) throw new KassalappGatewayError("CANCELLED");
+    return this.products.slice(0, limit).map((product) => ({ ...product }));
+  }
+
   async searchProducts(query: string, limit: number, signal?: AbortSignal): Promise<Product[]> {
     if (signal?.aborted) throw new KassalappGatewayError("CANCELLED");
     const normalizedQuery = query.trim().toLocaleLowerCase("nb-NO");

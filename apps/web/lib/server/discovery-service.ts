@@ -9,7 +9,8 @@ import {
   KassalappGatewayError,
 } from "@handleplan/kassalapp";
 
-const DISCOVERY_LIMIT = 12;
+const SEARCH_LIMIT = 12;
+const BROWSE_LIMIT = 36;
 
 export interface DiscoveryOpportunity {
   product: Product;
@@ -23,6 +24,7 @@ export interface DiscoveryResult {
 }
 
 export interface DiscoveryServiceContract {
+  browse(signal?: AbortSignal): Promise<DiscoveryResult>;
   search(query: string, signal?: AbortSignal): Promise<DiscoveryResult>;
 }
 
@@ -92,10 +94,27 @@ export class DiscoveryService implements DiscoveryServiceContract {
     },
   ) {}
 
+  async browse(signal?: AbortSignal): Promise<DiscoveryResult> {
+    return this.loadProductsAndPrices(
+      () => this.dependencies.gateway.browseProducts(BROWSE_LIMIT, signal),
+      signal,
+    );
+  }
+
   async search(query: string, signal?: AbortSignal): Promise<DiscoveryResult> {
+    return this.loadProductsAndPrices(
+      () => this.dependencies.gateway.searchProducts(query, SEARCH_LIMIT, signal),
+      signal,
+    );
+  }
+
+  private async loadProductsAndPrices(
+    loadProducts: () => Promise<Product[]>,
+    signal?: AbortSignal,
+  ): Promise<DiscoveryResult> {
     let products: Product[];
     try {
-      products = await this.dependencies.gateway.searchProducts(query, DISCOVERY_LIMIT, signal);
+      products = await loadProducts();
     } catch (error) {
       if (error instanceof KassalappGatewayError && error.code === "CANCELLED") {
         throw new DiscoveryRequestCancelledError();

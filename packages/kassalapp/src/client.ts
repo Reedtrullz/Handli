@@ -29,6 +29,7 @@ export class KassalappGatewayError extends Error {
 }
 
 export interface KassalappGateway {
+  browseProducts(limit: number, signal?: AbortSignal): Promise<Product[]>;
   searchProducts(query: string, limit: number, signal?: AbortSignal): Promise<Product[]>;
   getBulkPrices(eans: string[], signal?: AbortSignal): Promise<PriceObservation[]>;
 }
@@ -158,6 +159,25 @@ export class KassalappClient implements KassalappGateway {
 
   constructor(private readonly options: KassalappClientOptions) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
+  }
+
+  async browseProducts(limit: number, signal?: AbortSignal): Promise<Product[]> {
+    const parsed = z.number().int().min(1).max(100).safeParse(limit);
+    if (!parsed.success) throw new KassalappGatewayError("INVALID_REQUEST");
+
+    const url = new URL(`${this.baseUrl}/products`);
+    url.searchParams.set("size", String(parsed.data));
+    url.searchParams.set("sort", "date_desc");
+    url.searchParams.set("unique", "1");
+    url.searchParams.set("exclude_without_ean", "1");
+
+    try {
+      return normalizeSearchResponse(
+        await this.requestJson(url, { method: "GET" }, signal),
+      ).slice(0, parsed.data);
+    } catch (error) {
+      throw toGatewayError(error);
+    }
   }
 
   async searchProducts(query: string, limit: number, signal?: AbortSignal): Promise<Product[]> {

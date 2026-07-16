@@ -325,9 +325,13 @@ test("a shopper discovers a fresh price and carries the exact product into Planl
 
   await expect(page).toHaveTitle("Oppdag | Handleplan");
   await expect(page.getByRole("heading", { name: "Oppdag" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Beste prisfunn akkurat nå" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "TINE Lettmelk 1 % 1 l" })).toBeVisible();
   await expect(page.getByText("lavest hos Bunnpris")).toBeVisible();
   await expect(page.getByText(/Kassalapp direkte/)).toBeVisible();
+  await page.getByRole("button", { name: "Extra" }).click();
+  await expect(page.getByRole("heading", { name: "Aktuelle priser hos Extra" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "TINE Lettmelk 1 % 1 l" })).toBeVisible();
   await expectWcag22AandAA(page);
 
   const milkCard = page.getByRole("heading", { name: "TINE Lettmelk 1 % 1 l" }).locator("xpath=ancestor::article");

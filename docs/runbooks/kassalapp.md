@@ -9,10 +9,11 @@ The 1Password Developer Environment is named `Clankus`. Use the variable names a
 ## Adapter behavior
 
 - Search input is bounded and URL-encoded by the server route.
-- `GET /api/discovery/search?q=...` combines bounded product search with bulk
-  prices, returns at most 12 products, and includes only observations no older
-  than 72 hours. If upstream prices fail, only still-fresh validated cache rows
-  may be returned.
+- `GET /api/discovery/search` browses up to 36 newly catalogued unique products;
+  the optional `q` parameter narrows this to at most 12 search matches. Both
+  modes combine catalog rows with bulk prices and include only observations no
+  older than 72 hours. If upstream prices fail, only still-fresh validated
+  cache rows may be returned.
 - Product search uses `GET /api/v1/products` with `search`, `size`, `unique=1`,
   and `exclude_without_ean=1`.
 - Bulk price requests are validated and split into at most 100 EANs.

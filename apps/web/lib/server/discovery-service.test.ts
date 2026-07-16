@@ -25,12 +25,18 @@ function cache(rows: PriceObservation[] = []): PriceCache {
 
 function gateway(prices: PriceObservation[] = [fresh]): KassalappGateway {
   return {
+    browseProducts: async () => [product],
     getBulkPrices: async () => prices,
     searchProducts: async () => [product],
   };
 }
 
 describe("DiscoveryService", () => {
+  it("browses current priced products without a search query", async () => {
+    const result = await new DiscoveryService({ cache: cache(), gateway: gateway(), now: () => now }).browse();
+    expect(result.opportunities).toEqual([{ product, prices: [fresh] }]);
+  });
+
   it("returns only fresh current prices and preserves search relevance", async () => {
     const stale = { ...fresh, chain: "extra" as const, observedAt: "2026-07-12T09:00:00.000Z" };
     const result = await new DiscoveryService({ cache: cache(), gateway: gateway([stale, fresh]), now: () => now })

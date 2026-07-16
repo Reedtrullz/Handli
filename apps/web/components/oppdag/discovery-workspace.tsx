@@ -21,14 +21,14 @@ const discoveryResponseSchema = z.object({
   opportunities: z.array(z.object({
     product: productSchema,
     prices: z.array(priceObservationSchema).min(1).max(3),
-  }).strict()).max(12),
+  }).strict()).max(36),
   priceDataSource: z.enum(["upstream", "cache"]),
 }).strict();
 
 type DiscoveryResponse = z.infer<typeof discoveryResponseSchema>;
 type Chain = PriceObservation["chain"];
 type ChainFilter = "all" | Chain;
-export type DiscoverySearch = (query: string, signal: AbortSignal) => Promise<DiscoveryResponse>;
+export type DiscoverySearch = (query: string | undefined, signal: AbortSignal) => Promise<DiscoveryResponse>;
 
 const chainLabels: Record<Chain, string> = {
   bunnpris: "Bunnpris",
@@ -38,8 +38,9 @@ const chainLabels: Record<Chain, string> = {
 const suggestions = ["melk", "kaffe", "brød", "ost"];
 const subscribeToClient = () => () => {};
 
-async function searchDiscoveryFromApi(query: string, signal: AbortSignal): Promise<DiscoveryResponse> {
-  const response = await fetch(`/api/discovery/search?q=${encodeURIComponent(query)}`, { signal });
+async function searchDiscoveryFromApi(query: string | undefined, signal: AbortSignal): Promise<DiscoveryResponse> {
+  const url = query === undefined ? "/api/discovery/search" : `/api/discovery/search?q=${encodeURIComponent(query)}`;
+  const response = await fetch(url, { signal });
   if (!response.ok) throw new Error("DISCOVERY_SEARCH_FAILED");
   return discoveryResponseSchema.parse(await response.json());
 }
@@ -66,6 +67,12 @@ function unitPrice(product: Product, amountOre: number): string | undefined {
   return undefined;
 }
 
+function priceSpread(prices: PriceObservation[]): number {
+  if (prices.length < 2) return 0;
+  const amounts = prices.map(({ amountOre }) => amountOre);
+  return Math.max(...amounts) - Math.min(...amounts);
+}
+
 interface DiscoveryWorkspaceProps {
   createId?: () => string;
   searchDiscovery?: DiscoverySearch;
@@ -84,8 +91,8 @@ function DiscoveryWorkspaceClient({
   storage,
 }: DiscoveryWorkspaceProps) {
   const [basket, setBasket] = useState<BrowserBasket>(() => loadBasket(storage));
-  const [query, setQuery] = useState("melk");
-  const [submittedQuery, setSubmittedQuery] = useState("melk");
+  const [query, setQuery] = useState("");
+  const [submittedQuery, setSubmittedQuery] = useState<string | undefined>();
   const [searchRevision, setSearchRevision] = useState(0);
   const [chain, setChain] = useState<ChainFilter>("all");
   const [result, setResult] = useState<DiscoveryResponse | null>(null);
@@ -115,7 +122,10 @@ function DiscoveryWorkspaceClient({
       ? opportunity.prices
       : opportunity.prices.filter((price) => price.chain === chain);
     return prices.length > 0 ? [{ ...opportunity, prices }] : [];
-  }), [chain, result]);
+  }).sort((left, right) =>
+    priceSpread(right.prices) - priceSpread(left.prices) ||
+    Math.min(...left.prices.map(({ amountOre }) => amountOre)) - Math.min(...right.prices.map(({ amountOre }) => amountOre)) ||
+    left.product.name.localeCompare(right.product.name, "nb-NO")), [chain, result]);
   const basketEans = new Set(basket.matchingRules.flatMap((rule) =>
     rule.mode === "exact" && rule.exactEan ? [rule.exactEan] : [],
   ));
@@ -127,6 +137,13 @@ function DiscoveryWorkspaceClient({
     setStatus("loading");
     setQuery(trimmed);
     setSubmittedQuery(trimmed);
+    setSearchRevision((current) => current + 1);
+  }
+
+  function browseAll(): void {
+    setStatus("loading");
+    setQuery("");
+    setSubmittedQuery(undefined);
     setSearchRevision((current) => current + 1);
   }
 
@@ -144,7 +161,7 @@ function DiscoveryWorkspaceClient({
         <div>
           <p>Live kjedepriser</p>
           <h1 id="oppdag-title">Oppdag</h1>
-          <span>Finn varer, sammenlign ferske prisobservasjoner og legg dem rett i handlelisten.</span>
+          <span>Bla gjennom ferske kjedepriser, se hvor varen er billigst og legg funn rett i handlelisten.</span>
         </div>
         <span className="discovery-badge">Ikke sponset</span>
       </section>
@@ -153,7 +170,7 @@ function DiscoveryWorkspaceClient({
         <div className="discovery-column">
           <section className="discovery-controls" aria-label="Finn prisfunn">
             <form onSubmit={(event) => { event.preventDefault(); submitSearch(); }}>
-              <label htmlFor="discovery-query">Hva vil du utforske?</label>
+              <label htmlFor="discovery-query">Filtrer varene (valgfritt)</label>
               <div className="discovery-search-row">
                 <input
                   id="discovery-query"
@@ -163,7 +180,7 @@ function DiscoveryWorkspaceClient({
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder="Søk etter melk, kaffe eller ost"
                 />
-                <button className="primary-button" type="submit" disabled={query.trim().length < 2}>Finn priser</button>
+                <button className="primary-button" type="submit" disabled={query.trim().length < 2}>Søk</button>
               </div>
             </form>
             <div className="discovery-suggestions" aria-label="Forslag">
@@ -171,22 +188,28 @@ function DiscoveryWorkspaceClient({
                 <button key={suggestion} type="button" onClick={() => submitSearch(suggestion)}>{suggestion}</button>
               ))}
             </div>
-            <label className="chain-filter">
-              Vis kjede
-              <select value={chain} onChange={(event) => setChain(event.target.value as ChainFilter)}>
-                <option value="all">Alle kjeder</option>
-                <option value="bunnpris">Bunnpris</option>
-                <option value="rema-1000">REMA 1000</option>
-                <option value="extra">Extra</option>
-              </select>
-            </label>
+            {submittedQuery ? <button className="browse-reset" type="button" onClick={browseAll}>Vis alle prisfunn</button> : null}
+            <div className="chain-tabs" role="group" aria-label="Velg butikk">
+              {(["all", "bunnpris", "rema-1000", "extra"] as const).map((option) => (
+                <button
+                  aria-pressed={chain === option}
+                  key={option}
+                  type="button"
+                  onClick={() => setChain(option)}
+                >{option === "all" ? "Beste på tvers" : chainLabels[option]}</button>
+              ))}
+            </div>
           </section>
 
           <section className="discovery-results" aria-labelledby="discovery-results-title" aria-live="polite">
             <div className="discovery-section-heading">
               <div>
-                <h2 id="discovery-results-title">Aktuelle prisfunn for «{submittedQuery}»</h2>
-                <p>Ferske kjedepriser observert av Kassalapp de siste 72 timene.</p>
+                <h2 id="discovery-results-title">{submittedQuery
+                  ? `Prisfunn for «${submittedQuery}»`
+                  : chain === "all" ? "Beste prisfunn akkurat nå" : `Aktuelle priser hos ${chainLabels[chain]}`}</h2>
+                <p>{chain === "all"
+                  ? "Sortert etter størst observerte prisforskjell mellom kjedene, der sammenligning finnes."
+                  : `Ferske prisobservasjoner fra ${chainLabels[chain]} – ingen søk nødvendig.`}</p>
               </div>
               {status === "ready" ? <span>{visible.length} funn</span> : null}
             </div>
@@ -195,16 +218,17 @@ function DiscoveryWorkspaceClient({
             {status === "error" ? (
               <div className="discovery-message" role="alert">
                 <strong>Kunne ikke hente priser akkurat nå.</strong>
-                <button className="secondary-button" type="button" onClick={() => submitSearch(submittedQuery)}>Prøv igjen</button>
+                <button className="secondary-button" type="button" onClick={() => submittedQuery ? submitSearch(submittedQuery) : browseAll()}>Prøv igjen</button>
               </div>
             ) : null}
             {status === "ready" && visible.length === 0 ? (
-              <div className="discovery-message">Ingen ferske priser hos valgt kjede. Prøv et annet søk eller vis alle kjeder.</div>
+              <div className="discovery-message">Ingen ferske priser i denne visningen. Prøv en annen butikk eller fjern søkefilteret.</div>
             ) : null}
             {status === "ready" && visible.length > 0 ? (
               <div className="opportunity-list">
                 {visible.map(({ product, prices }) => {
                   const best = [...prices].sort((left, right) => left.amountOre - right.amountOre)[0]!;
+                  const spread = priceSpread(prices);
                   const added = basketEans.has(product.ean);
                   return (
                     <article className="opportunity-card" key={product.ean}>
@@ -217,7 +241,8 @@ function DiscoveryWorkspaceClient({
                           </div>
                           <div className="opportunity-best-price">
                             <strong>{formatNok(best.amountOre)}</strong>
-                            <span>lavest hos {chainLabels[best.chain]}</span>
+                            <span>{chain === "all" ? `lavest hos ${chainLabels[best.chain]}` : `observert hos ${chainLabels[best.chain]}`}</span>
+                            {spread > 0 ? <small>{formatNok(spread)} lavere enn høyeste kjedepris</small> : null}
                           </div>
                         </div>
                         <ul className="chain-price-list" aria-label={`Priser for ${product.name}`}>
@@ -259,7 +284,7 @@ function DiscoveryWorkspaceClient({
           </div>
           <div className="discovery-trust-card">
             <h2>Hva betyr et prisfunn?</h2>
-            <p>Dette er observerte kjedepriser, ikke et løfte om lager eller hyllepris i en bestemt butikk.</p>
+            <p>Dette er observerte kjedepriser og prisforskjeller, ikke nødvendigvis en offisiell rabatt eller et løfte om lager og hyllepris.</p>
             <p>Historiske prisfall, medlemspriser og kundeavistilbud vises først når Handleplan har et verifisert datagrunnlag.</p>
             {result ? <small>Datakilde: {result.priceDataSource === "upstream" ? "Kassalapp direkte" : "lokal reservebuffer"} • beregnet {formatObservedAt(result.generatedAt)}</small> : null}
           </div>

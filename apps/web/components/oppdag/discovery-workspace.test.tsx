@@ -52,19 +52,39 @@ function memoryStorage(): Storage {
 afterEach(cleanup);
 
 describe("Oppdag discovery workspace", () => {
-  it("loads fresh prices and filters findings by chain", async () => {
+  it("browses fresh prices without a query and filters findings by store", async () => {
     const user = userEvent.setup();
     const search = vi.fn<DiscoverySearch>().mockResolvedValue(response);
     render(<DiscoveryWorkspace searchDiscovery={search} storage={memoryStorage()} />);
 
     expect(await screen.findByRole("heading", { name: "TINE Lettmelk 1 % 1 l" })).toBeVisible();
-    expect(search).toHaveBeenCalledWith("melk", expect.any(AbortSignal));
+    expect(search).toHaveBeenCalledWith(undefined, expect.any(AbortSignal));
+    expect(screen.getByRole("heading", { name: "Beste prisfunn akkurat nå" })).toBeVisible();
     expect(screen.getByText("lavest hos REMA 1000")).toBeVisible();
+    expect(screen.getByText(/lavere enn høyeste kjedepris/)).toBeVisible();
     expect(screen.getByText(/Kassalapp direkte/)).toBeVisible();
 
-    await user.selectOptions(screen.getByLabelText("Vis kjede"), "bunnpris");
+    await user.click(screen.getByRole("button", { name: "Bunnpris" }));
+    expect(screen.getByRole("button", { name: "Bunnpris" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("heading", { name: "Aktuelle priser hos Bunnpris" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "TINE Lettmelk 1 % 1 l" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Lettmelk Bunnpris" })).toBeVisible();
+  });
+
+  it("keeps search as an optional filter and can return to browsing", async () => {
+    const user = userEvent.setup();
+    const search = vi.fn<DiscoverySearch>().mockResolvedValue(response);
+    render(<DiscoveryWorkspace searchDiscovery={search} storage={memoryStorage()} />);
+    await screen.findByRole("heading", { name: "Beste prisfunn akkurat nå" });
+
+    await user.type(screen.getByLabelText("Filtrer varene (valgfritt)"), "kaffe");
+    await user.click(screen.getByRole("button", { name: "Søk" }));
+    await waitFor(() => expect(search).toHaveBeenLastCalledWith("kaffe", expect.any(AbortSignal)));
+    expect(screen.getByRole("heading", { name: "Prisfunn for «kaffe»" })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Vis alle prisfunn" }));
+    await waitFor(() => expect(search).toHaveBeenLastCalledWith(undefined, expect.any(AbortSignal)));
+    expect(screen.getByRole("heading", { name: "Beste prisfunn akkurat nå" })).toBeVisible();
   });
 
   it("adds an exact product to the basket shared with Planlegg", async () => {
