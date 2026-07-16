@@ -2,15 +2,30 @@
   "data": [
     {
       "ean": "7038010000013",
-      "chain": "extra",
-      "price_nok": 21.9,
-      "observed_at": "2026-07-15T10:30:00+02:00"
-    },
-    {
-      "ean": "7038010000013",
-      "chain": "rema-1000",
-      "price_nok": 22.4,
-      "observed_at": "2026-07-15T08:45:00Z"
+      "name": "Tine Lettmelk 1 %",
+      "weight": 1,
+      "weight_unit": "l",
+      "stores": [
+        {
+          "store": "COOP_EXTRA",
+          "name": "Extra",
+          "current_price": "21.90",
+          "last_checked": "2026-07-15T10:30:00+02:00"
+        },
+        {
+          "store": "REMA_1000",
+          "name": "REMA 1000",
+          "current_price": 22.4,
+          "last_checked": "2026-07-15T08:45:00Z"
+        }
+      ],
+      "price_history": []
     }
-  ]
+  ],
+  "meta": {
+    "requested_eans": 1,
+    "found_products": 1,
+    "days_included": 30,
+    "is_premium": false
+  }
 }

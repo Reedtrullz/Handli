@@ -65,6 +65,5 @@ Public plan requests and the domain planner accept required needs only in purcha
 ## Public-release gates
 
 - Distributed rate limiting shared across every application instance and region.
-- Real migration execution and live PostgreSQL cache coverage in CI.
-- Sanitized contract reconciliation against the current live Kassalapp API.
-- Production security headers, audit/alerting, metrics, error budgets, and operational observability.
+- Live PostgreSQL migration/cache coverage in CI and tested backup restoration.
+- Audit/alerting, metrics, error budgets, and operational observability.

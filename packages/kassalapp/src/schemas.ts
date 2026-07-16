@@ -6,45 +6,73 @@ import {
 } from "@handleplan/domain";
 import { z } from "zod";
 
-// Provisional fixture-backed upstream boundary. No live Kassalapp response capture
-// exists in this repository yet, so live mode must verify this shape before release.
-const upstreamProductSchema = z
-  .object({
-    ean: z.string(),
-    name: z.string(),
-    brand: z.string().optional(),
-    package_quantity: z.number().optional(),
-    package_unit: z.enum(["g", "ml", "each"]).optional(),
-    product_family: z.string().optional(),
-  })
-  .strict();
+const upstreamProductSchema = z.object({
+  ean: z.string(),
+  name: z.string(),
+  brand: z.string().nullable().optional(),
+  weight: z.number().finite().positive().nullable().optional(),
+  weight_unit: z.string().nullable().optional(),
+});
 
-const upstreamSearchResponseSchema = z
-  .object({
-    data: z.array(upstreamProductSchema).max(100),
-  })
-  .strict();
+const upstreamSearchResponseSchema = z.object({
+  data: z.array(upstreamProductSchema).max(100),
+});
 
-const upstreamPriceSchema = z
-  .object({
-    ean: z.string(),
-    chain: z.enum(["bunnpris", "rema-1000", "extra"]),
-    price_nok: z
-      .number()
-      .finite()
-      .nonnegative()
-      .refine((amount) => Math.abs(amount * 100 - Math.round(amount * 100)) < 1e-6, {
-        message: "Price must contain at most two decimal places",
+const upstreamPriceAmountSchema = z
+  .union([
+    z.number().finite(),
+    z.string().regex(/^\d+(?:\.\d{1,2})?$/).transform(Number),
+  ])
+  .pipe(
+    z.number().finite().nonnegative().refine(
+      (amount) => Math.abs(amount * 100 - Math.round(amount * 100)) < 1e-6,
+      { message: "Price must contain at most two decimal places" },
+    ),
+  );
+
+const upstreamBulkStoreSchema = z.object({
+  store: z.string(),
+  current_price: upstreamPriceAmountSchema.nullable(),
+  last_checked: z.iso.datetime({ offset: true }),
+});
+
+const upstreamBulkPriceResponseSchema = z.object({
+  data: z
+    .array(
+      z.object({
+        ean: z.string(),
+        stores: z.array(upstreamBulkStoreSchema).max(100),
       }),
-    observed_at: z.iso.datetime({ offset: true }),
-  })
-  .strict();
+    )
+    .max(100),
+});
 
-const upstreamBulkPriceResponseSchema = z
-  .object({
-    data: z.array(upstreamPriceSchema).max(300),
-  })
-  .strict();
+const chainByStoreCode: Readonly<Record<string, PriceObservation["chain"]>> = {
+  BUNNPRIS: "bunnpris",
+  COOP_EXTRA: "extra",
+  REMA_1000: "rema-1000",
+};
+
+function normalizedPackage(
+  weight: number | null | undefined,
+  unit: string | null | undefined,
+): Pick<Product, "packageQuantity" | "packageUnit"> {
+  if (weight === undefined || weight === null || unit === undefined || unit === null) return {};
+  switch (unit.toLowerCase()) {
+    case "g": return { packageQuantity: weight, packageUnit: "g" };
+    case "kg": return { packageQuantity: weight * 1000, packageUnit: "g" };
+    case "ml": return { packageQuantity: weight, packageUnit: "ml" };
+    case "cl": return { packageQuantity: weight * 10, packageUnit: "ml" };
+    case "dl": return { packageQuantity: weight * 100, packageUnit: "ml" };
+    case "l": return { packageQuantity: weight * 1000, packageUnit: "ml" };
+    case "each":
+    case "piece":
+    case "stk":
+      return { packageQuantity: weight, packageUnit: "each" };
+    default:
+      return {};
+  }
+}
 
 export function normalizeSearchResponse(input: unknown): Product[] {
   const response = upstreamSearchResponseSchema.parse(input);
@@ -53,14 +81,10 @@ export function normalizeSearchResponse(input: unknown): Product[] {
     productSchema.parse({
       ean: product.ean,
       name: product.name,
-      ...(product.brand === undefined ? {} : { brand: product.brand }),
-      ...(product.package_quantity === undefined
+      ...(product.brand === undefined || product.brand === null || product.brand.trim() === ""
         ? {}
-        : { packageQuantity: product.package_quantity }),
-      ...(product.package_unit === undefined ? {} : { packageUnit: product.package_unit }),
-      ...(product.product_family === undefined
-        ? {}
-        : { productFamily: product.product_family }),
+        : { brand: product.brand }),
+      ...normalizedPackage(product.weight, product.weight_unit),
     }),
   );
 }
@@ -68,13 +92,19 @@ export function normalizeSearchResponse(input: unknown): Product[] {
 export function normalizeBulkPriceResponse(input: unknown): PriceObservation[] {
   const response = upstreamBulkPriceResponseSchema.parse(input);
 
-  return response.data.map((price) =>
-    priceObservationSchema.parse({
-      ean: price.ean,
-      chain: price.chain,
-      amountOre: Math.round(price.price_nok * 100),
-      observedAt: new Date(price.observed_at).toISOString(),
-      source: "kassalapp",
+  return response.data.flatMap((product) =>
+    product.stores.flatMap((store) => {
+      const chain = chainByStoreCode[store.store];
+      if (chain === undefined || store.current_price === null) return [];
+      return [
+        priceObservationSchema.parse({
+          ean: product.ean,
+          chain,
+          amountOre: Math.round(store.current_price * 100),
+          observedAt: new Date(store.last_checked).toISOString(),
+          source: "kassalapp",
+        }),
+      ];
     }),
   );
 }

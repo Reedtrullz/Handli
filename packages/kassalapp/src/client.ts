@@ -168,9 +168,11 @@ export class KassalappClient implements KassalappGateway {
       throw new KassalappGatewayError("INVALID_REQUEST");
     }
 
-    const url = new URL(`${this.baseUrl}/products/search`);
-    url.searchParams.set("query", parsed.data.query);
-    url.searchParams.set("limit", String(parsed.data.limit));
+    const url = new URL(`${this.baseUrl}/products`);
+    url.searchParams.set("search", parsed.data.query);
+    url.searchParams.set("size", String(parsed.data.limit));
+    url.searchParams.set("unique", "1");
+    url.searchParams.set("exclude_without_ean", "1");
 
     try {
       return normalizeSearchResponse(

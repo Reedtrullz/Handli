@@ -44,12 +44,11 @@ describe("KassalappClient contract", () => {
         brand: "Tine",
         packageQuantity: 1000,
         packageUnit: "ml",
-        productFamily: "lettmelk",
       },
     ]);
     expect(seenAuthorization).toBe(`Bearer ${API_KEY}`);
     expect(seenUrls).toEqual([
-      "https://fixture.invalid/api/v1/products/search?query=lettmelk&limit=10",
+      "https://fixture.invalid/api/v1/products?search=lettmelk&size=10&unique=1&exclude_without_ean=1",
     ]);
   });
 
@@ -160,7 +159,12 @@ describe("KassalappClient contract", () => {
         data: [
           {
             ...pricesFixture.data[0],
-            observed_at: "not-a-timestamp",
+            stores: [
+              {
+                ...pricesFixture.data[0].stores[0],
+                last_checked: "not-a-timestamp",
+              },
+            ],
           },
         ],
       });
@@ -199,7 +203,7 @@ describe("KassalappClient contract", () => {
       { data: [{ ...pricesFixture.data[0], unknown_price_field: true }] },
       "prices",
     ],
-  ] as const)("fails closed on an unknown field at the %s level", async (_name, body, method) => {
+  ] as const)("ignores an unneeded field at the %s level", async (_name, body, method) => {
     const injectedFetch: typeof fetch = async () => jsonResponse(body);
     const client = createClient(injectedFetch);
     const result =
@@ -207,7 +211,7 @@ describe("KassalappClient contract", () => {
         ? client.searchProducts("melk", 10)
         : client.getBulkPrices([EAN]);
 
-    await expect(result).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    await expect(result).resolves.not.toHaveLength(0);
   });
 
   it("returns bulk rows in requested EAN, Phase 1 chain, then newest-observation order", async () => {
@@ -219,7 +223,20 @@ describe("KassalappClient contract", () => {
       chain: "bunnpris" | "rema-1000" | "extra",
       observedAt: string,
       priceNok: number,
-    ) => ({ ean, chain, price_nok: priceNok, observed_at: observedAt });
+    ) => ({
+      ean,
+      stores: [
+        {
+          store: {
+            bunnpris: "BUNNPRIS",
+            "rema-1000": "REMA_1000",
+            extra: "COOP_EXTRA",
+          }[chain],
+          current_price: priceNok,
+          last_checked: observedAt,
+        },
+      ],
+    });
     const injectedFetch: typeof fetch = async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { eans: string[] };
       if (body.eans.includes(eans[100]!)) {
@@ -252,7 +269,10 @@ describe("KassalappClient contract", () => {
 
   it("collapses duplicate requested EANs but preserves duplicate validated observations", async () => {
     const requestBodies: string[][] = [];
-    const duplicate = pricesFixture.data[0];
+    const duplicate = {
+      ...pricesFixture.data[0],
+      stores: [pricesFixture.data[0].stores[0]],
+    };
     const injectedFetch: typeof fetch = async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { eans: string[] };
       requestBodies.push(body.eans);

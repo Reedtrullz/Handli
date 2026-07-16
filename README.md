@@ -42,10 +42,10 @@ Actions secrets and must never be committed or printed.
 
 ## Scope
 
-Phase 1 does not claim branch inventory, branch-specific shelf prices, member prices, flyer offers, travel-time routing, Oppdag, deployment, or public-release readiness. Anonymous basket, matching preferences, and selected plan stay in local browser storage; volunteered origin is transient and is not persisted.
+Phase 1 does not claim branch inventory, branch-specific shelf prices, member prices, flyer offers, travel-time routing, Oppdag, or public-release readiness. The current VPS deployment is an owner-only protected preview. Anonymous basket, matching preferences, and selected plan stay in local browser storage; volunteered origin is transient and is not persisted.
 
 Required quantities are package counts (`each`) in Phase 1. Gram and millilitre needs fail closed until package-size normalization can prove how many purchasable packages are required.
 
 ## Public-release gates
 
-Before public operation, Handleplan still needs distributed rate limiting at the shared edge/store, real migrations and live PostgreSQL coverage in CI, reconciliation against the current live Kassalapp contract, and production security/observability controls. A per-process limiter would not satisfy the distributed gate and is intentionally not presented as protection here.
+Before public operation, Handleplan still needs distributed rate limiting at the shared edge/store, live PostgreSQL migration/cache coverage in CI, tested backups, and production monitoring/alerting. A per-process limiter would not satisfy the distributed gate and is intentionally not presented as protection here.

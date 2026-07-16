@@ -9,15 +9,22 @@ The 1Password Developer Environment is named `Clankus`. Use the variable names a
 ## Adapter behavior
 
 - Search input is bounded and URL-encoded by the server route.
+- Product search uses `GET /api/v1/products` with `search`, `size`, `unique=1`,
+  and `exclude_without_ean=1`.
 - Bulk price requests are validated and split into at most 100 EANs.
 - Each attempt has an eight-second timeout.
 - Only `429`, `502`, `503`, and `504` receive one retry.
 - Upstream JSON is schema-validated and normalized into canonical UTC timestamps and integer øre.
 - Successful responses require JSON content type, fatal UTF-8 decoding, and a 512 KiB streaming byte limit even without `Content-Length`.
-- Search envelopes are capped at 100 products; each 100-EAN bulk envelope is capped at 300 Phase 1 chain observations.
+- Search and bulk envelopes are capped at 100 products; each bulk product is
+  capped at 100 store rows. Only `BUNNPRIS`, `REMA_1000`, and `COOP_EXTRA`
+  become Phase 1 observations.
 - Public errors use allow-listed codes and never include upstream URLs, headers, bodies, stack causes, or credentials.
 
-The current response envelopes and search path are provisional because no sanitized production Kassalapp response contract has been committed. Reconcile them with the current API documentation before enabling live/public operation.
+The adapter was reconciled against Kassalapp's published OpenAPI contract and a
+live, value-redacted search plus bulk-price probe on 16 July 2026. Synthetic
+fixtures mirror only the fields Handleplan consumes; live values and credentials
+are never committed.
 
 ## Price meaning and non-claims
 
