@@ -484,7 +484,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
               ${versionId}, 'handleplan-reviewed-families', ${taxonomyVersion}, 1,
               ${new Date(Date.now() - 1_000).toISOString()},
               ${checksum(publication.content)},
-              ${JSON.stringify(publication.content)}::jsonb,
+              ${transaction.json(publication.content)},
               ${publication.content.length}, 0
             )
           `;

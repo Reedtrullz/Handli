@@ -640,7 +640,7 @@ async function verifyTaxonomyPublicationGuards(sql) {
   for (const publication of publications) {
     await assert.rejects(
       sql.begin(async (transaction) => {
-        const content = JSON.stringify(publication.content);
+        const content = transaction.json(publication.content);
         await transaction`
           insert into family_taxonomy_versions (
             version_id, taxonomy_id, taxonomy_version, contract_version,
@@ -650,8 +650,8 @@ async function verifyTaxonomyPublicationGuards(sql) {
             ${`handleplan-reviewed-families@${publication.version}`},
             'handleplan-reviewed-families', ${publication.version}, 1,
             transaction_timestamp(),
-            encode(sha256(convert_to(canonical_family_taxonomy_json(${content}::jsonb), 'UTF8')), 'hex'),
-            ${content}::jsonb, ${publication.content.length}, 0
+            encode(sha256(convert_to(canonical_family_taxonomy_json(${content}), 'UTF8')), 'hex'),
+            ${content}, ${publication.content.length}, 0
           )
         `;
         for (const definition of publication.definitions) {
@@ -699,7 +699,7 @@ async function verifyTaxonomyPublicationGuards(sql) {
   for (const publication of lateMutationCases) {
     await assert.rejects(
       sql.begin(async (transaction) => {
-        const content = JSON.stringify(publication.content);
+        const content = transaction.json(publication.content);
         const versionId = `handleplan-reviewed-families@${publication.version}`;
         await transaction`
           insert into family_taxonomy_versions (
@@ -709,8 +709,8 @@ async function verifyTaxonomyPublicationGuards(sql) {
           ) values (
             ${versionId}, 'handleplan-reviewed-families', ${publication.version}, 1,
             transaction_timestamp(),
-            encode(sha256(convert_to(canonical_family_taxonomy_json(${content}::jsonb), 'UTF8')), 'hex'),
-            ${content}::jsonb, 1, 0
+            encode(sha256(convert_to(canonical_family_taxonomy_json(${content}), 'UTF8')), 'hex'),
+            ${content}, 1, 0
           )
         `;
         const [definition] = publication.content;
