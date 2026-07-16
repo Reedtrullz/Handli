@@ -19,5 +19,16 @@ jobs:
       - run: corepack pnpm lint
       - run: corepack pnpm test
       - run: corepack pnpm build
+      - name: Validate deployment assets
+        env:
+          APP_COMMIT_SHA: ${{ github.sha }}
+          HANDLEPLAN_IMAGE: handleplan:ci
+          KASSAL_API_KEY: ci-placeholder
+          POSTGRES_PASSWORD: ci-placeholder
+        run: |
+          sh -n deploy/*.sh
+          node --check deploy/migrate.mjs
+          docker compose -f deploy/compose.production.yml config -q
+          docker build --build-arg APP_COMMIT_SHA="$APP_COMMIT_SHA" -t "$HANDLEPLAN_IMAGE" .
       - run: corepack pnpm exec playwright install --with-deps chromium
       - run: corepack pnpm exec playwright test

@@ -27,6 +27,19 @@ corepack pnpm exec playwright test
 
 See [local development](docs/runbooks/local-development.md) and the [Kassalapp boundary](docs/runbooks/kassalapp.md).
 
+## Protected VPS preview
+
+Production deployment assets live under `deploy/`. The app runs as a non-root
+standalone Next.js container on loopback port 3004 with a dedicated PostgreSQL
+service, checksum-verified forward migrations, immutable commit-tagged images,
+health-gated startup, and rollback to the previous local image when startup
+fails. `deploy/Caddyfile.handleplan` rejects direct-origin traffic and requires
+Cloudflare Access before proxying the preview.
+
+`KASSAL_API_KEY` and the generated PostgreSQL password belong only in
+`/opt/apps/handleplan/shared/production.env` on the VPS. They are not GitHub
+Actions secrets and must never be committed or printed.
+
 ## Scope
 
 Phase 1 does not claim branch inventory, branch-specific shelf prices, member prices, flyer offers, travel-time routing, Oppdag, deployment, or public-release readiness. Anonymous basket, matching preferences, and selected plan stay in local browser storage; volunteered origin is transient and is not persisted.

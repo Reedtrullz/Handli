@@ -1,0 +1,60 @@
+name: handleplan
+
+services:
+  postgres:
+    image: postgres:16.10-alpine@sha256:ab8380566c3ea09690a9ecaa85a59d82bfc6eb86744151a2a54335866c83a3e9
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: handleplan
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_USER: handleplan
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U handleplan -d handleplan"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - database
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  app:
+    image: ${HANDLEPLAN_IMAGE:?HANDLEPLAN_IMAGE is required}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_COMMIT_SHA: ${APP_COMMIT_SHA:?APP_COMMIT_SHA is required}
+      DATABASE_URL: postgresql://handleplan:${POSTGRES_PASSWORD}@postgres:5432/handleplan
+      KASSAL_API_KEY: ${KASSAL_API_KEY:?KASSAL_API_KEY is required}
+      KASSAL_BASE_URL: https://kassal.app/api/v1
+      KASSAL_MODE: real
+      NEXT_TELEMETRY_DISABLED: "1"
+      NODE_ENV: production
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health | grep -q '\"status\":\"ok\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - database
+    ports:
+      - "127.0.0.1:3004:3000"
+
+networks:
+  database:
+    internal: true
+
+volumes:
+  postgres-data:
