@@ -12,6 +12,13 @@ import {
   type PlanningEvidenceReader,
   type PlanningEvidenceSnapshot,
 } from "@handleplan/db/planning-evidence-reader";
+import {
+  PostgresReviewedFamilyReader,
+  ReviewedFamilyReaderError,
+  type ReviewedFamilyCatalogMatch,
+  type ReviewedFamilyReader,
+  type ReviewedFamilySnapshot,
+} from "@handleplan/db/reviewed-family-reader";
 import type {
   ExactProductPlanApiProductSummary,
   PriceObservation,
@@ -20,6 +27,10 @@ import type {
 
 import { readServerEnv, type ServerEnv } from "./env";
 import { DiscoveryService, type DiscoveryServiceContract } from "./discovery-service";
+import {
+  FamilyCandidateService,
+  type FamilyCandidateServiceContract,
+} from "./family-candidate-service";
 import {
   PlanService,
   type ActiveCatalogReader,
@@ -35,6 +46,7 @@ import {
 
 export interface ServerContainer {
   discoveryService: DiscoveryServiceContract;
+  familyCandidateService: FamilyCandidateServiceContract;
   planService: PlanServiceContract;
   publicCatalogIndex: PublicCatalogIndexReader;
   readinessProbe: DatabaseReadinessProbe;
@@ -76,9 +88,9 @@ const fakeCatalogProducts: ExactProductPlanApiProductSummary[] = fakeProducts.ma
     observedAt: FRESH_OBSERVED_AT,
     source: {
       contractVersion: 1,
-      displayName: "Deterministic fake price fixture",
-      id: "fixture-price-source",
-      sourceClass: "ordinary-price",
+      displayName: "Deterministic fake catalog fixture",
+      id: "fixture-catalog-source",
+      sourceClass: "catalog",
       state: "approved",
     },
     sourceRecordId: `source-record:${(index + 1).toString(16).padStart(64, "0")}`,
@@ -91,6 +103,123 @@ const fakeCatalogProducts: ExactProductPlanApiProductSummary[] = fakeProducts.ma
   },
   unitsPerPack: 1,
 }));
+
+const fakeReviewedCatalogProducts = fakeCatalogProducts.slice(0, 3).map((product) => ({
+  ...product,
+  catalogEvidence: {
+    ...product.catalogEvidence,
+    source: {
+      contractVersion: 1 as const,
+      displayName: "Deterministic fake catalog fixture",
+      id: "fixture-catalog-source",
+      sourceClass: "catalog" as const,
+      state: "approved" as const,
+    },
+  },
+}));
+
+const fakeReviewedTaxonomy = {
+  contentSha256: "1d917ee4268615ad510a622ea30d69977191cffc143313a7dbecbad37debf520",
+  contractVersion: 1 as const,
+  publishedAt: "2026-07-15T00:00:00.000Z",
+  taxonomyId: "handleplan-reviewed-families" as const,
+  taxonomyVersion: "1.0.0",
+  versionId: "handleplan-reviewed-families@1.0.0",
+};
+
+const fakeReviewedFamilies = [
+  {
+    aliases: ["mjølk"],
+    id: "family:melk",
+    labelNo: "Melk",
+    product: fakeReviewedCatalogProducts[0]!,
+    slug: "melk",
+  },
+  {
+    aliases: [],
+    id: "family:kaffe",
+    labelNo: "Kaffe",
+    product: fakeReviewedCatalogProducts[1]!,
+    slug: "kaffe",
+  },
+  {
+    aliases: ["brød"],
+    id: "family:brod",
+    labelNo: "Brød",
+    product: fakeReviewedCatalogProducts[2]!,
+    slug: "brod",
+  },
+] as const;
+
+class InMemoryReviewedFamilyReader implements ReviewedFamilyReader {
+  private readonly snapshots = new Map<string, Extract<ReviewedFamilySnapshot, { state: "active" }>>(
+    fakeReviewedFamilies.map((entry, index) => {
+      const family = {
+        aliases: [...entry.aliases],
+        id: entry.id,
+        labelNo: entry.labelNo,
+        slug: entry.slug,
+        status: "active" as const,
+      };
+      const match: ReviewedFamilyCatalogMatch = {
+        canonicalProductId: `product:${entry.product.gtin}`,
+        family,
+        membership: {
+          confidence: 100,
+          decision: "approved",
+          decisionId: `family-membership:${index + 1}`,
+          method: "deterministic-rule",
+          reviewedAt: "2026-07-15T09:00:00.000Z",
+          ruleVersion: "fake-reviewed-family@1",
+        },
+        product: entry.product,
+        taxonomy: fakeReviewedTaxonomy,
+      };
+      return [entry.id, {
+        complete: true,
+        family,
+        familyId: entry.id,
+        matches: [match],
+        state: "active",
+        taxonomy: fakeReviewedTaxonomy,
+      }];
+    }),
+  );
+
+  async getSnapshots(
+    familyIds: readonly string[],
+    productsPerFamily: number,
+    _at: Date,
+    signal?: AbortSignal,
+  ): Promise<ReviewedFamilySnapshot[]> {
+    if (signal?.aborted) throw new ReviewedFamilyReaderError("CANCELLED");
+    return familyIds.map((familyId) => {
+      const snapshot = this.snapshots.get(familyId);
+      if (snapshot === undefined) {
+        return { complete: false, familyId, matches: [], state: "unknown" as const };
+      }
+      return {
+        ...snapshot,
+        family: { ...snapshot.family, aliases: [...snapshot.family.aliases] },
+        matches: snapshot.matches.slice(0, productsPerFamily).map((candidate) => ({
+          ...candidate,
+          family: { ...candidate.family, aliases: [...candidate.family.aliases] },
+          product: { ...candidate.product },
+        })),
+      };
+    });
+  }
+
+  async getMany(
+    familyIds: readonly string[],
+    productsPerFamily: number,
+    at: Date,
+    signal?: AbortSignal,
+  ): Promise<ReviewedFamilyCatalogMatch[]> {
+    return (await this.getSnapshots(familyIds, productsPerFamily, at, signal))
+      .flatMap((snapshot) => snapshot.state === "active" ? snapshot.matches : []);
+  }
+}
 
 class InMemoryPublicCatalogIndexReader implements ActiveCatalogReader, PublicCatalogIndexReader {
   private readonly byGtin = new Map(
@@ -206,14 +335,20 @@ export function createServerContainer(env: ServerEnv): ServerContainer {
     }
     const catalog = new InMemoryPublicCatalogIndexReader();
     const priceService = new PriceService({ reader: new InMemoryPlanningEvidenceReader() });
+    const familyCandidateService = new FamilyCandidateService({
+      now: () => new Date(FAKE_EVALUATION_TIME),
+      reader: new InMemoryReviewedFamilyReader(),
+    });
     return {
       discoveryService: new DiscoveryService({
         catalog,
         now: () => new Date(FAKE_EVALUATION_TIME),
         priceService,
       }),
+      familyCandidateService,
       planService: new PlanService({
         catalog,
+        familyCandidateService,
         now: () => new Date(FAKE_EVALUATION_TIME),
         priceService,
       }),
@@ -231,10 +366,15 @@ export function createServerContainer(env: ServerEnv): ServerContainer {
   const priceService = new PriceService({
     reader: new PostgresPlanningEvidenceReader(connection.db),
   });
+  const familyCandidateService = new FamilyCandidateService({
+    reader: new PostgresReviewedFamilyReader(connection.db),
+  });
   return {
     discoveryService: new DiscoveryService({ catalog: publicCatalogIndex, priceService }),
+    familyCandidateService,
     planService: new PlanService({
       catalog: new PostgresActiveCatalogReader(connection.db),
+      familyCandidateService,
       priceService,
     }),
     publicCatalogIndex,

@@ -4,6 +4,8 @@ import type {
 import { publicDiscoveryResponseSchema } from "@handleplan/domain";
 import { describe, expect, it, vi } from "vitest";
 
+vi.mock("server-only", () => ({}));
+
 import {
   DiscoveryRequestCancelledError,
   DiscoveryUnavailableError,
@@ -20,8 +22,11 @@ const emptyResponse: PublicDiscoveryResponse = {
   sources: [],
 };
 
-function request(query: string): Request {
-  return new Request(`https://handleplan.no/api/discovery/search?q=${encodeURIComponent(query)}`);
+function request(query: string, signal?: AbortSignal): Request {
+  return new Request(
+    `https://handleplan.no/api/discovery/search?q=${encodeURIComponent(query)}`,
+    { signal },
+  );
 }
 
 function service(overrides: Partial<DiscoveryServiceContract> = {}): DiscoveryServiceContract {
@@ -117,7 +122,8 @@ describe("GET /api/discovery/search", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("application/json; charset=utf-8");
-    expect(browse).toHaveBeenCalledWith(incoming.signal);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(browse).toHaveBeenCalledWith(expect.any(AbortSignal));
     await expect(response.json()).resolves.toEqual(emptyResponse);
   });
 
@@ -129,7 +135,46 @@ describe("GET /api/discovery/search", () => {
     const response = await createDiscoverySearchHandler(() => service({ search }))(incoming);
 
     expect(response.status).toBe(200);
-    expect(search).toHaveBeenCalledWith(query, incoming.signal);
+    expect(search).toHaveBeenCalledWith(query, expect.any(AbortSignal));
+  });
+
+  it("bounds service-backed browsing and distinguishes client cancellation", async () => {
+    vi.useFakeTimers();
+    try {
+      let deadlineSignal: AbortSignal | undefined;
+      const timeoutPending = createDiscoverySearchHandler(() => service({
+        browse: async (signal) => {
+          deadlineSignal = signal;
+          return new Promise<never>(() => undefined);
+        },
+      }), { timeoutMs: 25 })(new Request("https://handleplan.no/api/discovery/search"));
+
+      await vi.advanceTimersByTimeAsync(25);
+      const timeoutResponse = await timeoutPending;
+      expect(timeoutResponse.status).toBe(503);
+      expect(await timeoutResponse.json()).toEqual({ code: "REQUEST_TIMEOUT" });
+      expect(deadlineSignal?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+
+      const client = new AbortController();
+      let clientSignal: AbortSignal | undefined;
+      const cancelledPending = createDiscoverySearchHandler(() => service({
+        search: async (_query, signal) => {
+          clientSignal = signal;
+          return new Promise<never>(() => undefined);
+        },
+      }), { timeoutMs: 25 })(request("melk", client.signal));
+      await vi.advanceTimersByTimeAsync(10);
+      client.abort();
+      const cancelledResponse = await cancelledPending;
+
+      expect(cancelledResponse.status).toBe(499);
+      expect(await cancelledResponse.json()).toEqual({ code: "REQUEST_CANCELLED" });
+      expect(clientSignal?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects short, oversized, duplicate, and unexpected parameters before reading", async () => {

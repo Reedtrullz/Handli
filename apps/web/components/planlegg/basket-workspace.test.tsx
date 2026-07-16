@@ -4,10 +4,17 @@ import "@testing-library/jest-dom/vitest";
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Product } from "@handleplan/domain";
+import type {
+  Product,
+  ReviewedFamilyCandidateInspectionResponse,
+} from "@handleplan/domain";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BASKET_QUANTITY_MAX, BASKET_STORAGE_KEY } from "../../lib/browser-basket";
+import {
+  ReviewedFamilyCandidateClientError,
+  type ReviewedFamilyCandidateInspection,
+} from "../../lib/reviewed-family-candidates";
 import { BasketWorkspace } from "./basket-workspace";
 
 const milk: Product = {
@@ -26,6 +33,71 @@ const cheese: Product = {
   packageUnit: "g",
   productFamily: "gulost",
 };
+
+function familyResponse(
+  allowedBrands?: string[],
+): ReviewedFamilyCandidateInspectionResponse {
+  const source = {
+    contractVersion: 1 as const,
+    displayName: "Publisert katalog",
+    id: "catalog-source",
+    sourceClass: "catalog" as const,
+    state: "approved" as const,
+  };
+  return {
+    candidateSets: [{
+      ...(allowedBrands === undefined ? {} : { allowedBrands }),
+      candidateProductIds: ["product:milk"],
+      candidateSetId: `candidate-set:${(allowedBrands === undefined ? "a" : "b").repeat(64)}`,
+      complete: true,
+      family: {
+        aliases: ["mjølk"],
+        id: "family:melk",
+        labelNo: "Melk",
+        slug: "melk",
+        status: "active",
+      },
+      familyId: "family:melk",
+      taxonomyVersionId: "handleplan-reviewed-families@1.0.0",
+    }],
+    contractVersion: 2,
+    generatedAt: "2026-07-17T12:00:00.000Z",
+    memberships: [{
+      canonicalProductId: "product:milk",
+      confidence: 100,
+      decision: "approved",
+      decisionId: "family-membership:11",
+      familyId: "family:melk",
+      method: "human-review",
+      reviewedAt: "2026-07-16T12:00:00.000Z",
+      reviewerAttested: true,
+    }],
+    productClaims: [{
+      canonicalProductId: "product:milk",
+      product: {
+        brand: "TINE",
+        catalogEvidence: {
+          observedAt: "2026-07-17T10:00:00.000Z",
+          source,
+          sourceRecordId: `source-record:${"c".repeat(64)}`,
+        },
+        displayName: "TINE Lettmelk",
+        gtin: milk.ean,
+        packageMeasure: { amount: 1_000, unit: "ml" },
+        unitsPerPack: 1,
+      },
+    }],
+    sources: [source],
+    taxonomy: {
+      contentSha256: "1d917ee4268615ad510a622ea30d69977191cffc143313a7dbecbad37debf520",
+      contractVersion: 1,
+      publishedAt: "2026-07-16T00:00:00.000Z",
+      taxonomyId: "handleplan-reviewed-families",
+      taxonomyVersion: "1.0.0",
+      versionId: "handleplan-reviewed-families@1.0.0",
+    },
+  };
+}
 
 function idFactory() {
   let id = 0;
@@ -82,109 +154,199 @@ describe("Planlegg basket workspace", () => {
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
-  it("requires explicit approval before including a flexible generic need", async () => {
+  it("requires server inspection and explicit approval before adding a reviewed family", async () => {
     const user = userEvent.setup();
+    const inspect = vi.fn(async () => familyResponse());
     render(
       <BasketWorkspace
         createId={idFactory()}
-        searchProducts={async () => [{ ...milk, name: "Havregryn", productFamily: "havregryn" }]}
+        inspectFamilyCandidates={inspect}
+        searchProducts={async () => []}
         searchDelayMs={0}
       />,
     );
 
-    await user.type(screen.getByLabelText("Hva skal du handle?"), "havregryn");
-    await screen.findByRole("option", { name: /Havregryn/ });
-    await user.click(screen.getByRole("button", { name: "Legg til" }));
-    expect(screen.queryByRole("listitem", { name: /havregryn/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("group", { name: "Godkjenn treff for havregryn" })).toBeVisible();
+    await user.selectOptions(screen.getByLabelText("Varetype"), "family:melk");
+    await user.click(screen.getByRole("button", { name: "Se gjennom alternativer" }));
+    expect(inspect).toHaveBeenCalledWith({
+      contractVersion: 2,
+      families: [{ familyId: "family:melk" }],
+    }, expect.any(AbortSignal));
+    expect(screen.queryByRole("listitem", { name: /Melk/i })).not.toBeInTheDocument();
+    const approval = await screen.findByRole("group", { name: "Godkjenn alternativer for Melk" });
+    expect(within(approval).getByText(/1 gjennomgått produkt/i)).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "Samme type, valgfritt merke" }));
+    await user.click(within(approval).getByRole("button", { name: "Godkjenn kandidatlisten og legg til" }));
 
-    const row = screen.getByRole("listitem", { name: /havregryn/i });
-    expect(within(row).getByText("Samme type, valgfritt merke")).toBeVisible();
+    const row = screen.getByRole("listitem", { name: /Melk/i });
+    expect(within(row).getByText("Gjennomgått varetype")).toBeVisible();
+    expect(within(row).getByText(/1 godkjent kandidat/)).toBeVisible();
     expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}")).toMatchObject({
-      matchingRules: [
-        { mode: "flexible", productFamily: "havregryn", userApproved: true },
-      ],
-      products: [expect.objectContaining({ productFamily: "havregryn" })],
-    });
-  });
-
-  it("preserves ready candidates while keyboard focus moves to generic add and approval", async () => {
-    const user = userEvent.setup();
-    render(
-      <BasketWorkspace
-        createId={idFactory()}
-        searchProducts={async () => [milk]}
-        searchDelayMs={0}
-      />,
-    );
-
-    const input = screen.getByRole("combobox", { name: "Hva skal du handle?" });
-    await user.type(input, "lettmelk");
-    await screen.findByRole("option", { name: /TINE Lettmelk/ });
-    await user.tab();
-    await user.tab();
-    const add = screen.getByRole("button", { name: "Legg til" });
-    expect(add).toHaveFocus();
-    await user.keyboard(" ");
-    const approval = screen.getByRole("group", { name: "Godkjenn treff for lettmelk" });
-    expect(approval).toBeVisible();
-    expect(within(approval).getByRole("button", { name: "Samme type, valgfritt merke" })).toHaveFocus();
-    await user.keyboard("{Enter}");
-
-    expect(screen.getByRole("listitem", { name: /lettmelk/i })).toBeVisible();
-    expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}")).toMatchObject({
-      matchingRules: [{ mode: "flexible", productFamily: "lettmelk", userApproved: true }],
-      products: [expect.objectContaining({ ean: milk.ean, productFamily: "lettmelk" })],
-    });
-  });
-
-  it("offers a constrained generic match that requires a brand before approval", async () => {
-    const user = userEvent.setup();
-    render(
-      <BasketWorkspace
-        createId={idFactory()}
-        searchProducts={async () => [{ ...milk, name: "Tacoskjell", brand: "Old El Paso", productFamily: "tacoskjell" }]}
-        searchDelayMs={0}
-      />,
-    );
-
-    await user.type(screen.getByLabelText("Hva skal du handle?"), "tacoskjell");
-    await screen.findByRole("option", { name: /Tacoskjell/ });
-    await user.click(screen.getByRole("button", { name: "Legg til" }));
-    await user.click(screen.getByRole("button", { name: "Begrens merker" }));
-    const approve = screen.getByRole("button", { name: "Godkjenn begrensning" });
-    expect(approve).toBeDisabled();
-    await user.type(screen.getByLabelText("Tillatte merker"), "Old El Paso, Santa Maria");
-    await user.click(approve);
-
-    expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}")).toMatchObject({
-      matchingRules: [
-        {
-          mode: "constrained",
-          productFamily: "tacoskjell",
-          allowedBrands: ["Old El Paso", "Santa Maria"],
+      familyConfirmations: [{
+        candidateCount: 1,
+        confirmation: {
+          candidateSetId: `candidate-set:${"a".repeat(64)}`,
+          taxonomyVersionId: "handleplan-reviewed-families@1.0.0",
           userApproved: true,
         },
-      ],
-      products: [expect.objectContaining({ brand: "Old El Paso", productFamily: "tacoskjell" })],
+        family: { id: "family:melk", labelNo: "Melk" },
+      }],
+      matchingRules: [{
+        mode: "flexible",
+        productFamily: "family:melk",
+        userApproved: true,
+      }],
     });
   });
 
-  it("keeps generic approval disabled for ambiguous or family-less candidates", async () => {
+  it("clears reviewed-family confirmations atomically and stays empty after reload", async () => {
+    const user = userEvent.setup();
+    const props = {
+      createId: idFactory(),
+      inspectFamilyCandidates: async () => familyResponse(),
+      searchProducts: async () => [],
+      searchDelayMs: 0,
+    };
+    const first = render(<BasketWorkspace {...props} />);
+
+    await user.selectOptions(screen.getByLabelText("Varetype"), "family:melk");
+    await user.click(screen.getByRole("button", { name: "Se gjennom alternativer" }));
+    const approval = await screen.findByRole("group", { name: "Godkjenn alternativer for Melk" });
+    await user.click(within(approval).getByRole("button", {
+      name: "Godkjenn kandidatlisten og legg til",
+    }));
+    await user.click(screen.getByRole("button", { name: "Tøm liste" }));
+
+    expect(screen.getByText("Kurven er tom.")).toBeVisible();
+    expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}")).toMatchObject({
+      familyConfirmations: [],
+      matchingRules: [],
+      needs: [],
+      products: [],
+    });
+
+    first.unmount();
+    render(<BasketWorkspace {...props} />);
+    expect(screen.getByText("Kurven er tom.")).toBeVisible();
+    expect(screen.queryByRole("listitem", { name: /Melk/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the reviewed candidate names and prevents a duplicate family", async () => {
+    const user = userEvent.setup();
+    render(
+      <BasketWorkspace
+        createId={idFactory()}
+        inspectFamilyCandidates={async () => familyResponse()}
+        searchProducts={async () => []}
+        searchDelayMs={0}
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText("Varetype"), "family:melk");
+    await user.click(screen.getByRole("button", { name: "Se gjennom alternativer" }));
+    const approval = await screen.findByRole("group", { name: "Godkjenn alternativer for Melk" });
+    expect(within(approval).getByText("TINE Lettmelk")).toBeVisible();
+    await user.click(within(approval).getByRole("button", { name: "Godkjenn kandidatlisten og legg til" }));
+
+    expect(screen.getByText(/Melk finnes allerede i kurven/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Se gjennom alternativer" })).toBeDisabled();
+  });
+
+  it("shows package measure and multipack facts for otherwise identical candidates", async () => {
+    const user = userEvent.setup();
+    const response = familyResponse();
+    const firstClaim = response.productClaims[0]!;
+    const firstMembership = response.memberships[0]!;
+    const secondId = "product:milk-small";
+    response.candidateSets[0] = {
+      ...response.candidateSets[0]!,
+      candidateProductIds: ["product:milk", secondId],
+    };
+    response.productClaims = [firstClaim, {
+      canonicalProductId: secondId,
+      product: {
+        ...firstClaim.product,
+        gtin: "7038010000034",
+        packageMeasure: { amount: 500, unit: "ml" },
+        unitsPerPack: 4,
+        catalogEvidence: {
+          ...firstClaim.product.catalogEvidence,
+          sourceRecordId: `source-record:${"d".repeat(64)}`,
+        },
+      },
+    }];
+    response.memberships = [firstMembership, {
+      ...firstMembership,
+      canonicalProductId: secondId,
+      decisionId: "family-membership:12",
+    }];
+
+    render(
+      <BasketWorkspace
+        createId={idFactory()}
+        inspectFamilyCandidates={async () => response}
+        searchProducts={async () => []}
+        searchDelayMs={0}
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText("Varetype"), "family:melk");
+    await user.click(screen.getByRole("button", { name: "Se gjennom alternativer" }));
+    const approval = await screen.findByRole("group", { name: "Godkjenn alternativer for Melk" });
+
+    expect(within(approval).getAllByText("TINE Lettmelk")).toHaveLength(2);
+    expect(within(approval).getByText(/1.?000 ml/)).toBeVisible();
+    expect(within(approval).getByText(/500 ml · 4 enheter per pakke/)).toBeVisible();
+  });
+
+  it("normalizes an optional brand filter and binds it to the approved candidate set", async () => {
+    const user = userEvent.setup();
+    const inspect: ReviewedFamilyCandidateInspection = vi.fn(async (request) =>
+      familyResponse(request.families[0]?.allowedBrands));
+    render(
+      <BasketWorkspace
+        createId={idFactory()}
+        inspectFamilyCandidates={inspect}
+        searchProducts={async () => []}
+        searchDelayMs={0}
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText("Varetype"), "family:melk");
+    await user.type(screen.getByLabelText("Merker (valgfritt)"), " TINE, tine ");
+    await user.click(screen.getByRole("button", { name: "Se gjennom alternativer" }));
+    expect(inspect).toHaveBeenCalledWith(expect.objectContaining({
+      families: [{ allowedBrands: ["tine"], familyId: "family:melk" }],
+    }), expect.any(AbortSignal));
+    const approval = await screen.findByRole("group", { name: "Godkjenn alternativer for Melk" });
+    await user.click(within(approval).getByRole("button", { name: "Godkjenn kandidatlisten og legg til" }));
+
+    expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}")).toMatchObject({
+      familyConfirmations: [{ allowedBrands: ["tine"] }],
+      matchingRules: [{
+        allowedBrands: ["tine"],
+        mode: "constrained",
+        productFamily: "family:melk",
+        userApproved: true,
+      }],
+    });
+  });
+
+  it("fails closed when a reviewed family has no complete candidate set", async () => {
     const user = userEvent.setup();
     render(<BasketWorkspace
       createId={idFactory()}
-      searchProducts={async () => [milk, cheese]}
+      inspectFamilyCandidates={async () => {
+        throw new ReviewedFamilyCandidateClientError("NO_CANDIDATES");
+      }}
+      searchProducts={async () => []}
       searchDelayMs={0}
     />);
 
-    await user.type(screen.getByLabelText("Hva skal du handle?"), "mat");
-    await screen.findByRole("option", { name: /TINE Lettmelk/ });
-    expect(screen.getByRole("button", { name: "Legg til" })).toBeDisabled();
-    expect(screen.getByText(/flere eller ukjente varetyper/)).toBeVisible();
-    expect(screen.queryByRole("group", { name: /Godkjenn treff/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Se gjennom alternativer" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/ingen komplett, gjennomgått kandidatliste/i);
+    expect(screen.queryByRole("group", { name: /Godkjenn alternativer/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("listitem", { name: /Brød/i })).not.toBeInTheDocument();
   });
 
   it("ignores stale results even when an older request does not honor abort", async () => {
@@ -312,13 +474,11 @@ describe("Planlegg basket workspace", () => {
     await user.type(input, "melk");
     expect(await screen.findByRole("option", { name: /TINE Lettmelk/ })).toBeVisible();
     await user.tab();
+    expect(screen.getByRole("button", { name: "Øk antall" })).toHaveFocus();
     expect(input).toHaveAttribute("aria-expanded", "true");
     await user.tab();
-    expect(screen.getByRole("button", { name: "Legg til" })).toHaveFocus();
-    expect(input).toHaveAttribute("aria-expanded", "true");
-    await user.tab();
-    expect(screen.getByRole("button", { name: "Utenfor søkerammen" })).toHaveFocus();
-    expect(input).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("combobox", { name: "Varetype" })).toHaveFocus();
+    await waitFor(() => expect(input).toHaveAttribute("aria-expanded", "false"));
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
 
     await user.click(input);
@@ -338,7 +498,7 @@ describe("Planlegg basket workspace", () => {
         searchDelayMs={250}
       />,
     );
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "melk" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Hva skal du handle?" }), { target: { value: "melk" } });
     delayed.unmount();
     await act(() => vi.advanceTimersByTimeAsync(500));
     expect(delayedSearch).not.toHaveBeenCalled();
@@ -356,7 +516,7 @@ describe("Planlegg basket workspace", () => {
         searchDelayMs={0}
       />,
     );
-    await userEvent.setup().type(screen.getByRole("combobox"), "melk");
+    await userEvent.setup().type(screen.getByRole("combobox", { name: "Hva skal du handle?" }), "melk");
     await waitFor(() => expect(activeSearch).toHaveBeenCalled());
     active.unmount();
     expect(signal.aborted).toBe(true);
@@ -436,11 +596,12 @@ describe("Planlegg basket workspace", () => {
       id: `need-${index}`, query: milk.name, quantity: 1, quantityUnit: "each", matchRuleId: `rule-${index}`, required: true,
     }));
     localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify({
-      version: 2,
+      version: 3,
       needs,
       matchingRules: needs.map((_, index) => ({ id: `rule-${index}`, mode: "exact", exactEan: milk.ean, userApproved: true, explanation: "Eksakt produkt" })),
       products: [milk],
       convenienceWeightBasisPoints: 5_000,
+      familyConfirmations: [],
       travel: { enabled: false, mode: "car" },
     }));
 

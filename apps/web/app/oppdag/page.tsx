@@ -26,6 +26,7 @@ export default function OppdagPage() {
           <nav aria-label="Om Handleplan">
             <a href="/status">Datadekning</a>
             <a href="/om">Offentlig gode og rettelser</a>
+            <a href="/personvern">Personvern</a>
           </nav>
         </div>
       </footer>

@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import type { MoneyOre, PriceObservation } from "@handleplan/domain";
 import { describe, expect, it, vi } from "vitest";
 
@@ -25,6 +27,29 @@ function fakeCache(rows: PriceObservation[]): PriceCache {
 }
 
 describe("evidence read model cutover", () => {
+  it("closes every persisted eligibility clock at the reader snapshot", async () => {
+    const source = await readFile(new URL("./price-read-model.ts", import.meta.url), "utf8");
+
+    for (const clock of [
+      "lte(productIdentifiers.createdAt, now)",
+      "lte(productIdentifiers.publicStateChangedAt, now)",
+      "lte(canonicalProducts.createdAt, now)",
+      "lte(canonicalProducts.publicStateChangedAt, now)",
+      "lte(priceObservations.createdAt, now)",
+      "lte(dataSources.createdAt, now)",
+      "lte(dataSources.publicStateChangedAt, now)",
+      "lte(sourcePermissions.createdAt, now)",
+      "lte(newerSourcePermissions.createdAt, now)",
+      "lte(ingestionRuns.createdAt, now)",
+      "lte(ingestionRuns.terminalizedAt, now)",
+      "lte(geographicScopes.createdAt, now)",
+      "lte(geographicScopes.publicStateChangedAt, now)",
+      "lte(priceCoverageChecks.createdAt, now)",
+    ]) {
+      expect(source).toContain(clock);
+    }
+  });
+
   it("compares only aggregate mismatch counts", () => {
     expect(comparePriceReadModels([row(1000)], [row(1000)])).toEqual({
       evidenceOnly: 0,

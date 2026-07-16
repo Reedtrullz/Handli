@@ -1,13 +1,14 @@
 import type {
   ExactProductPlanApiEvidenceEnvelope,
   PlanAssignmentV2,
+  ReviewedFamilyPlanApiEvidenceEnvelopeV2,
 } from "@handleplan/domain";
 
 interface PriceProvenanceProps {
   generatedAt: string;
   caveats: readonly string[];
   assignments: readonly PlanAssignmentV2[];
-  evidence: ExactProductPlanApiEvidenceEnvelope;
+  evidence: ExactProductPlanApiEvidenceEnvelope | ReviewedFamilyPlanApiEvidenceEnvelopeV2;
   priceDataSource: "cache";
 }
 
@@ -38,10 +39,19 @@ export function PriceProvenance({
   const observed = first === last
     ? formatTimestamp(first!)
     : `${formatTimestamp(first!)}–${formatTimestamp(last!)}`;
-  const coverageComplete = evidence.needs.every(
-    ({ comparisonScope }) => comparisonScope.completeness === "complete",
+  const selectedAssignmentKeys = new Set(
+    assignments.map(({ canonicalProductId, needId }) => `${needId}\u0000${canonicalProductId}`),
   );
-  const unresolvedChains = [...new Set(evidence.needs.flatMap(({ comparisonScope }) =>
+  const comparisonScopes = "needs" in evidence
+    ? evidence.needs.map(({ comparisonScope }) => comparisonScope)
+    : evidence.candidateCoverage
+        .filter(({ canonicalProductId, needId }) =>
+          selectedAssignmentKeys.has(`${needId}\u0000${canonicalProductId}`),
+        )
+        .map(({ comparisonScope }) => comparisonScope);
+  const coverageComplete = comparisonScopes.length === assignments.length
+    && comparisonScopes.every(({ completeness }) => completeness === "complete");
+  const unresolvedChains = [...new Set(comparisonScopes.flatMap((comparisonScope) =>
     comparisonScope.entries.flatMap(({ chainId, status }) =>
       status.kind === "priced" || status.kind === "known-not-carried" ? [] : [chainId]),
   ))];

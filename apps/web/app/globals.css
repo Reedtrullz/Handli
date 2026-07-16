@@ -130,6 +130,24 @@ a { color: inherit; }
 .brand-approval label { grid-column: 1 / -1; font-weight: 650; }
 .brand-approval input { min-height: 48px; border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0 12px; }
 
+.family-composer { padding: 24px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.family-composer .section-heading-row { padding: 0; margin-bottom: 8px; }
+.family-composer .section-heading-row h2 { color: var(--forest-950); font: 650 20px/26px var(--font-display); letter-spacing: 0; text-transform: none; }
+.family-composer .eyebrow { margin: 0 0 3px; color: var(--forest-650); font-size: 11px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+.family-composer > p { margin: 0 0 20px; color: var(--muted); font-size: 13px; line-height: 19px; }
+.family-composer-controls { display: grid; grid-template-columns: 1fr 1fr 96px; gap: 12px; align-items: end; }
+.family-composer-controls label { display: grid; gap: 6px; color: var(--forest-950); font-size: 12px; font-weight: 700; }
+.family-composer-controls select, .family-composer-controls input { width: 100%; min-height: 44px; padding: 0 12px; color: var(--forest-950); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; }
+.family-composer-controls .secondary-button { grid-column: 1 / -1; }
+.family-candidate-review { margin-top: 20px; padding: 20px; background: var(--mint-100); border: 1px solid color-mix(in srgb, var(--forest-650) 25%, transparent); border-radius: var(--radius); }
+.family-candidate-review h3 { margin: 0 0 4px; color: var(--forest-950); font: 650 18px/24px var(--font-display); }
+.family-candidate-review > p { margin: 0 0 14px; color: var(--muted); font-size: 13px; line-height: 19px; }
+.family-candidate-review details { margin-bottom: 16px; }
+.family-candidate-review summary { min-height: 44px; display: flex; align-items: center; color: var(--forest-800); font-weight: 700; cursor: pointer; }
+.family-candidate-review ul { max-height: 240px; overflow: auto; margin: 4px 0 0; padding: 12px 12px 12px 30px; background: var(--surface); border-radius: 8px; }
+.family-candidate-review li + li { margin-top: 8px; }
+.family-candidate-review .plan-note { text-align: left; }
+
 .section-heading-row { display: flex; justify-content: space-between; align-items: center; padding: 0 8px; margin-bottom: 16px; }
 .section-heading-row h2 { margin: 0; color: var(--muted); font-size: 12px; line-height: 17px; font-weight: 700; text-transform: uppercase; letter-spacing: .13em; }
 .clear-button { min-width: 44px; min-height: 44px; border: 0; color: var(--coral-600); background: transparent; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; cursor: pointer; }
@@ -395,8 +413,10 @@ a { color: inherit; }
   .need-composer { flex-direction: column; }
   .need-search-wrap { padding-left: 10px; }
   .composer-add { width: 100%; }
-  .search-popover { top: 183px; }
+  .search-popover { top: 126px; }
   .quantity-stepper button { width: 44px; }
+  .family-composer { padding: 20px 16px; }
+  .family-composer-controls { grid-template-columns: 1fr; }
   .brand-approval { grid-template-columns: 1fr; }
   .brand-approval label { grid-column: auto; }
   .basket-row { grid-template-columns: 50px minmax(0, 1fr) 44px; padding-left: 10px; }

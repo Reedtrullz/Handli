@@ -89,7 +89,13 @@ describe("PostgresPublicCatalogIndexReader", () => {
     );
     expect(captures[0]!.sql).toContain("permission.id::double precision as permission_id");
     expect(captures[0]!.sql).toContain("run.status = 'completed'");
+    expect(captures[0]!.sql).toContain("run.created_at <=");
+    expect(captures[0]!.sql).toContain("run.terminalized_at <=");
     expect(captures[0]!.sql).toContain("observation.retrieved_at <= run.completed_at");
+    expect(captures[0]!.sql).toContain("observation.created_at <=");
+    expect(captures[0]!.sql).toContain("source.created_at <=");
+    expect(captures[0]!.sql).toContain("source.public_state_changed_at <=");
+    expect(captures[0]!.sql).toContain("candidate_permission.created_at <=");
     expect(captures[0]!.sql).toContain("permission.permissions @> '{\"catalog\": true}'::jsonb");
     expect(captures[0]!.sql).toContain("100::smallint as confidence");
     expect(captures[0]!.sql).toContain("'product:' || observation.canonical_product_id::text");

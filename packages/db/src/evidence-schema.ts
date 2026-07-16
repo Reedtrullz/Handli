@@ -4,6 +4,7 @@ import {
   bigserial,
   char,
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -35,6 +36,7 @@ export const dataSources = pgTable(
     killSwitchReason: text("kill_switch_reason"),
     createdAt: time("created_at").notNull().defaultNow(),
     updatedAt: time("updated_at").notNull().defaultNow(),
+    publicStateChangedAt: time("public_state_changed_at").notNull().defaultNow(),
   },
   (table) => [
     check(
@@ -48,6 +50,10 @@ export const dataSources = pgTable(
     check(
       "data_sources_permission_range",
       sql`${table.permissionExpiresAt} is null or ${table.permissionReviewedAt} is null or ${table.permissionExpiresAt} > ${table.permissionReviewedAt}`,
+    ),
+    check(
+      "data_sources_public_state_clock",
+      sql`${table.publicStateChangedAt} >= ${table.createdAt}`,
     ),
   ],
 );
@@ -95,6 +101,7 @@ export const canonicalProducts = pgTable(
     status: varchar("status", { length: 16 }).notNull().default("active"),
     createdAt: time("created_at").notNull().defaultNow(),
     updatedAt: time("updated_at").notNull().defaultNow(),
+    publicStateChangedAt: time("public_state_changed_at").notNull().defaultNow(),
   },
   (table) => [
     check(
@@ -113,6 +120,10 @@ export const canonicalProducts = pgTable(
       "canonical_products_status",
       sql`${table.status} in ('active', 'quarantined', 'retired')`,
     ),
+    check(
+      "canonical_products_public_state_clock",
+      sql`${table.publicStateChangedAt} >= ${table.createdAt}`,
+    ),
   ],
 );
 
@@ -129,6 +140,7 @@ export const productIdentifiers = pgTable(
     confidence: smallint("confidence").notNull().default(100),
     verifiedAt: time("verified_at"),
     createdAt: time("created_at").notNull().defaultNow(),
+    publicStateChangedAt: time("public_state_changed_at").notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex("product_identifiers_gtin_value_unique")
@@ -152,6 +164,10 @@ export const productIdentifiers = pgTable(
     check(
       "product_identifiers_source_scope",
       sql`(${table.scheme} in ('ean8', 'ean13') and ${table.sourceId} is null) or (${table.scheme} = 'source' and ${table.sourceId} is not null)`,
+    ),
+    check(
+      "product_identifiers_public_state_clock",
+      sql`${table.publicStateChangedAt} >= ${table.createdAt}`,
     ),
   ],
 );
@@ -236,6 +252,212 @@ export const productFamilyMemberships = pgTable(
   ],
 );
 
+/**
+ * Immutable, source-controlled reviewed-family taxonomy publications.
+ *
+ * The legacy product_families/product_family_memberships projection above is
+ * deliberately not trusted by the reviewed-family read path.  A publication
+ * binds its stable identity to the checksum of the canonical domain artifact,
+ * and every definition and membership decision below is version scoped.
+ */
+export const familyTaxonomyVersions = pgTable(
+  "family_taxonomy_versions",
+  {
+    versionId: varchar("version_id", { length: 120 }).primaryKey(),
+    taxonomyId: varchar("taxonomy_id", { length: 80 }).notNull(),
+    taxonomyVersion: varchar("taxonomy_version", { length: 32 }).notNull(),
+    contractVersion: smallint("contract_version").notNull(),
+    publishedAt: time("published_at").notNull(),
+    contentSha256: char("content_sha256", { length: 64 }).notNull(),
+    contentJson: jsonb("content_json").notNull(),
+    expectedFamilyCount: integer("expected_family_count").notNull(),
+    expectedAliasCount: integer("expected_alias_count").notNull(),
+    createdAt: time("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    unique("family_taxonomy_versions_taxonomy_version_unique").on(
+      table.taxonomyId,
+      table.taxonomyVersion,
+    ),
+    unique("family_taxonomy_versions_taxonomy_publication_unique").on(
+      table.taxonomyId,
+      table.publishedAt,
+    ),
+    check(
+      "family_taxonomy_versions_version_id_binding",
+      sql`${table.versionId} = ${table.taxonomyId} || '@' || ${table.taxonomyVersion}`,
+    ),
+    check(
+      "family_taxonomy_versions_taxonomy_id_shape",
+      sql`${table.taxonomyId} ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`,
+    ),
+    check(
+      "family_taxonomy_versions_semver_shape",
+      sql`${table.taxonomyVersion} ~ '^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$'`,
+    ),
+    check(
+      "family_taxonomy_versions_contract_version",
+      sql`${table.contractVersion} = 1`,
+    ),
+    check(
+      "family_taxonomy_versions_checksum_shape",
+      sql`${table.contentSha256} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "family_taxonomy_versions_content_array",
+      sql`jsonb_typeof(${table.contentJson}) = 'array'`,
+    ),
+    check(
+      "family_taxonomy_versions_family_count_range",
+      sql`${table.expectedFamilyCount} between 1 and 500 and jsonb_array_length(${table.contentJson}) = ${table.expectedFamilyCount}`,
+    ),
+    check(
+      "family_taxonomy_versions_alias_count_range",
+      sql`${table.expectedAliasCount} between 0 and ${table.expectedFamilyCount} * 20`,
+    ),
+    check(
+      "family_taxonomy_versions_publication_not_future_created",
+      sql`${table.publishedAt} <= ${table.createdAt}`,
+    ),
+  ],
+);
+
+export const reviewedFamilyDefinitions = pgTable(
+  "reviewed_family_definitions",
+  {
+    versionId: varchar("version_id", { length: 120 })
+      .notNull()
+      .references(() => familyTaxonomyVersions.versionId),
+    familyId: varchar("family_id", { length: 80 }).notNull(),
+    slug: varchar("slug", { length: 80 }).notNull(),
+    labelNo: varchar("label_no", { length: 160 }).notNull(),
+    parentFamilyId: varchar("parent_family_id", { length: 80 }),
+    status: varchar("status", { length: 16 }).notNull(),
+    createdAt: time("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.versionId, table.familyId] }),
+    unique("reviewed_family_definitions_version_slug_unique").on(
+      table.versionId,
+      table.slug,
+    ),
+    foreignKey({
+      name: "reviewed_family_definitions_version_parent_fk",
+      columns: [table.versionId, table.parentFamilyId],
+      foreignColumns: [table.versionId, table.familyId],
+    }),
+    check(
+      "reviewed_family_definitions_family_id_shape",
+      sql`${table.familyId} ~ '^family:[a-z0-9]+(-[a-z0-9]+)*$'`,
+    ),
+    check(
+      "reviewed_family_definitions_slug_shape",
+      sql`${table.slug} ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`,
+    ),
+    check(
+      "reviewed_family_definitions_label_nonempty",
+      sql`length(trim(${table.labelNo})) > 0`,
+    ),
+    check(
+      "reviewed_family_definitions_parent_not_self",
+      sql`${table.parentFamilyId} is null or ${table.parentFamilyId} <> ${table.familyId}`,
+    ),
+    check(
+      "reviewed_family_definitions_status",
+      sql`${table.status} in ('active', 'retired')`,
+    ),
+  ],
+);
+
+export const reviewedFamilyAliases = pgTable(
+  "reviewed_family_aliases",
+  {
+    versionId: varchar("version_id", { length: 120 }).notNull(),
+    familyId: varchar("family_id", { length: 80 }).notNull(),
+    alias: varchar("alias", { length: 80 }).notNull(),
+    createdAt: time("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.versionId, table.alias] }),
+    foreignKey({
+      name: "reviewed_family_aliases_definition_fk",
+      columns: [table.versionId, table.familyId],
+      foreignColumns: [reviewedFamilyDefinitions.versionId, reviewedFamilyDefinitions.familyId],
+    }),
+    check(
+      "reviewed_family_aliases_alias_nonempty",
+      sql`length(trim(${table.alias})) > 0`,
+    ),
+    check(
+      "reviewed_family_aliases_alias_shape",
+      sql`${table.alias} ~ '^[a-z0-9æøå]+([ -][a-z0-9æøå]+)*$'`,
+    ),
+  ],
+);
+
+export const reviewedFamilyMembershipDecisions = pgTable(
+  "reviewed_family_membership_decisions",
+  {
+    id: id("id").primaryKey(),
+    versionId: varchar("version_id", { length: 120 }).notNull(),
+    familyId: varchar("family_id", { length: 80 }).notNull(),
+    productId: foreignId("product_id")
+      .notNull()
+      .references(() => canonicalProducts.id),
+    decision: varchar("decision", { length: 16 }).notNull(),
+    method: varchar("method", { length: 24 }).notNull(),
+    confidence: smallint("confidence").notNull(),
+    reviewerId: varchar("reviewer_id", { length: 160 }),
+    reviewedAt: time("reviewed_at").notNull(),
+    ruleVersion: varchar("rule_version", { length: 80 }),
+    createdAt: time("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      name: "reviewed_family_membership_decisions_definition_fk",
+      columns: [table.versionId, table.familyId],
+      foreignColumns: [reviewedFamilyDefinitions.versionId, reviewedFamilyDefinitions.familyId],
+    }),
+    index("reviewed_family_membership_decisions_latest_idx").on(
+      table.versionId,
+      table.familyId,
+      table.productId,
+      table.reviewedAt,
+      table.id,
+    ),
+    check(
+      "reviewed_family_membership_decisions_decision",
+      sql`${table.decision} in ('approved', 'candidate', 'rejected')`,
+    ),
+    check(
+      "reviewed_family_membership_decisions_method",
+      sql`${table.method} in ('deterministic_rule', 'human_review')`,
+    ),
+    check(
+      "reviewed_family_membership_decisions_confidence_range",
+      sql`${table.confidence} between 0 and 100`,
+    ),
+    check(
+      "reviewed_family_membership_decisions_provenance",
+      sql`(
+        ${table.method} = 'human_review'
+        and ${table.reviewerId} is not null
+        and length(trim(${table.reviewerId})) > 0
+        and ${table.ruleVersion} is null
+      ) or (
+        ${table.method} = 'deterministic_rule'
+        and ${table.reviewerId} is null
+        and ${table.ruleVersion} is not null
+        and length(trim(${table.ruleVersion})) > 0
+      )`,
+    ),
+    check(
+      "reviewed_family_membership_decisions_review_not_future_created",
+      sql`${table.reviewedAt} <= ${table.createdAt}`,
+    ),
+  ],
+);
+
 export const geographicScopes = pgTable(
   "geographic_scopes",
   {
@@ -247,6 +469,7 @@ export const geographicScopes = pgTable(
     status: varchar("status", { length: 16 }).notNull().default("active"),
     createdAt: time("created_at").notNull().defaultNow(),
     updatedAt: time("updated_at").notNull().defaultNow(),
+    publicStateChangedAt: time("public_state_changed_at").notNull().defaultNow(),
   },
   (table) => [
     check(
@@ -260,6 +483,10 @@ export const geographicScopes = pgTable(
     check(
       "geographic_scopes_status",
       sql`${table.status} in ('active', 'retired')`,
+    ),
+    check(
+      "geographic_scopes_public_state_clock",
+      sql`${table.publicStateChangedAt} >= ${table.createdAt}`,
     ),
   ],
 );
@@ -317,6 +544,7 @@ export const ingestionRuns = pgTable(
     status: varchar("status", { length: 16 }).notNull(),
     startedAt: time("started_at").notNull(),
     completedAt: time("completed_at"),
+    terminalizedAt: time("terminalized_at"),
     counts: jsonb("counts").$type<Record<string, number>>().notNull().default({}),
     errorClass: varchar("error_class", { length: 80 }),
     createdAt: time("created_at").notNull().defaultNow(),
@@ -332,6 +560,10 @@ export const ingestionRuns = pgTable(
     check(
       "ingestion_runs_time_range",
       sql`${table.completedAt} is null or ${table.completedAt} >= ${table.startedAt}`,
+    ),
+    check(
+      "ingestion_runs_terminalization_state",
+      sql`(${table.status} = 'running' and ${table.completedAt} is null and ${table.terminalizedAt} is null) or (${table.status} <> 'running' and ${table.completedAt} is not null and ${table.terminalizedAt} is not null and ${table.terminalizedAt} >= ${table.createdAt})`,
     ),
   ],
 );
@@ -353,6 +585,7 @@ export const sourceRecordOutcomes = pgTable(
     normalizedRecord: jsonb("normalized_record").$type<Record<string, unknown>>(),
     outcomeHash: char("outcome_hash", { length: 64 }).notNull(),
     recordedAt: time("recorded_at").notNull(),
+    createdAt: time("created_at").notNull().defaultNow(),
   },
   (table) => [
     unique("source_record_outcomes_run_kind_record_unique").on(
@@ -1037,4 +1270,9 @@ export type SourceRecordOutcomeRow = typeof sourceRecordOutcomes.$inferSelect;
 export type NewSourceRecordOutcomeRow = typeof sourceRecordOutcomes.$inferInsert;
 export type CatalogObservationRow = typeof catalogObservations.$inferSelect;
 export type NewCatalogObservationRow = typeof catalogObservations.$inferInsert;
+export type FamilyTaxonomyVersionRow = typeof familyTaxonomyVersions.$inferSelect;
+export type ReviewedFamilyDefinitionRow = typeof reviewedFamilyDefinitions.$inferSelect;
+export type ReviewedFamilyAliasRow = typeof reviewedFamilyAliases.$inferSelect;
+export type ReviewedFamilyMembershipDecisionRow =
+  typeof reviewedFamilyMembershipDecisions.$inferSelect;
 export type ApprovedOfferRow = typeof approvedOffers.$inferSelect;

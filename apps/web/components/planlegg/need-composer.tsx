@@ -90,7 +90,6 @@ export async function searchProductsFromApi(
 }
 
 interface NeedComposerProps {
-  onGenericNeed: (query: string, quantity: number, candidates: Product[]) => void;
   onProduct: (product: Product, quantity: number) => void;
   searchProducts: ProductSearch;
   searchDelayMs?: number;
@@ -106,15 +105,7 @@ function optionLabel(product: Product): string {
   return `${product.name}${amount}`;
 }
 
-export function genericCandidateFamily(query: string, products: readonly Product[]): string | undefined {
-  const normalizedQuery = query.trim().toLocaleLowerCase("nb-NO");
-  const families = [...new Set(products.flatMap(({ productFamily }) => productFamily ? [productFamily] : []))];
-  return families.find((family) => family.toLocaleLowerCase("nb-NO") === normalizedQuery)
-    ?? (families.length === 1 ? families[0] : undefined);
-}
-
 export function NeedComposer({
-  onGenericNeed,
   onProduct,
   searchProducts,
   searchDelayMs = 250,
@@ -210,13 +201,6 @@ export function NeedComposer({
     reset();
   }
 
-  function addGeneric(): void {
-    const trimmed = query.trim();
-    if (!trimmed || genericCandidateFamily(trimmed, products) === undefined || searchState !== "ready" || disabled) return;
-    onGenericNeed(trimmed, quantity, products);
-    reset();
-  }
-
   function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>): void {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -240,10 +224,16 @@ export function NeedComposer({
   const activeOptionId = open && activeIndex >= 0
     ? `${listId}-option-${activeIndex}`
     : undefined;
-  const genericFamily = genericCandidateFamily(query, products);
-
   return (
-    <section className="need-composer-section" ref={boundary}>
+    <section
+      className="need-composer-section"
+      ref={boundary}
+      onBlur={(event) => {
+        const nextTarget = event.relatedTarget;
+        if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+        dismissSearch();
+      }}
+    >
       <h1>Hva skal du handle?</h1>
       <div className="need-composer">
         <div className="need-search-wrap">
@@ -269,11 +259,6 @@ export function NeedComposer({
               scheduleSearch(nextQuery);
             }}
             onKeyDown={onKeyDown}
-            onBlur={(event) => {
-              const nextTarget = event.relatedTarget;
-              if (nextTarget instanceof Node && boundary.current?.contains(nextTarget)) return;
-              dismissSearch();
-            }}
           />
           <div className="quantity-stepper" aria-label="Antall">
             <button
@@ -291,23 +276,9 @@ export function NeedComposer({
             >+</button>
           </div>
         </div>
-        <button
-          className="primary-button composer-add"
-          type="button"
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={addGeneric}
-          onBlur={(event) => {
-            const nextTarget = event.relatedTarget;
-            if (nextTarget instanceof Node && boundary.current?.contains(nextTarget)) return;
-            dismissSearch();
-          }}
-          disabled={disabled || !query.trim() || searchState !== "ready" || genericFamily === undefined}
-        >
-          Legg til
-        </button>
       </div>
       {disabled ? <p role="status">Handlekurven kan inneholde maksimalt 50 varebehov.</p> : null}
-      {!disabled && searchState === "ready" && genericFamily === undefined ? <p role="status">Velg et eksakt produkt; forslagene tilhører flere eller ukjente varetyper.</p> : null}
+      {!disabled && searchState === "ready" ? <p role="status">Velg et eksakt produkt fra forslagene. Bruk «Varetype» nedenfor hvis Handleplan skal velge blant gjennomgåtte alternativer.</p> : null}
       <div ref={popup} className="search-popover" hidden={!open}>
         {open ? (
           <>

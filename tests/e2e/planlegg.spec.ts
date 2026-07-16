@@ -27,7 +27,7 @@ interface PublicEvidence {
 }
 
 function collectPublicEvidence(page: Page): PublicEvidence {
-  const stats = {
+  const stats: PublicEvidence["stats"] = {
     bodyReadFailures: [],
     bodylessSameOriginResponses: 0,
     consoleErrors: 0,
@@ -274,8 +274,9 @@ test("anonymous shopper approves matching and chooses every complete frontier pl
 
   const storedBeforeResult = await page.evaluate(() => JSON.stringify(localStorage));
   expect(storedBeforeResult).not.toContain("origin");
-  expect(JSON.parse(JSON.parse(storedBeforeResult)["handleplan:basket:v2"])).toMatchObject({
-    version: 2,
+  expect(JSON.parse(JSON.parse(storedBeforeResult)["handleplan:basket:v3"])).toMatchObject({
+    version: 3,
+    familyConfirmations: [],
     needs: [{ query: "TINE Lettmelk 1 % 1 l" }, { query: "Evergood Kaffe 500 g" }, { query: "Norsk grovbrød 750 g" }],
     products: expect.arrayContaining([expect.objectContaining({ ean: "7038010000010" })]),
   });
@@ -321,7 +322,7 @@ test("anonymous shopper approves matching and chooses every complete frontier pl
   await expect(page.getByRole("radio", { name: /^Mest spart/ })).toBeChecked();
   const selectedPlanId = await page.getByRole("radio", { checked: true }).getAttribute("value");
   expect(selectedPlanId).toBeTruthy();
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("handleplan:basket:v2"))).toContain('"convenienceWeightBasisPoints":0');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("handleplan:basket:v3"))).toContain('"convenienceWeightBasisPoints":0');
 
   await evidence.settle();
   await page.reload();
@@ -342,6 +343,81 @@ test("an intentionally stale fixture cannot produce a recommendation", async ({ 
   await expect(page.getByRole("heading", { name: "Ingen komplett handleplan" })).toBeVisible();
   await expect(page.getByText("Ingen delvis plan blir anbefalt.")).toBeVisible();
   await expect(page.getByRole("radio")).toHaveCount(0);
+  await expectWcag22AandAA(page);
+  await expectCleanPublicEvidence(evidence);
+});
+
+test("a shopper reviews a complete product family before receiving a server-owned plan", async ({ page }) => {
+  const evidence = collectPublicEvidence(page);
+  await page.goto("/planlegg");
+
+  await page.getByLabel("Varetype").selectOption("family:melk");
+  const candidateRequestPromise = page.waitForRequest((request) =>
+    request.method() === "POST" && new URL(request.url()).pathname === "/api/plan-candidates");
+  await page.getByRole("button", { name: "Se gjennom alternativer" }).click();
+  const candidateRequest = await candidateRequestPromise;
+  expect(candidateRequest.postDataJSON()).toEqual({
+    contractVersion: 2,
+    families: [{ familyId: "family:melk" }],
+  });
+
+  const approval = page.getByRole("group", { name: "Godkjenn alternativer for Melk" });
+  await expect(approval).toBeVisible();
+  await expect(approval.getByText("TINE Lettmelk 1 % 1 l")).toBeVisible();
+  await expect(approval.getByText(/1.?000 ml/)).toBeVisible();
+  await expect(approval.getByRole("button", {
+    name: "Godkjenn kandidatlisten og legg til",
+  })).toBeEnabled();
+  await expectWcag22AandAA(page);
+
+  await approval.getByRole("button", { name: "Godkjenn kandidatlisten og legg til" }).click();
+  const basketRow = page.getByRole("listitem", { name: /Melk/ });
+  await expect(basketRow.getByText("Gjennomgått varetype")).toBeVisible();
+  const persisted = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("handleplan:basket:v3") ?? "{}"));
+  expect(persisted).toMatchObject({
+    version: 3,
+    familyConfirmations: [{
+      candidateCount: 1,
+      confirmation: {
+        taxonomyVersionId: "handleplan-reviewed-families@1.0.0",
+        userApproved: true,
+      },
+      family: { id: "family:melk", labelNo: "Melk" },
+    }],
+    matchingRules: [{ mode: "flexible", productFamily: "family:melk" }],
+  });
+  expect(JSON.stringify(persisted)).not.toContain("candidateProductIds");
+
+  const planRequestPromise = page.waitForRequest((request) =>
+    request.method() === "POST" && new URL(request.url()).pathname === "/api/plans");
+  await page.getByRole("link", { name: /Finn handleplan/ }).click();
+  const planRequest = await planRequestPromise;
+  const planBody = planRequest.postDataJSON();
+  expect(planBody).toMatchObject({
+    contractVersion: 2,
+    maxStores: 3,
+    needs: [{
+      match: {
+        familyId: "family:melk",
+        kind: "reviewed-family",
+        confirmation: { userApproved: true },
+      },
+      required: true,
+    }],
+  });
+  expect(JSON.stringify(planBody)).not.toMatch(
+    /query|labelNo|candidateProductIds|TINE Lettmelk|packageMeasure|reviewer/i,
+  );
+
+  await expect(page.getByRole("heading", { name: "Handleliste fordelt på butikker" }))
+    .toBeVisible();
+  const substitutions = page.getByRole("heading", { name: "Godkjente varebytter" })
+    .locator("xpath=ancestor::section");
+  await expect(substitutions.getByText("Melk")).toBeVisible();
+  await expect(substitutions.getByText("TINE Lettmelk 1 % 1 l")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Ikke tilgjengelig for varebytter ennå" }))
+    .toBeVisible();
   await expectWcag22AandAA(page);
   await expectCleanPublicEvidence(evidence);
 });
@@ -369,7 +445,7 @@ test("a shopper discovers a fresh price and carries the exact product into Planl
   await page.getByRole("link", { name: /Gå til Planlegg/ }).click();
   await expect(page).toHaveURL(`${BASE_ORIGIN}/planlegg`);
   await expect(page.getByRole("listitem", { name: /TINE Lettmelk 1 % 1 l/ })).toBeVisible();
-  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem("handleplan:basket:v2") ?? "{}"));
+  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem("handleplan:basket:v3") ?? "{}"));
   expect(persisted).toMatchObject({
     needs: [{ query: "TINE Lettmelk 1 % 1 l" }],
     matchingRules: [{ mode: "exact", exactEan: "7038010000010" }],

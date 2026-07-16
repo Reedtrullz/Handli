@@ -198,9 +198,13 @@ export class PostgresPublicCatalogIndexReader implements PublicCatalogIndexReade
          and run.status = 'completed'
          and run.completed_at is not null
          and run.completed_at <= ${atIso}::timestamptz
+         and run.created_at <= ${atIso}::timestamptz
+         and run.terminalized_at <= ${atIso}::timestamptz
         inner join data_sources source
           on source.id = run.source_id
          and source.runtime_state = 'approved'
+         and source.created_at <= ${atIso}::timestamptz
+         and source.public_state_changed_at <= ${atIso}::timestamptz
          and source.permission_reviewed_at is not null
          and source.permission_reviewed_at <= ${atIso}::timestamptz
          and (source.permission_expires_at is null or source.permission_expires_at > ${atIso}::timestamptz)
@@ -214,12 +218,14 @@ export class PostgresPublicCatalogIndexReader implements PublicCatalogIndexReade
           from source_permissions candidate_permission
           where candidate_permission.source_id = source.id
             and candidate_permission.reviewed_at <= ${atIso}::timestamptz
+            and candidate_permission.created_at <= ${atIso}::timestamptz
           order by candidate_permission.reviewed_at desc, candidate_permission.id desc
           limit 1
         ) permission on true
         where observation.retrieved_at >= ${freshnessStartsAtIso}::timestamptz
           and observation.retrieved_at <= ${atIso}::timestamptz
           and observation.retrieved_at <= run.completed_at
+          and observation.created_at <= ${atIso}::timestamptz
           and permission.decision = 'approved'
           and (permission.valid_until is null or permission.valid_until > ${atIso}::timestamptz)
           and permission.permissions @> '{"catalog": true}'::jsonb

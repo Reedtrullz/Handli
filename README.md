@@ -1,8 +1,19 @@
 # Handleplan
 
-Handleplan is an anonymous-first Norwegian grocery planner under protected-alpha development. A shopper can discover observed prices, add an exact product to a shared basket, and compare complete, non-dominated plans using the eligible prices Handleplan can verify across at most three intended chains: Bunnpris, REMA 1000, and Extra.
+Handleplan is an anonymous-first Norwegian grocery planner under protected-alpha development. A shopper can discover observed prices, add an exact product or explicitly approve a reviewed product family in a shared basket, and compare complete, non-dominated plans using the eligible prices Handleplan can verify across at most three intended chains: Bunnpris, REMA 1000, and Extra.
 
 The binding v1 promise is documented in the [product-truth contract](docs/contracts/v1-product-truth.md): Handleplan names the comparison scope, distinguishes ordinary observations, official offers, and historical comparisons, and never hides unknown coverage behind an unqualified “best” claim.
+
+Handleplan's original code is licensed under
+[`AGPL-3.0-or-later`](LICENSE). External price/product/offer data, retailer and
+provider marks, imagery, captures, dependencies, and other third-party material
+are not relicensed; see the [licensing boundary](LICENSES/README.md). The
+[public-good governance policy](docs/governance/public-good-governance.md),
+[Norwegian privacy notice](docs/privacy/personvern.md), [security
+policy](SECURITY.md), and [data-flow/threat
+model](docs/security/data-flow-threat-model.md) are published alpha artifacts,
+not claims that legal, source-rights, privacy, or public-launch review has
+passed.
 
 ## Quick start with deterministic data
 
@@ -49,7 +60,7 @@ They are not GitHub Actions secrets and must never be committed or printed.
 
 Oppdag browses eligible Kassalapp observations without requiring a search, shows the prices actually returned for the intended chains, supports optional product filtering, and can add an exact product to the same local basket used by Planlegg. Coverage can be incomplete. Cross-chain differences are not retailer discounts, and a previous observation is not an official before-price. The alpha does not claim complete three-chain coverage, official offers, branch inventory, branch-specific shelf prices, travel-time routing, or plan impact. The current VPS deployment is an owner-only protected preview. Anonymous basket, matching preferences, and selected plan stay in local browser storage; future volunteered origin is required to remain transient and unpersisted.
 
-Exact required quantities support packages, grams, and millilitres. The server uses approved package measures, buys whole packages, and shows surplus; flexible family matching still requires a reviewed taxonomy before it can re-enter the strict public contract.
+Exact required quantities support packages, grams, and millilitres. The server uses approved package measures, buys whole packages, and shows surplus. Flexible matching is admitted only through a server-published reviewed family and a complete candidate snapshot that the shopper has inspected and approved; unknown, stale, ambiguous, or empty families fail closed.
 
 ## Public-release gates
 

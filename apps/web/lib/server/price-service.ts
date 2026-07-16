@@ -10,6 +10,7 @@ import {
   exactProductPlanApiEvidenceSourceSchema,
   exactProductPlanApiRequestSchema,
   isFiniteDate,
+  isValidGtin,
   priceEvidenceSchema,
   type ExactProductPlanApiEvidenceEnvelope,
   type ExactProductPlanApiNeedEvidence,
@@ -45,6 +46,19 @@ export interface ExactPriceServiceResult {
   evidence: ExactProductPlanApiEvidenceEnvelope;
   prices: PriceObservation<string>[];
   products: PlanningEvidenceProductIdentity[];
+}
+
+export interface ProductPriceEvidence
+  extends Omit<ExactProductPlanApiNeedEvidence, "needId"> {
+  canonicalProductId: string;
+  gtin: string;
+}
+
+export interface ProductPriceServiceResult {
+  productEvidence: ProductPriceEvidence[];
+  prices: PriceObservation<string>[];
+  products: PlanningEvidenceProductIdentity[];
+  sources: ExactProductPlanApiEvidenceEnvelope["sources"];
 }
 
 export interface PriceServiceDependencies {
@@ -153,6 +167,79 @@ export class PriceService {
 
   constructor(private readonly dependencies: PriceServiceDependencies) {
     this.coverageService = dependencies.coverageService ?? new CoverageService();
+  }
+
+  /**
+   * Reads a bounded, canonical GTIN union once for server-authoritative mixed
+   * planning. The synthetic exact needs are internal projection keys only;
+   * browser-controlled labels or matching metadata never enter this boundary.
+   */
+  async readProducts(
+    gtins: readonly string[],
+    at: Date,
+    signal?: AbortSignal,
+  ): Promise<ProductPriceServiceResult> {
+    if (
+      !Array.isArray(gtins)
+      || gtins.length < 1
+      || gtins.length > 50
+      || new Set(gtins).size !== gtins.length
+      || gtins.some((gtin) => typeof gtin !== "string" || !isValidGtin(gtin))
+      || !(at instanceof Date)
+      || !isFiniteDate(at)
+    ) {
+      throw new PriceServiceError("INVALID_REQUEST");
+    }
+    const canonicalGtins = [...gtins].sort(compareText);
+    const needIdByGtin = new Map(
+      canonicalGtins.map((gtin, index) => [
+        gtin,
+        `product-read:${String(index + 1).padStart(2, "0")}`,
+      ]),
+    );
+    const request: ExactProductPlanApiRequest = {
+      contractVersion: 1,
+      maxStores: 3,
+      needs: canonicalGtins.map((gtin) => ({
+        id: needIdByGtin.get(gtin)!,
+        match: {
+          kind: "exact-product",
+          product: { kind: "gtin", value: gtin },
+          userApproved: true,
+        },
+        quantity: 1,
+        quantityUnit: "package",
+        required: true,
+      })),
+    };
+    const exact = await this.readExact(request, at, signal);
+    const productByGtin = new Map(exact.products.map((product) => [product.gtin, product]));
+    const needEvidenceById = new Map(
+      exact.evidence.needs.map((evidence) => [evidence.needId, evidence]),
+    );
+    const productEvidence = canonicalGtins.map((gtin) => {
+      const identity = productByGtin.get(gtin);
+      const evidence = needEvidenceById.get(needIdByGtin.get(gtin)!);
+      if (identity === undefined || evidence === undefined) {
+        throw new PriceServiceError("UNAVAILABLE");
+      }
+      return {
+        canonicalProductId: identity.canonicalProductId,
+        comparisonScope: evidence.comparisonScope,
+        excludedPriceEvidence: evidence.excludedPriceEvidence,
+        gtin,
+        historicalComparisons: evidence.historicalComparisons,
+        historicalPriceEvidence: evidence.historicalPriceEvidence,
+        officialOffers: evidence.officialOffers,
+        ordinaryPrices: evidence.ordinaryPrices,
+      };
+    });
+    return {
+      productEvidence,
+      prices: exact.prices,
+      products: exact.products,
+      sources: exact.evidence.sources,
+    };
   }
 
   async readExact(

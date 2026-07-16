@@ -29,8 +29,11 @@ const product: ExactProductPlanApiProductSummary = {
   unitsPerPack: 1,
 };
 
-function request(q: string): Request {
-  return new Request(`https://handleplan.no/api/products/search?q=${encodeURIComponent(q)}`);
+function request(q: string, signal?: AbortSignal): Request {
+  return new Request(
+    `https://handleplan.no/api/products/search?q=${encodeURIComponent(q)}`,
+    { signal },
+  );
 }
 
 function reader(search: PublicCatalogIndexReader["search"]): PublicCatalogIndexReader {
@@ -46,6 +49,7 @@ describe("GET /api/products/search", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("application/json; charset=utf-8");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
     await expect(response.json()).resolves.toEqual({
       contractVersion: 1,
       products: [{
@@ -57,11 +61,48 @@ describe("GET /api/products/search", () => {
         unitsPerPack: 1,
       }],
     });
-    expect(search).toHaveBeenCalledWith("melk", 20, NOW, incoming.signal);
+    expect(search).toHaveBeenCalledWith("melk", 20, NOW, expect.any(AbortSignal));
     expect(JSON.stringify(await (await createSearchHandler(
       () => reader(async () => [product]),
       () => NOW,
     )(request("melk"))).json())).not.toMatch(/catalogEvidence|sourceRecord|permission|raw/i);
+  });
+
+  it("bounds catalog resolution/search and distinguishes client cancellation", async () => {
+    vi.useFakeTimers();
+    try {
+      const providerTimeout = createSearchHandler(
+        () => new Promise<PublicCatalogIndexReader>(() => undefined),
+        () => NOW,
+        { timeoutMs: 25 },
+      )(request("melk"));
+      await vi.advanceTimersByTimeAsync(25);
+      const providerResponse = await providerTimeout;
+      expect(providerResponse.status).toBe(503);
+      expect(await providerResponse.json()).toEqual({ code: "REQUEST_TIMEOUT" });
+      expect(vi.getTimerCount()).toBe(0);
+
+      const client = new AbortController();
+      let seenSignal: AbortSignal | undefined;
+      const cancelledPending = createSearchHandler(
+        () => reader(async (_query, _limit, _at, signal) => {
+          seenSignal = signal;
+          return new Promise<never>(() => undefined);
+        }),
+        () => NOW,
+        { timeoutMs: 25 },
+      )(request("melk", client.signal));
+      await vi.advanceTimersByTimeAsync(10);
+      client.abort();
+      const cancelledResponse = await cancelledPending;
+
+      expect(cancelledResponse.status).toBe(499);
+      expect(await cancelledResponse.json()).toEqual({ code: "REQUEST_CANCELLED" });
+      expect(seenSignal?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each(["", "m", " "])('rejects the too-short query "%s"', async (query) => {

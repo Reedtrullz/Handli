@@ -155,6 +155,7 @@ const runtimeSequences = [
 
 const webReadOnlyTables = [
   "catalog_observations",
+  "family_taxonomy_versions",
   "handleplan_schema_migrations",
   "price_cache",
   "canonical_products",
@@ -166,6 +167,9 @@ const webReadOnlyTables = [
   "ingestion_runs",
   "price_observations",
   "price_coverage_checks",
+  "reviewed_family_aliases",
+  "reviewed_family_definitions",
+  "reviewed_family_membership_public",
 ];
 
 const webDataSourceColumns = [
@@ -178,6 +182,7 @@ const webDataSourceColumns = [
   "permission_expires_at",
   "created_at",
   "updated_at",
+  "public_state_changed_at",
 ];
 
 const webSourcePermissionColumns = [
@@ -436,6 +441,19 @@ try {
         values (${id}, ${checksum})
       `;
     });
+  }
+
+  if (migrationFiles.includes("012_reviewed_family_taxonomy.sql")) {
+    await sql`
+      select assert_family_taxonomy_publication(
+        'handleplan-reviewed-families@1.0.0'
+      )
+    `;
+    await sql`
+      select assert_family_taxonomy_publication(version_id)
+      from family_taxonomy_versions
+      order by version_id
+    `;
   }
 
   if (ciMaxMigrationId === undefined) {

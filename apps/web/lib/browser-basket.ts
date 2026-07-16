@@ -1,16 +1,23 @@
 import {
+  canonicalReviewedFamilyAllowedBrandsSchema,
   exactProductPlanApiRequestSchema,
   matchProducts,
   matchRuleSchema,
+  reviewedFamilyCandidateConfirmationSchema,
+  reviewedFamilyDescriptorSchema,
+  reviewedFamilyPlanApiRequestV2Schema,
   type ExactProductPlanApiRequest,
   type MatchRule,
   type Need,
   type Product,
+  type ReviewedFamilyDescriptor,
+  type ReviewedFamilyPlanApiRequestV2,
 } from "@handleplan/domain";
 import { z } from "zod";
 
 export const LEGACY_BASKET_STORAGE_KEY = "handleplan:basket:v1";
-export const BASKET_STORAGE_KEY = "handleplan:basket:v2";
+export const LEGACY_BASKET_V2_STORAGE_KEY = "handleplan:basket:v2";
+export const BASKET_STORAGE_KEY = "handleplan:basket:v3";
 export const BASKET_QUANTITY_MIN = 1;
 export const BASKET_QUANTITY_MAX = 999;
 export const BASKET_NEEDS_MAX = 50;
@@ -74,6 +81,20 @@ const basketContentsShape = {
     .strict(),
 };
 
+const browserFamilyConfirmationSchema = z
+  .object({
+    allowedBrands: canonicalReviewedFamilyAllowedBrandsSchema.optional(),
+    candidateCount: z.number().int().min(1).max(50).safe(),
+    confirmation: reviewedFamilyCandidateConfirmationSchema,
+    family: reviewedFamilyDescriptorSchema,
+    matchRuleId: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+export type BrowserFamilyConfirmation = z.infer<
+  typeof browserFamilyConfirmationSchema
+>;
+
 type BasketContents = {
   needs: Need[];
   matchingRules: MatchRule[];
@@ -83,6 +104,7 @@ type BasketContents = {
 function validateBasketRelationships(
   { needs, matchingRules, products }: BasketContents,
   context: z.RefinementCtx,
+  requireGenericCandidates = true,
 ): void {
     const ruleIds = new Set<string>();
     const ruleUsage = new Map<string, number>();
@@ -109,18 +131,20 @@ function validateBasketRelationships(
       }
     }
 
-    const rulesById = new Map(matchingRules.map((rule) => [rule.id, rule]));
-    for (const need of needs) {
-      const rule = rulesById.get(need.matchRuleId);
-      if (
-        rule !== undefined &&
-        rule.mode !== "exact" &&
-        matchProducts(need, rule, products).length === 0
-      ) {
-        context.addIssue({
-          code: "custom",
-          message: "Generic rules must retain at least one matching catalog candidate",
-        });
+    if (requireGenericCandidates) {
+      const rulesById = new Map(matchingRules.map((rule) => [rule.id, rule]));
+      for (const need of needs) {
+        const rule = rulesById.get(need.matchRuleId);
+        if (
+          rule !== undefined
+          && rule.mode !== "exact"
+          && matchProducts(need, rule, products).length === 0
+        ) {
+          context.addIssue({
+            code: "custom",
+            message: "Generic rules must retain at least one matching catalog candidate",
+          });
+        }
       }
     }
 
@@ -137,7 +161,49 @@ function validateBasketRelationships(
     }
 }
 
-const legacyBrowserBasketSchema = z
+function validateFamilyConfirmations(
+  input: BasketContents & { familyConfirmations: BrowserFamilyConfirmation[] },
+  context: z.RefinementCtx,
+): void {
+  const rulesById = new Map(input.matchingRules.map((rule) => [rule.id, rule]));
+  const confirmationRuleIds = new Set<string>();
+
+  for (const [index, familyConfirmation] of input.familyConfirmations.entries()) {
+    if (confirmationRuleIds.has(familyConfirmation.matchRuleId)) {
+      context.addIssue({
+        code: "custom",
+        message: "A matching rule can have only one reviewed-family confirmation",
+        path: ["familyConfirmations", index, "matchRuleId"],
+      });
+    }
+    confirmationRuleIds.add(familyConfirmation.matchRuleId);
+
+    const rule = rulesById.get(familyConfirmation.matchRuleId);
+    if (
+      rule === undefined
+      || rule.mode === "exact"
+      || rule.productFamily !== familyConfirmation.family.id
+      || familyConfirmation.family.status !== "active"
+      || (
+        rule.mode === "flexible"
+        && familyConfirmation.allowedBrands !== undefined
+      )
+      || (
+        rule.mode === "constrained"
+        && JSON.stringify(rule.allowedBrands ?? [])
+          !== JSON.stringify(familyConfirmation.allowedBrands ?? [])
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Reviewed-family confirmations must bind one active local matching rule",
+        path: ["familyConfirmations", index],
+      });
+    }
+  }
+}
+
+const legacyBrowserBasketV1Schema = z
   .object({
     version: z.literal(1),
     ...basketContentsShape,
@@ -146,7 +212,7 @@ const legacyBrowserBasketSchema = z
   .strict()
   .superRefine(validateBasketRelationships);
 
-export const browserBasketSchema = z
+const legacyBrowserBasketV2Schema = z
   .object({
     version: z.literal(2),
     ...basketContentsShape,
@@ -155,19 +221,36 @@ export const browserBasketSchema = z
   .strict()
   .superRefine(validateBasketRelationships);
 
+export const browserBasketSchema = z
+  .object({
+    version: z.literal(3),
+    ...basketContentsShape,
+    convenienceWeightBasisPoints: z.number().int().min(0).max(10_000),
+    familyConfirmations: z.array(browserFamilyConfirmationSchema).max(BASKET_NEEDS_MAX),
+  })
+  .strict()
+  .superRefine((basket, context) => {
+    validateBasketRelationships(basket, context, false);
+    validateFamilyConfirmations(basket, context);
+  });
+
 export interface BrowserBasket {
-  version: 2;
+  version: 3;
   needs: Need[];
   matchingRules: MatchRule[];
   products: Product[];
   convenienceWeightBasisPoints: number;
+  familyConfirmations: BrowserFamilyConfirmation[];
   travel: { enabled: boolean; mode: "car" | "bike" };
 }
 
 export type StrictPlanRequestReadiness =
   | { state: "empty" }
-  | { state: "requires-exact-approval" }
-  | { state: "ready"; request: ExactProductPlanApiRequest };
+  | { state: "requires-reviewed-approval" }
+  | {
+      state: "ready";
+      request: ExactProductPlanApiRequest | ReviewedFamilyPlanApiRequestV2;
+    };
 
 /**
  * Projects the local editing model onto the deliberately narrow public
@@ -180,23 +263,57 @@ export function strictPlanRequestReadiness(
   if (basket.needs.length === 0) return { state: "empty" };
 
   const rulesById = new Map(basket.matchingRules.map((rule) => [rule.id, rule]));
-  const needs: ExactProductPlanApiRequest["needs"] = [];
+  const confirmationsByRuleId = new Map(
+    basket.familyConfirmations.map((confirmation) => [
+      confirmation.matchRuleId,
+      confirmation,
+    ]),
+  );
+  const exactNeeds: ExactProductPlanApiRequest["needs"] = [];
+  const mixedNeeds: ReviewedFamilyPlanApiRequestV2["needs"] = [];
+  let hasReviewedFamily = false;
   for (const need of basket.needs) {
     const rule = rulesById.get(need.matchRuleId);
-    if (
-      !need.required
-      || rule?.mode !== "exact"
-      || rule.userApproved !== true
-      || rule.exactEan === undefined
-    ) {
-      return { state: "requires-exact-approval" };
+    if (!need.required || rule?.userApproved !== true) {
+      return { state: "requires-reviewed-approval" };
     }
-    needs.push({
+    if (rule.mode === "exact") {
+      if (rule.exactEan === undefined) {
+        return { state: "requires-reviewed-approval" };
+      }
+      const exactNeed = {
+        id: need.id,
+        match: {
+          kind: "exact-product" as const,
+          product: { kind: "gtin" as const, value: rule.exactEan },
+          userApproved: true as const,
+        },
+        quantity: need.quantity,
+        quantityUnit: need.quantityUnit,
+        required: true as const,
+      };
+      exactNeeds.push(exactNeed);
+      mixedNeeds.push(exactNeed);
+      continue;
+    }
+
+    const familyConfirmation = confirmationsByRuleId.get(rule.id);
+    if (
+      familyConfirmation === undefined
+      || rule.productFamily !== familyConfirmation.family.id
+    ) {
+      return { state: "requires-reviewed-approval" };
+    }
+    hasReviewedFamily = true;
+    mixedNeeds.push({
       id: need.id,
       match: {
-        kind: "exact-product",
-        product: { kind: "gtin", value: rule.exactEan },
-        userApproved: true,
+        ...(familyConfirmation.allowedBrands === undefined
+          ? {}
+          : { allowedBrands: familyConfirmation.allowedBrands }),
+        confirmation: familyConfirmation.confirmation,
+        familyId: familyConfirmation.family.id,
+        kind: "reviewed-family",
       },
       quantity: need.quantity,
       quantityUnit: need.quantityUnit,
@@ -204,32 +321,40 @@ export function strictPlanRequestReadiness(
     });
   }
 
-  const parsed = exactProductPlanApiRequestSchema.safeParse({
-    contractVersion: 1,
-    maxStores: 3,
-    needs,
-  });
+  const parsed = hasReviewedFamily
+    ? reviewedFamilyPlanApiRequestV2Schema.safeParse({
+        contractVersion: 2,
+        maxStores: 3,
+        needs: mixedNeeds,
+      })
+    : exactProductPlanApiRequestSchema.safeParse({
+        contractVersion: 1,
+        maxStores: 3,
+        needs: exactNeeds,
+      });
   return parsed.success
     ? { state: "ready", request: parsed.data }
-    : { state: "requires-exact-approval" };
+    : { state: "requires-reviewed-approval" };
 }
 
-export const emptyBasketV2: BrowserBasket = {
-  version: 2,
+export const emptyBasketV3: BrowserBasket = {
+  version: 3,
   needs: [],
   matchingRules: [],
   products: [],
   convenienceWeightBasisPoints: DEFAULT_CONVENIENCE_WEIGHT_BASIS_POINTS,
+  familyConfirmations: [],
   travel: { enabled: false, mode: "car" },
 };
 
 function freshEmptyBasket(): BrowserBasket {
   return {
-    version: 2,
+    version: 3,
     needs: [],
     matchingRules: [],
     products: [],
     convenienceWeightBasisPoints: DEFAULT_CONVENIENCE_WEIGHT_BASIS_POINTS,
+    familyConfirmations: [],
     travel: { enabled: false, mode: "car" },
   };
 }
@@ -256,20 +381,42 @@ export function loadBasket(storage: Storage | undefined = defaultStorage()): Bro
       return parsed.success ? parsed.data : freshEmptyBasket();
     }
 
+    const legacyV2Stored = storage.getItem(LEGACY_BASKET_V2_STORAGE_KEY);
+    if (legacyV2Stored) {
+      if (legacyV2Stored.length > BASKET_STORAGE_MAX_CODE_UNITS) {
+        storage.removeItem(LEGACY_BASKET_V2_STORAGE_KEY);
+        return freshEmptyBasket();
+      }
+      const legacyV2 = legacyBrowserBasketV2Schema.safeParse(JSON.parse(legacyV2Stored));
+      if (!legacyV2.success) return freshEmptyBasket();
+      const migrated: BrowserBasket = {
+        version: 3,
+        needs: legacyV2.data.needs,
+        matchingRules: legacyV2.data.matchingRules,
+        products: legacyV2.data.products,
+        convenienceWeightBasisPoints: legacyV2.data.convenienceWeightBasisPoints,
+        familyConfirmations: [],
+        travel: legacyV2.data.travel,
+      };
+      saveBasket(migrated, storage);
+      return migrated;
+    }
+
     const legacyStored = storage.getItem(LEGACY_BASKET_STORAGE_KEY);
     if (!legacyStored) return freshEmptyBasket();
     if (legacyStored.length > BASKET_STORAGE_MAX_CODE_UNITS) {
       storage.removeItem(LEGACY_BASKET_STORAGE_KEY);
       return freshEmptyBasket();
     }
-    const legacy = legacyBrowserBasketSchema.safeParse(JSON.parse(legacyStored));
+    const legacy = legacyBrowserBasketV1Schema.safeParse(JSON.parse(legacyStored));
     if (!legacy.success) return freshEmptyBasket();
     const migrated: BrowserBasket = {
-      version: 2,
+      version: 3,
       needs: legacy.data.needs,
       matchingRules: legacy.data.matchingRules,
       products: legacy.data.products,
       convenienceWeightBasisPoints: DEFAULT_CONVENIENCE_WEIGHT_BASIS_POINTS,
+      familyConfirmations: [],
       travel: legacy.data.travel,
     };
     saveBasket(migrated, storage);
@@ -291,6 +438,7 @@ export function saveBasket(
     if (serialized.length > BASKET_STORAGE_MAX_CODE_UNITS) return;
     storage.setItem(BASKET_STORAGE_KEY, serialized);
     storage.removeItem(LEGACY_BASKET_STORAGE_KEY);
+    storage.removeItem(LEGACY_BASKET_V2_STORAGE_KEY);
   } catch {
     // Private mode, blocked storage, quota errors, and invalid state stay non-fatal.
   }
@@ -331,6 +479,75 @@ export function addExactProductToBasket(
   };
 }
 
+export interface AddReviewedFamilyInput {
+  allowedBrands?: readonly string[];
+  candidateCount: number;
+  confirmation: BrowserFamilyConfirmation["confirmation"];
+  family: ReviewedFamilyDescriptor;
+  quantity: number;
+}
+
+export function addReviewedFamilyToBasket(
+  basket: BrowserBasket,
+  input: AddReviewedFamilyInput,
+  createId: () => string = () => globalThis.crypto.randomUUID(),
+): BrowserBasket {
+  if (
+    basket.needs.length >= BASKET_NEEDS_MAX
+    || basket.matchingRules.some((rule) =>
+      rule.mode !== "exact" && rule.productFamily === input.family.id
+    )
+  ) {
+    return basket;
+  }
+  const family = reviewedFamilyDescriptorSchema.parse(input.family);
+  const allowedBrands = input.allowedBrands === undefined
+    ? undefined
+    : canonicalReviewedFamilyAllowedBrandsSchema.parse(input.allowedBrands);
+  const confirmation = reviewedFamilyCandidateConfirmationSchema.parse(input.confirmation);
+  const candidateCount = z.number().int().min(1).max(50).safe().parse(input.candidateCount);
+  const quantity = z.number().int().min(BASKET_QUANTITY_MIN).max(BASKET_QUANTITY_MAX)
+    .safe().parse(input.quantity);
+  const needId = createId();
+  const ruleId = createId();
+  const rule: MatchRule = allowedBrands === undefined
+    ? {
+        explanation: "Gjennomgått varetype, valgfritt merke",
+        id: ruleId,
+        mode: "flexible",
+        productFamily: family.id,
+        userApproved: true,
+      }
+    : {
+        allowedBrands: [...allowedBrands],
+        explanation: `Gjennomgått varetype: ${allowedBrands.join(" eller ")}`,
+        id: ruleId,
+        mode: "constrained",
+        productFamily: family.id,
+        userApproved: true,
+      };
+
+  return browserBasketSchema.parse({
+    ...basket,
+    familyConfirmations: [...basket.familyConfirmations, {
+      ...(allowedBrands === undefined ? {} : { allowedBrands }),
+      candidateCount,
+      confirmation,
+      family,
+      matchRuleId: ruleId,
+    }],
+    matchingRules: [...basket.matchingRules, rule],
+    needs: [...basket.needs, {
+      id: needId,
+      matchRuleId: ruleId,
+      quantity,
+      quantityUnit: "each",
+      query: family.labelNo,
+      required: true,
+    }],
+  });
+}
+
 export function removeBasketNeed(basket: BrowserBasket, needId: string): BrowserBasket {
   const needs = basket.needs.filter(({ id }) => id !== needId);
   const referencedRuleIds = new Set(needs.map(({ matchRuleId }) => matchRuleId));
@@ -343,6 +560,9 @@ export function removeBasketNeed(basket: BrowserBasket, needId: string): Browser
 
   return {
     ...basket,
+    familyConfirmations: basket.familyConfirmations.filter(({ matchRuleId }) =>
+      referencedRuleIds.has(matchRuleId)
+    ),
     needs,
     matchingRules,
     products: basket.products.filter(({ ean }) => referencedEans.has(ean)),

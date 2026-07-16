@@ -2,8 +2,12 @@
 
 import {
   exactProductPlanApiResponseSchemaFor,
+  reviewedFamilyPlanApiResponseV2SchemaFor,
   type ExactProductPlanApiRequest,
   type ExactProductPlanApiResponse,
+  type PlanResultV2,
+  type ReviewedFamilyPlanApiRequestV2,
+  type ReviewedFamilyPlanApiResponseV2,
 } from "@handleplan/domain";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 
@@ -23,9 +27,11 @@ import {
 } from "../../../lib/browser-basket";
 
 const MAX_RESPONSE_BYTES = 128 * 1024;
+type PlanRequest = ExactProductPlanApiRequest | ReviewedFamilyPlanApiRequestV2;
+type PlanResponse = ExactProductPlanApiResponse | ReviewedFamilyPlanApiResponseV2;
 type ResultState =
   | { status: "loading" }
-  | { status: "ready"; response: ExactProductPlanApiResponse }
+  | { status: "ready"; response: PlanResponse }
   | { status: "empty" }
   | { status: "unavailable" }
   | { status: "reapproval" }
@@ -44,8 +50,8 @@ async function cancelResponseBody(body: ReadableStream<Uint8Array> | null): Prom
 
 async function readSafeResponse(
   response: Response,
-  request: ExactProductPlanApiRequest,
-): Promise<ExactProductPlanApiResponse | undefined> {
+  request: PlanRequest,
+): Promise<PlanResponse | undefined> {
   const contentType = response.headers.get("content-type") ?? "";
   const token = "[!#$%&'*+.^_`|~0-9A-Za-z-]+";
   const quotedString = '"(?:[^"\\\\\\r\\n]|\\\\[\\t\\x20-\\x7e])*"';
@@ -93,8 +99,105 @@ async function readSafeResponse(
   } catch {
     return undefined;
   }
-  const parsed = exactProductPlanApiResponseSchemaFor(request).safeParse(value);
+  const parsed = request.contractVersion === 1
+    ? exactProductPlanApiResponseSchemaFor(request).safeParse(value)
+    : reviewedFamilyPlanApiResponseV2SchemaFor(request).safeParse(value);
   return parsed.success ? parsed.data : undefined;
+}
+
+function ReviewedFamilySelections({
+  plan,
+  response,
+}: {
+  plan: PlanResultV2;
+  response: ReviewedFamilyPlanApiResponseV2;
+}) {
+  const assignmentsByNeed = new Map(
+    plan.assignments.map((assignment) => [assignment.needId, assignment]),
+  );
+  const productsById = new Map(
+    response.productClaims.map((claim) => [claim.canonicalProductId, claim.product]),
+  );
+  const selections = response.needMatches.flatMap((match) => {
+    if (match.kind !== "reviewed-family") return [];
+    const assignment = assignmentsByNeed.get(match.needId);
+    const product = assignment === undefined
+      ? undefined
+      : productsById.get(assignment.canonicalProductId);
+    return assignment === undefined || product === undefined
+      ? []
+      : [{ assignment, match, product }];
+  });
+
+  if (selections.length === 0) return null;
+  return (
+    <section className="result-store" aria-labelledby="reviewed-family-selections-title">
+      <header className="result-store-header">
+        <div>
+          <div>
+            <h2 id="reviewed-family-selections-title">Godkjente varebytter</h2>
+            <p>Valgt fra den kontrollerte produktfamilien du godkjente.</p>
+          </div>
+        </div>
+      </header>
+      <ul className="result-store-items">
+        {selections.map(({ match, product }) => (
+          <li className="result-store-row" key={match.needId}>
+            <span aria-hidden="true">↔</span>
+            <div>
+              <strong>{match.family.labelNo}</strong>
+              <small>{product.displayName}</small>
+              <small>
+                Valgt blant {match.candidateProductIds.length} {match.candidateProductIds.length === 1 ? "kontrollert produkt" : "kontrollerte produkter"}
+                {match.allowedBrands === undefined ? "" : ` · merke: ${match.allowedBrands.join(" eller ")}`}
+              </small>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function ReviewedFamilyHandlemodusNotice() {
+  return (
+    <section className="result-summary" aria-labelledby="reviewed-handlemodus-title">
+      <p className="result-eyebrow">Handlemodus</p>
+      <h2 id="reviewed-handlemodus-title">Ikke tilgjengelig for varebytter ennå</h2>
+      <p>
+        Denne planen kan brukes på skjermen, men kan ikke lagres i Handlemodus før
+        familie- og medlemskapsbevis kan følge trygt med i den lokale handleturen.
+      </p>
+    </section>
+  );
+}
+
+function reviewedProductsForPlan(
+  response: ReviewedFamilyPlanApiResponseV2,
+  plan: PlanResultV2,
+) {
+  const claimsById = new Map(
+    response.productClaims.map((claim) => [claim.canonicalProductId, claim.product]),
+  );
+  const canonicalIdByGtin = new Map<string, string>();
+  const productsByGtin = new Map<
+    string,
+    ReviewedFamilyPlanApiResponseV2["productClaims"][number]["product"]
+  >();
+  for (const assignment of plan.assignments) {
+    const product = claimsById.get(assignment.canonicalProductId);
+    const priorCanonicalId = canonicalIdByGtin.get(assignment.ean);
+    if (
+      product === undefined
+      || product.gtin !== assignment.ean
+      || (priorCanonicalId !== undefined && priorCanonicalId !== assignment.canonicalProductId)
+    ) {
+      return undefined;
+    }
+    canonicalIdByGtin.set(assignment.ean, assignment.canonicalProductId);
+    productsByGtin.set(assignment.ean, product);
+  }
+  return [...productsByGtin.values()];
 }
 
 function ResultWorkspaceClient() {
@@ -127,15 +230,18 @@ function ResultWorkspaceClient() {
       signal: controller.signal,
     }).then(async (response) => {
       if (controller.signal.aborted || version !== requestVersion.current) return;
-      if (response.status === 503) {
+      if (response.status === 499 || response.status === 503) {
+        await cancelResponseBody(response.body);
         setState({ status: "unavailable" });
         return;
       }
-      if (response.status === 422) {
+      if (response.status === 409 || response.status === 422) {
+        await cancelResponseBody(response.body);
         setState({ status: "reapproval" });
         return;
       }
       if (!response.ok) {
+        await cancelResponseBody(response.body);
         setState({ status: "invalid" });
         return;
       }
@@ -173,11 +279,11 @@ function ResultWorkspaceClient() {
   if (readiness.state === "empty") {
     return <ResultMessage title="Handlekurven er tom" copy="Legg til varer før du beregner en handleplan." />;
   }
-  if (readiness.state === "requires-exact-approval") {
+  if (readiness.state === "requires-reviewed-approval") {
     return (
       <ResultMessage
-        title="Velg eksakte varer på nytt"
-        copy="Fleksible eller begrensede varevalg kan ikke beregnes trygt ennå. Gå tilbake og godkjenn et eksakt produkt for hver vare. Ingen eldre prisberegning ble brukt."
+        title="Godkjenn varevalget på nytt"
+        copy="Minst ett fleksibelt varevalg mangler en gyldig, kontrollert produktfamilie. Gå tilbake og kontroller kandidatene på nytt. Ingen eldre prisberegning ble brukt."
       />
     );
   }
@@ -205,7 +311,9 @@ function ResultWorkspaceClient() {
     );
   }
   if (state.status === "reapproval") {
-    return <ResultMessage title="Varen må godkjennes på nytt" copy="Minst én vare finnes ikke lenger som det eksakte produktet du valgte. Gå tilbake og velg varen på nytt. Ingen eldre prisberegning ble brukt." />;
+    return request?.contractVersion === 1
+      ? <ResultMessage title="Varen må godkjennes på nytt" copy="Minst én vare finnes ikke lenger som det eksakte produktet du valgte. Gå tilbake og velg varen på nytt. Ingen eldre prisberegning ble brukt." />
+      : <ResultMessage title="Godkjenn varevalget på nytt" copy="Den kontrollerte kandidatlisten har endret seg eller kan ikke lenger bekreftes. Gå tilbake og godkjenn varevalget på nytt. Ingen eldre prisberegning ble brukt." />;
   }
   if (state.status === "invalid") {
     return <ResultMessage title="Kunne ikke vise handleplanen" copy="Svaret kunne ikke bekreftes som en komplett og trygg plan." />;
@@ -214,6 +322,12 @@ function ResultWorkspaceClient() {
   const ordered = state.response.plans;
   const selected = ordered.find(({ id }) => id === selectedPlanId) ?? ordered[0]!;
   const convenience = ordered[0]!;
+  const products = state.response.contractVersion === 1
+    ? state.response.products
+    : reviewedProductsForPlan(state.response, selected);
+  if (products === undefined) {
+    return <ResultMessage title="Kunne ikke vise handleplanen" copy="Svaret kunne ikke bekreftes som en komplett og trygg plan." />;
+  }
 
   function selectPlan(planId: string): void {
     setSelectedPlanId(planId);
@@ -234,9 +348,12 @@ function ResultWorkspaceClient() {
               chain={selectedChain}
               order={index + 1}
               assignments={selected.assignments.filter(({ chain: assignmentChain }) => assignmentChain === selectedChain)}
-              products={state.response.products}
+              products={products}
             />
           ))}
+          {state.response.contractVersion === 2 && (
+            <ReviewedFamilySelections plan={selected} response={state.response} />
+          )}
         </div>
         <aside className="result-rail">
           <PlanSummary
@@ -244,14 +361,18 @@ function ResultWorkspaceClient() {
             convenienceTotalOre={convenience.totalOre}
             requiredItems={requiredItems}
           />
-          <StartTripButton
-            key={`${state.response.generatedAt}:${selected.id}`}
-            caveats={state.response.caveats}
-            evidence={state.response.evidence}
-            generatedAt={state.response.generatedAt}
-            plan={selected}
-            products={state.response.products}
-          />
+          {state.response.contractVersion === 1
+            ? (
+                <StartTripButton
+                  key={`${state.response.generatedAt}:${selected.id}`}
+                  caveats={state.response.caveats}
+                  evidence={state.response.evidence}
+                  generatedAt={state.response.generatedAt}
+                  plan={selected}
+                  products={state.response.products}
+                />
+              )
+            : <ReviewedFamilyHandlemodusNotice />}
           <PlanSelector
             plans={ordered}
             selectedPlanId={selected.id}
@@ -313,6 +434,7 @@ export default function ResultPage() {
           <nav aria-label="Om Handleplan">
             <a href="/status">Datadekning</a>
             <a href="/om">Offentlig gode og rettelser</a>
+            <a href="/personvern">Personvern</a>
           </nav>
         </div>
       </footer>

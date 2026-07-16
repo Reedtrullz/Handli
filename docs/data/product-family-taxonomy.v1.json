@@ -1,0 +1,32 @@
+{
+  "$schema": "./product-family-taxonomy.v1.schema.json",
+  "contractVersion": 1,
+  "taxonomyId": "handleplan-reviewed-families",
+  "taxonomyVersion": "1.0.0",
+  "versionId": "handleplan-reviewed-families@1.0.0",
+  "publishedAt": "2026-07-16T00:00:00.000Z",
+  "contentSha256": "1d917ee4268615ad510a622ea30d69977191cffc143313a7dbecbad37debf520",
+  "families": [
+    {
+      "id": "family:brod",
+      "slug": "brod",
+      "labelNo": "Brød",
+      "aliases": ["brød"],
+      "status": "active"
+    },
+    {
+      "id": "family:kaffe",
+      "slug": "kaffe",
+      "labelNo": "Kaffe",
+      "aliases": [],
+      "status": "active"
+    },
+    {
+      "id": "family:melk",
+      "slug": "melk",
+      "labelNo": "Melk",
+      "aliases": ["mjølk"],
+      "status": "active"
+    }
+  ]
+}

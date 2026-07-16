@@ -10,6 +10,8 @@ import type {
   MoneyOre,
   OfficialOffer,
   PlanResultV2,
+  ReviewedFamilyPlanApiRequestV2,
+  ReviewedFamilyPlanApiResponseV2,
 } from "@handleplan/domain";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -17,14 +19,16 @@ import { BASKET_STORAGE_KEY, type BrowserBasket } from "../../../lib/browser-bas
 import ResultPage from "./page";
 
 const GTIN = "7038010000010";
+const GTIN_COFFEE = "7038010000027";
 const GENERATED_AT = "2026-07-16T12:00:00.000Z";
 const OBSERVED_AT = "2026-07-16T11:00:00.000Z";
+const CANDIDATE_SET_ID = `candidate-set:${"a".repeat(64)}`;
 const EXPECTED_CHAINS = ["bunnpris", "extra", "rema-1000"] as const;
 type Chain = (typeof EXPECTED_CHAINS)[number];
 const money = (value: number) => value as MoneyOre;
 
 const basket: BrowserBasket = {
-  version: 2,
+  version: 3,
   needs: [{
     id: "milk",
     query: "LOCAL QUERY MUST STAY PRIVATE",
@@ -47,6 +51,7 @@ const basket: BrowserBasket = {
     productFamily: "local-family",
   }],
   convenienceWeightBasisPoints: 5_000,
+  familyConfirmations: [],
   travel: { enabled: false, mode: "car" },
 };
 
@@ -64,6 +69,101 @@ const strictRequest: ExactProductPlanApiRequest = {
     quantityUnit: "each",
     required: true,
   }],
+};
+
+const mixedBasket: BrowserBasket = {
+  version: 3,
+  needs: [
+    {
+      id: "coffee",
+      query: "LOCAL COFFEE QUERY MUST STAY PRIVATE",
+      quantity: 1,
+      quantityUnit: "each",
+      matchRuleId: "coffee-rule",
+      required: true,
+    },
+    {
+      id: "milk",
+      query: "LOCAL FAMILY QUERY MUST STAY PRIVATE",
+      quantity: 1,
+      quantityUnit: "each",
+      matchRuleId: "milk-family-rule",
+      required: true,
+    },
+  ],
+  matchingRules: [
+    {
+      exactEan: GTIN_COFFEE,
+      explanation: "LOCAL EXACT EXPLANATION MUST STAY PRIVATE",
+      id: "coffee-rule",
+      mode: "exact",
+      userApproved: true,
+    },
+    {
+      explanation: "LOCAL FAMILY EXPLANATION MUST STAY PRIVATE",
+      id: "milk-family-rule",
+      mode: "flexible",
+      productFamily: "family:melk",
+      userApproved: true,
+    },
+  ],
+  products: [{
+    ean: GTIN_COFFEE,
+    name: "LOCAL COFFEE PRODUCT MUST STAY PRIVATE",
+    brand: "Local coffee brand",
+    productFamily: "local-family",
+  }],
+  convenienceWeightBasisPoints: 5_000,
+  familyConfirmations: [{
+    candidateCount: 1,
+    confirmation: {
+      candidateSetId: CANDIDATE_SET_ID,
+      taxonomyVersionId: "handleplan-reviewed-families@1.0.0",
+      userApproved: true,
+    },
+    family: {
+      aliases: ["mjølk"],
+      id: "family:melk",
+      labelNo: "LOCAL FAMILY LABEL MUST STAY PRIVATE",
+      slug: "melk",
+      status: "active",
+    },
+    matchRuleId: "milk-family-rule",
+  }],
+  travel: { enabled: false, mode: "car" },
+};
+
+const mixedRequest: ReviewedFamilyPlanApiRequestV2 = {
+  contractVersion: 2,
+  maxStores: 3,
+  needs: [
+    {
+      id: "coffee",
+      match: {
+        kind: "exact-product",
+        product: { kind: "gtin", value: GTIN_COFFEE },
+        userApproved: true,
+      },
+      quantity: 1,
+      quantityUnit: "each",
+      required: true,
+    },
+    {
+      id: "milk",
+      match: {
+        confirmation: {
+          candidateSetId: CANDIDATE_SET_ID,
+          taxonomyVersionId: "handleplan-reviewed-families@1.0.0",
+          userApproved: true,
+        },
+        familyId: "family:melk",
+        kind: "reviewed-family",
+      },
+      quantity: 1,
+      quantityUnit: "each",
+      required: true,
+    },
+  ],
 };
 
 const source = {
@@ -255,6 +355,235 @@ function resultResponse(options: {
   };
 }
 
+const mixedTaxonomy = {
+  contentSha256: "1d917ee4268615ad510a622ea30d69977191cffc143313a7dbecbad37debf520",
+  contractVersion: 1 as const,
+  publishedAt: "2026-07-16T00:00:00.000Z",
+  taxonomyId: "handleplan-reviewed-families",
+  taxonomyVersion: "1.0.0",
+  versionId: "handleplan-reviewed-families@1.0.0",
+};
+
+const mixedCatalogSource = {
+  contractVersion: 1 as const,
+  displayName: "Kontrollert produktkatalog",
+  id: "catalog-source",
+  sourceClass: "catalog" as const,
+  state: "approved" as const,
+};
+
+const mixedPriceSource = {
+  contractVersion: 1 as const,
+  displayName: "Kontrollerte kjedepriser",
+  id: "price-source",
+  sourceClass: "ordinary-price" as const,
+  state: "approved" as const,
+};
+
+function mixedProductClaim(
+  canonicalProductId: string,
+  gtin: string,
+  displayName: string,
+  brand: string,
+) {
+  return {
+    canonicalProductId,
+    product: {
+      brand,
+      catalogEvidence: {
+        observedAt: OBSERVED_AT,
+        source: mixedCatalogSource,
+        sourceRecordId: `source-record:${(gtin === GTIN_COFFEE ? "b" : "c").repeat(64)}`,
+      },
+      displayName,
+      gtin,
+      packageMeasure: gtin === GTIN_COFFEE
+        ? { amount: 500, unit: "g" as const }
+        : { amount: 1_000, unit: "ml" as const },
+      unitsPerPack: 1,
+    },
+  };
+}
+
+function mixedCoverage(evidenceId: string) {
+  return {
+    completeness: "partial" as const,
+    contractVersion: 1 as const,
+    entries: [
+      { chainId: "bunnpris" as const, status: { kind: "unknown" as const, reason: "not-checked" as const } },
+      { chainId: "extra" as const, status: { evidenceId, kind: "priced" as const } },
+      { chainId: "rema-1000" as const, status: { kind: "unknown" as const, reason: "not-checked" as const } },
+    ],
+    evaluatedAt: GENERATED_AT,
+    expectedChainIds: [...EXPECTED_CHAINS],
+  };
+}
+
+function mixedPriceEvidence(
+  id: string,
+  canonicalProductId: string,
+  amountOre: number,
+) {
+  return {
+    amountOre: money(amountOre),
+    chainId: "extra" as const,
+    contractVersion: 1 as const,
+    evidenceLevel: "observed" as const,
+    geographicScope: { countryCode: "NO" as const, kind: "national" as const },
+    id,
+    kind: "price-evidence" as const,
+    observedAt: OBSERVED_AT,
+    priceKind: "ordinary" as const,
+    productMatch: { canonicalProductId, kind: "exact" as const },
+    sourceId: mixedPriceSource.id,
+    sourceRecordId: `source-record:${id}`,
+  };
+}
+
+function mixedResultResponse(): ReviewedFamilyPlanApiResponseV2 {
+  const coffeeClaim = mixedProductClaim(
+    "product:coffee",
+    GTIN_COFFEE,
+    "Evergood Kaffe fra server",
+    "Evergood",
+  );
+  const milkClaim = mixedProductClaim(
+    "product:milk",
+    GTIN,
+    "TINE Lettmelk fra server",
+    "TINE",
+  );
+  const coffeePrice = mixedPriceEvidence("price:coffee", "product:coffee", 5_000);
+  const milkPrice = mixedPriceEvidence("price:milk", "product:milk", 2_500);
+  const assignments: PlanResultV2["assignments"] = [
+    {
+      canonicalProductId: "product:coffee",
+      chain: "extra",
+      checkout: {
+        ordinaryTotalOre: money(5_000),
+        savingOre: money(0),
+        totalOre: money(5_000),
+      },
+      costOre: money(5_000),
+      ean: GTIN_COFFEE,
+      fulfilment: {
+        canonicalProductId: "product:coffee",
+        complete: true,
+        contractVersion: 2,
+        needId: "coffee",
+        packageCount: 1,
+        packageMeasure: { amount: 500, unit: "g" },
+        purchased: { amount: 1, unit: "package" },
+        requested: { amount: 1, unit: "package" },
+        surplus: { amount: 0, unit: "package" },
+      },
+      needId: "coffee",
+      observedAt: OBSERVED_AT,
+      source: mixedPriceSource.id,
+    },
+    {
+      canonicalProductId: "product:milk",
+      chain: "extra",
+      checkout: {
+        ordinaryTotalOre: money(2_500),
+        savingOre: money(0),
+        totalOre: money(2_500),
+      },
+      costOre: money(2_500),
+      ean: GTIN,
+      fulfilment: {
+        canonicalProductId: "product:milk",
+        complete: true,
+        contractVersion: 2,
+        needId: "milk",
+        packageCount: 1,
+        packageMeasure: { amount: 1_000, unit: "ml" },
+        purchased: { amount: 1, unit: "package" },
+        requested: { amount: 1, unit: "package" },
+        surplus: { amount: 0, unit: "package" },
+      },
+      needId: "milk",
+      observedAt: OBSERVED_AT,
+      source: mixedPriceSource.id,
+    },
+  ];
+
+  return {
+    caveats: ["Kjedepris dokumenterer ikke lagerstatus."],
+    contractVersion: 2,
+    evidence: {
+      assignmentEvidence: assignments.map((assignment) => ({
+        chainId: assignment.chain,
+        conditions: { kind: "ordinary-price" },
+        evidenceId: assignment.needId === "coffee" ? coffeePrice.id : milkPrice.id,
+        needId: assignment.needId,
+        planId: "plan-v2:mixed",
+      })),
+      candidateCoverage: [
+        {
+          canonicalProductId: "product:coffee",
+          comparisonScope: mixedCoverage(coffeePrice.id),
+          needId: "coffee",
+        },
+        {
+          canonicalProductId: "product:milk",
+          comparisonScope: mixedCoverage(milkPrice.id),
+          needId: "milk",
+        },
+      ],
+      excludedPriceEvidence: [],
+      memberships: [{
+        canonicalProductId: "product:milk",
+        confidence: 100,
+        decision: "approved",
+        decisionId: "family-membership:11",
+        familyId: "family:melk",
+        method: "human-review",
+        reviewedAt: "2026-07-16T10:00:00.000Z",
+        reviewerAttested: true,
+      }],
+      officialOffers: [],
+      ordinaryPrices: [coffeePrice, milkPrice],
+      sources: [mixedCatalogSource, mixedPriceSource],
+    },
+    generatedAt: GENERATED_AT,
+    needMatches: [
+      {
+        candidateProductIds: ["product:coffee"],
+        kind: "exact-product",
+        needId: "coffee",
+      },
+      {
+        candidateProductIds: ["product:milk"],
+        candidateSetId: CANDIDATE_SET_ID,
+        family: {
+          aliases: ["mjølk"],
+          id: "family:melk",
+          labelNo: "Melk fra server",
+          slug: "melk",
+          status: "active",
+        },
+        familyId: "family:melk",
+        kind: "reviewed-family",
+        needId: "milk",
+        taxonomyVersionId: mixedTaxonomy.versionId,
+      },
+    ],
+    plans: [{
+      assignments,
+      chains: ["extra"],
+      coverage: 1,
+      freshness: { coffee: "eligible", milk: "eligible" },
+      id: "plan-v2:mixed",
+      substitutions: ["milk"],
+      totalOre: money(7_500),
+    }],
+    priceDataSource: "cache",
+    productClaims: [coffeeClaim, milkClaim],
+    taxonomy: mixedTaxonomy,
+  };
+}
+
 function okFetch(body: unknown = resultResponse()) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     void input;
@@ -309,6 +638,59 @@ describe("Planlegg strict result workspace", () => {
     const body = String(request.body);
     expect(JSON.parse(body)).toEqual(strictRequest);
     expect(body).not.toMatch(/query|matchingRules|products|productFamily|explanation|travel|origin|LOCAL/i);
+  });
+
+  it("posts only mixed identity confirmations and renders server-owned family substitutions", async () => {
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(mixedBasket));
+    const fetch = okFetch(mixedResultResponse());
+    vi.stubGlobal("fetch", fetch);
+    render(<ResultPage />);
+
+    expect(await screen.findByRole("radio", { name: /Eneste komplette plan/ })).toBeChecked();
+    expect(screen.getByText("Evergood Kaffe fra server")).toBeVisible();
+    expect(screen.getAllByText("TINE Lettmelk fra server").length).toBeGreaterThan(0);
+    expect(screen.getByText("Melk fra server")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Godkjente varebytter" })).toBeVisible();
+    expect(screen.getByText(/Valgt blant 1 kontrollert produkt/)).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Ikke tilgjengelig for varebytter ennå" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Start Handlemodus" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/LOCAL .* MUST STAY PRIVATE/)).not.toBeInTheDocument();
+
+    const posted = String(fetch.mock.calls[0]![1]!.body);
+    expect(JSON.parse(posted)).toEqual(mixedRequest);
+    expect(posted).not.toMatch(/query|matchingRules|products|productFamily|explanation|travel|origin|LOCAL/i);
+  });
+
+  it.each([
+    [409, "candidate confirmation changed"],
+    [422, "candidate set cannot be planned"],
+  ] as const)("requires reviewed-family reapproval when %i means %s", async (status, reason) => {
+    void reason;
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(mixedBasket));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      code: status === 409 ? "CANDIDATE_CONFIRMATION_CHANGED" : "NO_FAMILY_CANDIDATES",
+      detail: "private server detail",
+    }), { status })));
+    render(<ResultPage />);
+
+    expect(await screen.findByRole("heading", { name: "Godkjenn varevalget på nytt" })).toBeVisible();
+    expect(screen.getByText(/kandidatlisten har endret seg eller kan ikke lenger bekreftes/)).toBeVisible();
+    expect(screen.queryByText("private server detail")).not.toBeInTheDocument();
+  });
+
+  it("fails closed when a mixed response no longer binds the approved confirmation", async () => {
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(mixedBasket));
+    const response = mixedResultResponse();
+    vi.stubGlobal("fetch", okFetch({
+      ...response,
+      needMatches: response.needMatches.map((match) => match.kind === "reviewed-family"
+        ? { ...match, candidateSetId: `candidate-set:${"d".repeat(64)}` }
+        : match),
+    }));
+    render(<ResultPage />);
+
+    expect(await screen.findByRole("heading", { name: "Kunne ikke vise handleplanen" })).toBeVisible();
+    expect(screen.queryByText("Melk fra server")).not.toBeInTheDocument();
   });
 
   it("selects directly from returned representatives and persists only the normalized preference", async () => {
@@ -386,7 +768,7 @@ describe("Planlegg strict result workspace", () => {
       vi.stubGlobal("fetch", fetch);
       render(<ResultPage />);
 
-      expect(screen.getByRole("heading", { name: "Velg eksakte varer på nytt" })).toBeVisible();
+      expect(screen.getByRole("heading", { name: "Godkjenn varevalget på nytt" })).toBeVisible();
       expect(screen.getByText(/Ingen eldre prisberegning ble brukt/)).toBeVisible();
       expect(fetch).not.toHaveBeenCalled();
     },
@@ -439,6 +821,18 @@ describe("Planlegg strict result workspace", () => {
     await user.click(screen.getByRole("button", { name: "Prøv igjen" }));
     expect(await screen.findByRole("radio", { name: /Eneste komplette plan/ })).toBeChecked();
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("maps a cancelled server calculation to the unavailable state", async () => {
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(mixedBasket));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      code: "REQUEST_CANCELLED",
+      detail: "private cancellation detail",
+    }), { status: 499 })));
+    render(<ResultPage />);
+
+    expect(await screen.findByRole("heading", { name: "Prisdata er utilgjengelig" })).toBeVisible();
+    expect(screen.queryByText("private cancellation detail")).not.toBeInTheDocument();
   });
 
   it.each([

@@ -33,6 +33,7 @@ const expectedMigrations = [
   "009_ingestion_outcomes.sql",
   "010_worker_job_results.sql",
   "011_catalog_observations.sql",
+  "012_reviewed_family_taxonomy.sql",
 ];
 
 assert.equal(process.env.CI, "true", "database proof requires CI=true");
@@ -213,6 +214,15 @@ async function verifyLegacyUpgrade(sql) {
       price_observations.claim_eligibility,
       data_sources.source_kind,
       data_sources.runtime_state,
+      data_sources.created_at as source_created_at,
+      data_sources.public_state_changed_at as source_public_state_changed_at,
+      product_identifiers.created_at as identifier_created_at,
+      product_identifiers.public_state_changed_at as identifier_public_state_changed_at,
+      canonical_products.created_at as product_created_at,
+      canonical_products.public_state_changed_at as product_public_state_changed_at,
+      ingestion_runs.completed_at as run_completed_at,
+      ingestion_runs.terminalized_at as run_terminalized_at,
+      terminal_clock_migration.applied_at as terminal_clock_migration_at,
       price_coverage_checks.state as coverage_state,
       price_coverage_checks.reason as coverage_reason,
       (
@@ -228,6 +238,8 @@ async function verifyLegacyUpgrade(sql) {
     join product_identifiers
       on product_identifiers.value = price_cache.ean
      and product_identifiers.scheme in ('ean8', 'ean13')
+    join canonical_products
+      on canonical_products.id = product_identifiers.product_id
     join price_observations
       on price_observations.product_id = product_identifiers.product_id
      and price_observations.chain = price_cache.chain
@@ -235,6 +247,10 @@ async function verifyLegacyUpgrade(sql) {
      and price_observations.observed_at = price_cache.observed_at
     join data_sources
       on data_sources.id = price_observations.source_id
+    join ingestion_runs
+      on ingestion_runs.id = price_observations.ingestion_run_id
+    join handleplan_schema_migrations terminal_clock_migration
+      on terminal_clock_migration.id = '012_reviewed_family_taxonomy.sql'
     join price_coverage_checks
       on price_coverage_checks.ingestion_run_id = price_observations.ingestion_run_id
      and price_coverage_checks.product_id = price_observations.product_id
@@ -252,6 +268,15 @@ async function verifyLegacyUpgrade(sql) {
   assert.equal(row.claim_eligibility, "ordinary_only");
   assert.equal(row.source_kind, "legacy");
   assert.equal(row.runtime_state, "blocked");
+  assert.ok(row.source_public_state_changed_at >= row.source_created_at);
+  assert.ok(row.identifier_public_state_changed_at >= row.identifier_created_at);
+  assert.ok(row.product_public_state_changed_at >= row.product_created_at);
+  assert.equal(
+    row.run_terminalized_at.toISOString(),
+    row.terminal_clock_migration_at.toISOString(),
+    "pre-012 terminal runs must use the conservative migration clock",
+  );
+  assert.ok(row.run_terminalized_at >= row.run_completed_at);
   assert.equal(row.coverage_state, "ineligible");
   assert.equal(row.coverage_reason, "legacy_price_cache_missing_provenance");
   assert.equal(row.official_claim_eligible, false);
@@ -260,7 +285,8 @@ async function verifyLegacyUpgrade(sql) {
 
 async function verifyRestoreEvidence(sql) {
   const permissions = await sql`
-    select decision, reviewed_at, valid_until, public_reference_url, permissions, notes
+    select decision, reviewed_at, valid_until, public_reference_url, permissions, notes,
+           created_at
     from source_permissions
     where source_id = 'kassalapp'
       and notes = 'V1-03 restore proof fixture'
@@ -275,6 +301,34 @@ async function verifyRestoreEvidence(sql) {
     officialOffers: false,
     ordinaryPrice: true,
   });
+  assert.ok(permissions[0].created_at >= permissions[0].reviewed_at);
+
+  const publicStateRows = await sql`
+    select
+      source.created_at as source_created_at,
+      source.public_state_changed_at as source_public_state_changed_at,
+      product.created_at as product_created_at,
+      product.public_state_changed_at as product_public_state_changed_at,
+      scope.created_at as scope_created_at,
+      scope.public_state_changed_at as scope_public_state_changed_at
+    from data_sources source
+    inner join canonical_products product
+      on product.display_name = 'Mutable catalog projection (not public evidence)'
+    inner join geographic_scopes scope
+      on scope.scope_key = 'ci-proof:no-0301-oslo'
+    where source.id = 'kassalapp'
+  `;
+  assert.equal(publicStateRows.length, 1, "public-state clock fixtures must be unique");
+  const [publicState] = publicStateRows;
+  assert.ok(publicState.source_public_state_changed_at >= publicState.source_created_at);
+  assert.ok(publicState.product_public_state_changed_at >= publicState.product_created_at);
+  assert.ok(publicState.scope_public_state_changed_at >= publicState.scope_created_at);
+  const persistenceClockFingerprint = {
+    ...Object.fromEntries(
+    Object.entries(publicState).map(([key, value]) => [key, value.toISOString()]),
+    ),
+    source_permission_created_at: permissions[0].created_at.toISOString(),
+  };
 
   const captures = await sql`
     select
@@ -365,10 +419,13 @@ async function verifyRestoreEvidence(sql) {
       observation.retrieved_at,
       observation.source_updated_at,
       observation.raw_record_hash,
+      observation.created_at as observation_created_at,
       run.source_id,
       run.run_type,
       run.status,
-      run.completed_at
+      run.completed_at,
+      run.created_at as run_created_at,
+      run.terminalized_at
     from catalog_observations observation
     inner join ingestion_runs run on run.id = observation.ingestion_run_id
     where observation.source_record_id = 'ci-proof-catalog-record-v1-03'
@@ -380,6 +437,9 @@ async function verifyRestoreEvidence(sql) {
       retrieved_at: catalogObservations[0].retrieved_at.toISOString(),
       source_updated_at: catalogObservations[0].source_updated_at.toISOString(),
       completed_at: catalogObservations[0].completed_at.toISOString(),
+      run_created_at: catalogObservations[0].run_created_at.toISOString(),
+      terminalized_at: catalogObservations[0].terminalized_at.toISOString(),
+      observation_created_at: catalogObservations[0].observation_created_at.toISOString(),
     },
     {
       source_record_id: "ci-proof-catalog-record-v1-03",
@@ -396,9 +456,278 @@ async function verifyRestoreEvidence(sql) {
       run_type: "catalog",
       status: "completed",
       completed_at: "2026-07-16T08:11:00.000Z",
+      run_created_at: catalogObservations[0].run_created_at.toISOString(),
+      terminalized_at: catalogObservations[0].terminalized_at.toISOString(),
+      observation_created_at: catalogObservations[0].observation_created_at.toISOString(),
     },
     "restore must preserve the completed-run catalog payload and both clocks",
   );
+  assert.ok(
+    catalogObservations[0].terminalized_at >= catalogObservations[0].run_created_at,
+    "the database terminal clock must not precede run creation",
+  );
+  assert.ok(
+    catalogObservations[0].terminalized_at >= catalogObservations[0].completed_at,
+    "the database terminal clock must not precede the caller completion clock",
+  );
+  persistenceClockFingerprint.catalog_observation_created_at =
+    catalogObservations[0].observation_created_at.toISOString();
+
+  const sourceOutcomes = await sql`
+    select outcome_state, recorded_at, created_at
+    from source_record_outcomes
+    where source_record_id = 'ci-proof-catalog-record-v1-03'
+  `;
+  assert.equal(sourceOutcomes.length, 1, "source outcome audit must be present");
+  assert.equal(sourceOutcomes[0].outcome_state, "accepted");
+  assert.equal(
+    sourceOutcomes[0].recorded_at.toISOString(),
+    "2026-07-16T08:10:30.000Z",
+  );
+  assert.notEqual(
+    sourceOutcomes[0].created_at.toISOString(),
+    "2000-01-01T00:00:00.000Z",
+  );
+  persistenceClockFingerprint.source_record_outcome_created_at =
+    sourceOutcomes[0].created_at.toISOString();
+
+  const familyEvidence = await sql`
+    select
+      version.version_id,
+      version.published_at,
+      version.content_sha256,
+      version.content_json,
+      version.expected_family_count,
+      version.expected_alias_count,
+      family.family_id,
+      family.slug,
+      family.label_no,
+      alias.alias,
+      private.reviewer_id,
+      public.decision,
+      public.method,
+      public.confidence,
+      public.reviewed_at,
+      public.created_at as membership_created_at,
+      public.reviewer_attested
+    from family_taxonomy_versions version
+    inner join reviewed_family_definitions family
+      on family.version_id = version.version_id
+     and family.family_id = 'family:melk'
+    inner join reviewed_family_aliases alias
+      on alias.version_id = family.version_id
+     and alias.family_id = family.family_id
+    inner join reviewed_family_membership_decisions private
+      on private.version_id = family.version_id
+     and private.family_id = family.family_id
+     and private.reviewer_id = 'ci-private-family-reviewer'
+    inner join reviewed_family_membership_public public
+      on public.id = private.id
+  `;
+  assert.deepEqual(
+    familyEvidence.map((row) => ({
+      ...row,
+      published_at: row.published_at.toISOString(),
+      reviewed_at: row.reviewed_at.toISOString(),
+      membership_created_at: row.membership_created_at.toISOString(),
+    })),
+    [{
+      version_id: "handleplan-reviewed-families@1.0.0",
+      published_at: "2026-07-16T00:00:00.000Z",
+      content_sha256: "1d917ee4268615ad510a622ea30d69977191cffc143313a7dbecbad37debf520",
+      content_json: [
+        { aliases: ["brød"], id: "family:brod", labelNo: "Brød", slug: "brod", status: "active" },
+        { aliases: [], id: "family:kaffe", labelNo: "Kaffe", slug: "kaffe", status: "active" },
+        { aliases: ["mjølk"], id: "family:melk", labelNo: "Melk", slug: "melk", status: "active" },
+      ],
+      expected_family_count: 3,
+      expected_alias_count: 2,
+      family_id: "family:melk",
+      slug: "melk",
+      label_no: "Melk",
+      alias: "mjølk",
+      reviewer_id: "ci-private-family-reviewer",
+      decision: "approved",
+      method: "human_review",
+      confidence: 100,
+      reviewed_at: "2026-07-16T08:10:00.000Z",
+      membership_created_at: familyEvidence[0].membership_created_at.toISOString(),
+      reviewer_attested: true,
+    }],
+    "restore must preserve reviewed-family checksum, alias, private provenance, and public attestation",
+  );
+  persistenceClockFingerprint.reviewed_membership_created_at =
+    familyEvidence[0].membership_created_at.toISOString();
+  return persistenceClockFingerprint;
+}
+
+async function verifyTerminalRunInsertGuards(sql) {
+  const triggerRows = await sql`
+    select tgname
+    from pg_trigger
+    where not tgisinternal
+      and tgname = any(${sql.array([
+        "catalog_observations_running_run_guard",
+        "price_observations_running_run_guard",
+        "price_coverage_checks_running_run_guard",
+        "source_record_outcomes_running_run_guard",
+      ])}::text[])
+    order by tgname
+  `;
+  assert.deepEqual(triggerRows.map(({ tgname }) => tgname), [
+    "catalog_observations_running_run_guard",
+    "price_coverage_checks_running_run_guard",
+    "price_observations_running_run_guard",
+    "source_record_outcomes_running_run_guard",
+  ]);
+
+  const [fixture] = await sql`
+    select run.id as run_id, observation.canonical_product_id
+    from catalog_observations observation
+    inner join ingestion_runs run on run.id = observation.ingestion_run_id
+    where observation.source_record_id = 'ci-proof-catalog-record-v1-03'
+      and run.status = 'completed'
+  `;
+  assert.ok(fixture, "completed catalog fixture must exist for the insert guard proof");
+  const [clock] = await sql`select clock_timestamp() as snapshot_at`;
+  await assert.rejects(
+    sql`
+      insert into catalog_observations (
+        ingestion_run_id, source_record_id, canonical_product_id, gtin,
+        display_name, package_amount, package_unit, units_per_pack,
+        retrieved_at, raw_record_hash, created_at
+      ) values (
+        ${fixture.run_id}, 'ci-proof-late-terminal-catalog',
+        ${fixture.canonical_product_id}, '7038010000027', 'Late terminal catalog',
+        1, 'package', 1, '2026-07-16T08:10:30Z', ${"f".repeat(64)},
+        '2000-01-01T00:00:00Z'
+      )
+    `,
+    /running ingestion run/i,
+    "a terminal run must reject a later backdated catalog observation",
+  );
+  const [late] = await sql`
+    select count(*)::integer as count
+    from catalog_observations
+    where source_record_id = 'ci-proof-late-terminal-catalog'
+      and created_at <= ${clock.snapshot_at}
+  `;
+  assert.equal(late.count, 0, "the captured snapshot must not gain a rejected late row");
+}
+
+async function verifyTaxonomyPublicationGuards(sql) {
+  const publications = [
+    {
+      content: [{ aliases: [], id: "family:proof-empty", labelNo: "Empty", slug: "proof-empty", status: "active" }],
+      definitions: [],
+      version: "92.0.1",
+    },
+    {
+      content: [
+        { aliases: [], id: "family:proof-subset-a", labelNo: "Subset A", slug: "proof-subset-a", status: "active" },
+        { aliases: [], id: "family:proof-subset-b", labelNo: "Subset B", slug: "proof-subset-b", status: "active" },
+      ],
+      definitions: [{ id: "family:proof-subset-a", label: "Subset A", slug: "proof-subset-a" }],
+      version: "92.0.2",
+    },
+    {
+      content: [{ aliases: [], id: "family:proof-mismatch", labelNo: "Expected", slug: "proof-mismatch", status: "active" }],
+      definitions: [{ id: "family:proof-mismatch", label: "Different", slug: "proof-mismatch" }],
+      version: "92.0.3",
+    },
+  ];
+
+  for (const publication of publications) {
+    await assert.rejects(
+      sql.begin(async (transaction) => {
+        const content = JSON.stringify(publication.content);
+        await transaction`
+          insert into family_taxonomy_versions (
+            version_id, taxonomy_id, taxonomy_version, contract_version,
+            published_at, content_sha256, content_json,
+            expected_family_count, expected_alias_count
+          ) values (
+            ${`handleplan-reviewed-families@${publication.version}`},
+            'handleplan-reviewed-families', ${publication.version}, 1,
+            transaction_timestamp(),
+            encode(sha256(convert_to(canonical_family_taxonomy_json(${content}::jsonb), 'UTF8')), 'hex'),
+            ${content}::jsonb, ${publication.content.length}, 0
+          )
+        `;
+        for (const definition of publication.definitions) {
+          await transaction`
+            insert into reviewed_family_definitions (
+              version_id, family_id, slug, label_no, status
+            ) values (
+              ${`handleplan-reviewed-families@${publication.version}`},
+              ${definition.id}, ${definition.slug}, ${definition.label}, 'active'
+            )
+          `;
+        }
+      }),
+      /does not match its sealed content/,
+    );
+  }
+
+  const lateMutationCases = [
+    {
+      content: [{ aliases: [], id: "family:proof-late-definition", labelNo: "Late definition", slug: "proof-late-definition", status: "active" }],
+      mutate: async (transaction, versionId) => {
+        await transaction`
+          insert into reviewed_family_definitions (
+            version_id, family_id, slug, label_no, status
+          ) values (
+            ${versionId}, 'family:proof-late-extra', 'proof-late-extra',
+            'Late extra', 'active'
+          )
+        `;
+      },
+      version: "92.0.4",
+    },
+    {
+      content: [{ aliases: [], id: "family:proof-late-alias", labelNo: "Late alias", slug: "proof-late-alias", status: "active" }],
+      mutate: async (transaction, versionId) => {
+        await transaction`
+          insert into reviewed_family_aliases (version_id, family_id, alias)
+          values (${versionId}, 'family:proof-late-alias', 'sen alias')
+        `;
+      },
+      version: "92.0.5",
+    },
+  ];
+
+  for (const publication of lateMutationCases) {
+    await assert.rejects(
+      sql.begin(async (transaction) => {
+        const content = JSON.stringify(publication.content);
+        const versionId = `handleplan-reviewed-families@${publication.version}`;
+        await transaction`
+          insert into family_taxonomy_versions (
+            version_id, taxonomy_id, taxonomy_version, contract_version,
+            published_at, content_sha256, content_json,
+            expected_family_count, expected_alias_count
+          ) values (
+            ${versionId}, 'handleplan-reviewed-families', ${publication.version}, 1,
+            transaction_timestamp(),
+            encode(sha256(convert_to(canonical_family_taxonomy_json(${content}::jsonb), 'UTF8')), 'hex'),
+            ${content}::jsonb, 1, 0
+          )
+        `;
+        const [definition] = publication.content;
+        await transaction`
+          insert into reviewed_family_definitions (
+            version_id, family_id, slug, label_no, status
+          ) values (
+            ${versionId}, ${definition.id}, ${definition.slug},
+            ${definition.labelNo}, 'active'
+          )
+        `;
+        await transaction.unsafe("set constraints all immediate");
+        await publication.mutate(transaction, versionId);
+      }),
+      /does not match its sealed content/,
+    );
+  }
 }
 
 async function verifyRuntimeRolePolicy(sql) {
@@ -455,6 +784,16 @@ async function verifyRuntimeRolePolicy(sql) {
         'catalog_observations',
         'UPDATE, DELETE'
       ) as catalog_rewrite,
+      has_table_privilege(
+        'handleplan_app',
+        'reviewed_family_membership_public',
+        'SELECT'
+      ) as worker_family_public_read,
+      has_table_privilege(
+        'handleplan_app',
+        'reviewed_family_membership_decisions',
+        'SELECT, INSERT, UPDATE, DELETE'
+      ) as worker_family_private_access,
       has_table_privilege(
         'handleplan_app',
         'worker_leases',
@@ -537,6 +876,31 @@ async function verifyRuntimeRolePolicy(sql) {
         'catalog_observations',
         'INSERT, UPDATE, DELETE'
       ) as web_catalog_observation_write,
+      has_table_privilege(
+        'handleplan_web',
+        'family_taxonomy_versions',
+        'SELECT'
+      ) as web_family_version_read,
+      has_table_privilege(
+        'handleplan_web',
+        'reviewed_family_definitions',
+        'SELECT'
+      ) as web_family_definition_read,
+      has_table_privilege(
+        'handleplan_web',
+        'reviewed_family_aliases',
+        'SELECT'
+      ) as web_family_alias_read,
+      has_table_privilege(
+        'handleplan_web',
+        'reviewed_family_membership_public',
+        'SELECT'
+      ) as web_family_public_read,
+      has_table_privilege(
+        'handleplan_web',
+        'reviewed_family_membership_decisions',
+        'SELECT'
+      ) as web_family_private_read,
       has_column_privilege(
         'handleplan_web',
         'source_permissions',
@@ -590,6 +954,8 @@ async function verifyRuntimeRolePolicy(sql) {
     evidence_append_read: true,
     catalog_append_read: true,
     catalog_rewrite: false,
+    worker_family_public_read: false,
+    worker_family_private_access: false,
     worker_lease_write: true,
     source_health_append: false,
     worker_results_append: true,
@@ -608,6 +974,11 @@ async function verifyRuntimeRolePolicy(sql) {
     web_evidence_write: false,
     web_catalog_observation_read: true,
     web_catalog_observation_write: false,
+    web_family_version_read: true,
+    web_family_definition_read: true,
+    web_family_alias_read: true,
+    web_family_public_read: true,
+    web_family_private_read: false,
     web_permission_public_read: true,
     web_permission_private_read: false,
     web_private_capture_read: false,
@@ -703,10 +1074,12 @@ try {
   source = postgres(urlForDatabase(sourceDatabase), { max: 1, onnotice: () => {} });
   await verifyLegacyUpgrade(source);
   await verifyRuntimeRolePolicy(source);
+  await verifyTaxonomyPublicationGuards(source);
   const sourceLedger = await readMigrationLedger(source);
   await verifyDeletedMigrationHistoryIsRejected(source, sourceDatabase);
   await applyFixture(source, "v1-03-restore-evidence.sql");
-  await verifyRestoreEvidence(source);
+  const sourcePublicStateFingerprint = await verifyRestoreEvidence(source);
+  await verifyTerminalRunInsertGuards(source);
   await source.end({ timeout: 5 });
   source = undefined;
 
@@ -739,8 +1112,15 @@ try {
   await runMigrations(restoreDatabase);
   restored = postgres(urlForDatabase(restoreDatabase), { max: 1, onnotice: () => {} });
   await verifyLegacyUpgrade(restored);
-  await verifyRestoreEvidence(restored);
+  const restoredPublicStateFingerprint = await verifyRestoreEvidence(restored);
+  await verifyTerminalRunInsertGuards(restored);
+  assert.deepEqual(
+    restoredPublicStateFingerprint,
+    sourcePublicStateFingerprint,
+    "restore must preserve database-owned public-state clocks exactly",
+  );
   await verifyRuntimeRolePolicy(restored);
+  await verifyTaxonomyPublicationGuards(restored);
   assert.deepEqual(await readMigrationLedger(restored), sourceLedger);
 
   proofResult = {
@@ -752,6 +1132,7 @@ try {
     restoredPublicationCaptures: 1,
     restoredReviewActions: 1,
     restoredCatalogObservations: 1,
+    restoredReviewedFamilyDecisions: 1,
     restoredRuntimeRolePolicy: true,
   };
 } catch (error) {

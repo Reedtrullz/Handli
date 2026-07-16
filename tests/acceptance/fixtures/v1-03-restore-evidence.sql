@@ -1,3 +1,25 @@
+-- The guarded evidence inserts below must see their parent run through an
+-- ordinary SELECT ... FOR UPDATE in a trigger. Keep run creation in its own
+-- command (but the same outer fixture transaction): data-modifying sibling
+-- CTEs share one snapshot and are not visible to that trigger lookup.
+insert into ingestion_runs (
+  job_id,
+  source_id,
+  run_type,
+  status,
+  started_at,
+  completed_at,
+  counts
+) values (
+  'ci-proof-catalog-run-v1-03',
+  'kassalapp',
+  'catalog',
+  'running',
+  '2026-07-16T08:09:45Z',
+  null,
+  '{}'::jsonb
+);
+
 with permission_fixture as (
   insert into source_permissions (
     source_id,
@@ -163,24 +185,57 @@ catalog_product_fixture as (
   )
   returning id
 ),
-catalog_run_fixture as (
-  insert into ingestion_runs (
-    job_id,
-    source_id,
-    run_type,
-    status,
-    started_at,
-    completed_at,
-    counts
-  ) values (
-    'ci-proof-catalog-run-v1-03',
-    'kassalapp',
-    'catalog',
-    'running',
-    '2026-07-16T08:09:45Z',
-    null,
-    '{}'::jsonb
+family_membership_fixture as (
+  insert into reviewed_family_membership_decisions (
+    version_id,
+    family_id,
+    product_id,
+    decision,
+    method,
+    confidence,
+    reviewer_id,
+    reviewed_at
   )
+  select
+    'handleplan-reviewed-families@1.0.0',
+    'family:melk',
+    catalog_product_fixture.id,
+    'approved',
+    'human_review',
+    100,
+    'ci-private-family-reviewer',
+    '2026-07-16T08:10:00Z'
+  from catalog_product_fixture
+  returning id
+),
+catalog_run_fixture as (
+  select id
+  from ingestion_runs
+  where job_id = 'ci-proof-catalog-run-v1-03'
+),
+catalog_outcome_fixture as (
+  insert into source_record_outcomes (
+    ingestion_run_id,
+    record_kind,
+    source_record_id,
+    outcome_state,
+    reason,
+    subject_ean,
+    outcome_hash,
+    recorded_at,
+    created_at
+  )
+  select
+    catalog_run_fixture.id,
+    'product',
+    'ci-proof-catalog-record-v1-03',
+    'accepted',
+    null,
+    '7038010000010',
+    repeat('d', 64),
+    '2026-07-16T08:10:30Z',
+    '2000-01-01T00:00:00Z'
+  from catalog_run_fixture
   returning id
 ),
 catalog_observation_fixture as (
@@ -245,6 +300,8 @@ select
   (select id from permission_fixture) as permission_id,
   (select id from capture_fixture) as capture_id,
   (select id from review_fixture) as review_id,
+  (select id from family_membership_fixture) as family_membership_id,
+  (select id from catalog_outcome_fixture) as catalog_outcome_id,
   (select id from catalog_observation_fixture) as catalog_observation_id,
   (select id from worker_result_fixture) as worker_result_id;
 

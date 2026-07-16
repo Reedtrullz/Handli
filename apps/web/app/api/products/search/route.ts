@@ -8,6 +8,15 @@ import {
 } from "@handleplan/domain";
 import { z } from "zod";
 
+import {
+  awaitWithinRequest,
+  createRequestLifetime,
+  RequestOperationAbortedError,
+  resolveRequestTimeoutMs,
+  type BoundedRequestOptions,
+  type RequestLifetime,
+} from "../../../../lib/server/request-lifetime";
+
 const searchParamsSchema = z
   .object({ q: z.string().trim().min(2).max(120) })
   .strict();
@@ -17,7 +26,17 @@ const MAX_RESPONSE_BYTES = 128 * 1024;
 type CatalogProvider = () => PublicCatalogIndexReader | Promise<PublicCatalogIndexReader>;
 
 function errorResponse(code: string, status: number): Response {
-  return Response.json({ code }, { status });
+  return Response.json({ code }, {
+    headers: { "cache-control": "private, no-store" },
+    status,
+  });
+}
+
+function requestAbortResponse(lifetime: RequestLifetime): Response | undefined {
+  if (!lifetime.signal.aborted) return undefined;
+  return lifetime.deadlineExpired
+    ? errorResponse("REQUEST_TIMEOUT", 503)
+    : errorResponse("REQUEST_CANCELLED", 499);
 }
 
 function validatedResponse(value: unknown): Response {
@@ -28,14 +47,19 @@ function validatedResponse(value: unknown): Response {
     throw new PublicCatalogIndexReaderError("UNAVAILABLE");
   }
   return new Response(body, {
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: {
+      "cache-control": "private, no-store",
+      "content-type": "application/json; charset=utf-8",
+    },
   });
 }
 
 export function createSearchHandler(
   getCatalog: CatalogProvider,
   now: () => Date = () => new Date(),
+  options: BoundedRequestOptions = {},
 ) {
+  const timeoutMs = resolveRequestTimeoutMs(options);
   return async function GET(request: Request): Promise<Response> {
     const params: Record<string, string> = {};
     for (const [key, value] of new URL(request.url).searchParams) {
@@ -45,24 +69,35 @@ export function createSearchHandler(
     const parsed = searchParamsSchema.safeParse(params);
     if (!parsed.success) return errorResponse("INVALID_REQUEST", 400);
 
+    const lifetime = createRequestLifetime(request.signal, timeoutMs);
     try {
-      const catalog = await getCatalog();
-      const products = await catalog.search(
-        parsed.data.q,
-        SEARCH_LIMIT,
-        now(),
-        request.signal,
+      const catalog = await awaitWithinRequest(getCatalog, lifetime.signal);
+      const products = await awaitWithinRequest(
+        () => catalog.search(
+          parsed.data.q,
+          SEARCH_LIMIT,
+          now(),
+          lifetime.signal,
+        ),
+        lifetime.signal,
       );
       return validatedResponse({
         contractVersion: 1,
         products: products.map(publicCatalogProductFromSummary),
       });
     } catch (error) {
+      const abortResponse = requestAbortResponse(lifetime);
+      if (abortResponse !== undefined) return abortResponse;
+      if (error instanceof RequestOperationAbortedError) {
+        return errorResponse("REQUEST_CANCELLED", 499);
+      }
       if (error instanceof PublicCatalogIndexReaderError) {
         if (error.code === "INVALID_REQUEST") return errorResponse("INVALID_REQUEST", 400);
         if (error.code === "CANCELLED") return errorResponse("REQUEST_CANCELLED", 499);
       }
       return errorResponse("CATALOG_UNAVAILABLE", 503);
+    } finally {
+      lifetime.cleanup();
     }
   };
 }

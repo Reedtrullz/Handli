@@ -63,6 +63,7 @@ jobs:
         env:
           DATABASE_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
           RUN_DB_INTEGRATION: "1"
+          WEB_DATABASE_URL: postgresql://handleplan_web:ci_web_url_safe_0000000000000000001@127.0.0.1:5432/handleplan
         run: corepack pnpm --filter @handleplan/db test
       - run: corepack pnpm typecheck
       - run: corepack pnpm lint

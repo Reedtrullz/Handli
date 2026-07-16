@@ -33,10 +33,14 @@ export default function AboutPage() {
             <h2>Slik rangeres planer</h2>
             <p>
               Bare en komplett handlekurv kan anbefales. Faktiske, ikke-dominerte planer
-              sammenlignes på total kjøpskostnad, antall butikker og godkjente bytter. Reisetid
-              blir en egen faktor bare når du ber om en beregning.
+              sammenlignes deterministisk på total kjøpskostnad, antall butikker og godkjente
+              bytter. Reisetid blir en egen faktor bare når du ber om en beregning. Planen kan
+              bruke høyst tre butikker, og delvis dekning skal alltid kvalifisere «best»-påstander.
             </p>
             <p>Det finnes ingen betalt rangering, sponsede plasseringer eller skjult kjedebonus.</p>
+            <a href="https://github.com/Reedtrullz/Handli/blob/main/docs/governance/public-good-governance.md">
+              Les den reproduserbare rangerings- og styringspolicyen
+            </a>
           </section>
 
           <section className="trust-card">
@@ -46,6 +50,7 @@ export default function AboutPage() {
               ruteberegning blir aktivert, skal startpunktet brukes midlertidig og aldri legges i
               nettleserlagring, URL-er, logger eller varige rutebuffer.
             </p>
+            <a href="/personvern">Les personvernerklæringen</a>
           </section>
 
           <section className="trust-card">
@@ -53,6 +58,10 @@ export default function AboutPage() {
             <p>
               Eventuelle bidrag eller sponsorater skal offentliggjøres og kan ikke påvirke
               rangeringen. Handleplan tar ikke betalt fra butikker for å bli anbefalt.
+            </p>
+            <p>
+              Faktisk finansiering, eventuelle bindinger og ansvarlig eier av oversikten er ikke
+              ferdig dokumentert. Det blokkerer offentlig lansering.
             </p>
           </section>
 
@@ -69,14 +78,39 @@ export default function AboutPage() {
               target="_blank"
             >Meld en feil</a>
           </section>
+
+          <section className="trust-card">
+            <h2>Åpen kildekode med tydelig grense</h2>
+            <p>
+              Handleplans egen kode er lisensiert under GNU Affero General Public License,
+              versjon 3 eller senere (AGPL-3.0-or-later). Tredjeparts prisdata, tilbud, navn,
+              varebilder, logoer, publikasjoner og andre verk følger ikke automatisk med under
+              denne lisensen.
+            </p>
+            <a href="https://github.com/Reedtrullz/Handli/blob/main/LICENSE">Les kodelisensen</a>
+          </section>
+
+          <section className="trust-card">
+            <h2>Sikkerhet og sensitive henvendelser</h2>
+            <p>
+              Ikke legg sårbarheter, nøkler, handlekurver, adresser eller posisjoner i en
+              offentlig sak. En verifisert konfidensiell sikkerhets- og personvernkontakt er ennå
+              ikke publisert og må finnes før offentlig lansering.
+            </p>
+            <a href="https://github.com/Reedtrullz/Handli/blob/main/SECURITY.md">
+              Les sikkerhetspolicyen
+            </a>
+          </section>
         </div>
 
         <section className="trust-card trust-pending">
           <h2>Før offentlig lansering</h2>
           <p>
-            Kildetillatelser, valgt åpen kildekode-lisens, ansvarlig operatør, fullstendig
-            personvernerklæring og sikkerhetskontakt publiseres før tilgangen åpnes. Den
-            beskyttede alfaen er ikke en offentlig v1-lansering.
+            Kildetillatelser, juridisk operatør og behandlingsansvarlig, ekte kontaktkanaler,
+            finansieringsoversikt, personvern-/sikkerhets-/juridisk godkjenning og vurdering av
+            tredjeparts vilkår, varemerker og bilder må fullføres før tilgangen åpnes. Den
+            beskyttede alfaen er ikke en offentlig v1-lansering. Kodelisensen er valgt; den løser
+            ikke disse andre kravene.
           </p>
           <a href="/status">Se gjeldende datadekning</a>
         </section>

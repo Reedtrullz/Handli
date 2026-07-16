@@ -10,8 +10,8 @@ the same pinned PostgreSQL 16.10 image as CI for both `pg_dump` and
 The proof creates only the fixed ephemeral databases
 `handleplan_ci_v1_03_source` and `handleplan_ci_v1_03_restore`. It applies
 migration 001 to the source database, inserts a representative `price_cache`
-row, then applies migrations 002 through 011 and repeats the full migration
-run. It verifies that the original row and all eleven migration checksums remain
+row, then applies migrations 002 through 012 and repeats the full migration
+run. It verifies that the original row and all twelve migration checksums remain
 unchanged.
 
 The 001-era row is backfilled through the synthetic `legacy-import` source.
@@ -22,7 +22,9 @@ blocked, and no official claims are created from it.
 Before the dump, deterministic fixtures add a source permission audit, private
 publication capture metadata, a rejected review audit, an append-only worker
 schedule result, and a completed-run append-only catalog observation with
-separate source-update and retrieval clocks. After `pg_restore`,
+separate source-update and retrieval clocks. It also records one reviewed-family
+membership whose private reviewer identity is exposed publicly only as an
+attestation boolean. After `pg_restore`,
 the proof checks those exact records, the legacy row and classification, and
 the complete migration ledger. The restored database is also migrated again,
 which proves that the restored checksums remain compatible with an idempotent
@@ -63,20 +65,27 @@ coverage, source outcomes, and schedule results; lease CRUD; request-budget
 `SELECT/INSERT/DELETE`; read-only source governance and national geographic
 scope needed by the previous-image evidence reader; and only the nine write
 sequences. It does not inherit the public web table allowlist. It cannot alter
-source permissions, rewrite append-only evidence, or access the private
-capture/review/candidate pipeline.
+source permissions, read or write reviewed-family taxonomy state, rewrite
+append-only evidence, or access the private capture/review/candidate pipeline.
 
 `handleplan_web` receives no DML, sequences, or functions. Its table reads are
 an explicit public allowlist for readiness, persisted prices, completed-run
 catalog observations, evidence/coverage, and geography. Tables not consumed by the public
 Next.js read model, including offer candidates and conditions, publication
-ingestion, family-review, postal-scope, and historical-statistics state, remain
+ingestion, postal-scope, and historical-statistics state, remain
 ungranted. Offer access requires a filtered public reader or view that excludes
 candidate and source-reference internals. Source, permission, source-product,
 and public-health reads use column grants that exclude private reference keys,
 raw normalized source fields, internal kill-switch details, and review-queue
 details. It cannot read captures, extraction candidates, review actions,
 leases, request budgets, or worker schedule results.
+
+Reviewed-family reads are a narrower exception: the web role can select the
+immutable version, definition, and alias tables plus the security-barrier
+`reviewed_family_membership_public` view. It cannot select the private decision
+table, so immutable reviewer identities stay operator-only while the reader can
+require `reviewer_attested = true`. Neither runtime role can append taxonomy
+definitions or membership decisions.
 
 The request-budget event table is ephemeral coordination state, not durable
 price evidence. `handleplan_app` receives only `SELECT`, `INSERT`, and `DELETE`
@@ -103,6 +112,83 @@ later update and every delete. This prevents a degraded or failed catalog
 attempt from being relabeled as completed after the fact while preserving
 idempotent application finalization, which reads an already-terminal result
 without issuing another update.
+
+Migration 012 adds an independent, database-owned `terminalized_at` clock to
+that transition. Callers must leave it null; the lifecycle trigger sets it from
+PostgreSQL `statement_timestamp()` and terminal rows make it immutable. Older
+terminal runs are conservatively backfilled no earlier than the migration
+transaction and row-creation clocks, so a historical read before migration 012
+fails closed. Public price,
+catalog, planning, and reviewed-family readers require both business clocks and
+persisted creation/terminalization clocks to be no later than their requested
+snapshot. A row inserted later with backdated observation or completion times
+therefore cannot appear retroactively.
+
+Migration 012 also seals the write order at the database boundary. Before any
+catalog observation, price observation, coverage check, or source-record
+outcome is inserted, a trigger locks its parent ingestion run and requires the
+run to still be `running`. Finalization takes the same row lock. Consequently,
+an evidence append either commits before the one terminal transition or is
+rejected; a compromised worker cannot attach a backdated child to a completed
+run. The production repository already follows this order (all outcome writes,
+then finalization), and the legacy price mirror performs the same sequence in
+one transaction.
+
+The same guard binds public evidence to run purpose. Catalog observations
+require `catalog`; ordinary observations require `benchmark-prices` or the
+explicit `interactive_price_mirror`; historical observations require
+`historical-prices` and `historical_eligible`; coverage is allowed only on the
+ordinary-price run types. A price observation's source must equal its parent
+run source. Migration validates existing rows, with one narrow grandfathered
+exception for the blocked `legacy-import` / `price_cache_backfill` evidence
+created before these guards existed.
+
+Creation timestamps for those append-only child rows are overwritten from
+PostgreSQL `statement_timestamp()`. Source-permission decisions and reviewed
+family membership decisions receive the same database-owned insertion clock;
+pre-012 source-permission rows are conservatively moved to the migration
+boundary. Taxonomy versions, definitions, and aliases keep their specialized
+transaction-clock build window and deferred content seal instead of the generic
+statement clock, because every valid publication must be assembled atomically
+in its creation transaction.
+
+The same migration adds `public_state_changed_at`, a separate database-owned
+mutation clock, to data sources, canonical products, product identifiers, and
+geographic scopes. Their existing `updated_at` values remain business/source
+metadata and are not accepted as persistence clocks. A trigger overwrites any
+caller-supplied public-state timestamp on every insert or update, and every
+as-of reader requires the resulting clock to be no later than its snapshot.
+Scope membership rows receive a database-owned creation clock and are
+append-only; planning reads include only memberships persisted by the snapshot.
+Existing rows and memberships are conservatively backfilled at migration 012,
+so snapshots before that migration do not gain unproven public state.
+
+This is deliberately fail-closed rather than full bitemporal reconstruction.
+After a later approval, correction, revocation, or identity edit, an old
+snapshot may become unavailable; it never substitutes the new value into that
+old snapshot. Reconstructing the exact former value would require immutable
+version rows for each mutable entity and is outside the V1 storage contract.
+The clocks are stamped while the writing statement runs, so correctness also
+assumes the existing short, transaction-bounded worker writes; PostgreSQL does
+not expose a portable commit timestamp for this contract. Long-running owner
+transactions that straddle a captured wall-clock timestamp remain an operator
+boundary and must not be used for public-state changes.
+
+Reviewed-family publications are sealed at commit against the exact stored
+`content_json`, expected family and alias counts, and SHA-256 of deterministic
+canonical JSON reconstructed from definition and alias rows. Deferred
+constraint triggers are queued by inserts into the version, definition, and
+alias tables, including inserts after an explicit `SET CONSTRAINTS ...
+IMMEDIATE`. The migration runner additionally verifies the required 1.0.0 seed
+and every stored publication on every run. That explicit readback is essential
+after `pg_restore`, because PostgreSQL restores table data before post-data
+constraint triggers are created.
+
+The seal intentionally targets the pinned PostgreSQL 16 runtime. It uses the
+built-in `sha256(bytea)` function, UTF-8 conversion, `jsonb`, and the built-in
+`C` collation; it does not depend on `pgcrypto` or an operating-system locale.
+Moving the database to another engine or an older PostgreSQL major requires a
+canonicalization/checksum compatibility proof before migration.
 
 ## Restore and rollback sequence
 

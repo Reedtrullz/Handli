@@ -69,12 +69,15 @@ export function comparePriceReadModels(
 }
 
 export class PostgresEvidencePriceReader {
-  constructor(private readonly db: HandleplanDatabase) {}
+  constructor(
+    private readonly db: HandleplanDatabase,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
 
   async getMany(eans: string[]): Promise<PriceObservation[]> {
     const uniqueEans = [...new Set(eans)];
     if (uniqueEans.length === 0) return [];
-    const now = new Date();
+    const now = this.now();
 
     const rows = await this.db
       .select({
@@ -128,6 +131,8 @@ export class PostgresEvidencePriceReader {
           eq(productIdentifiers.confidence, 100),
           isNotNull(productIdentifiers.verifiedAt),
           lte(productIdentifiers.verifiedAt, now),
+          lte(productIdentifiers.createdAt, now),
+          lte(productIdentifiers.publicStateChangedAt, now),
           eq(priceObservations.sourceId, "kassalapp"),
           eq(priceObservations.confidence, 100),
           inArray(priceObservations.claimEligibility, [
@@ -138,9 +143,19 @@ export class PostgresEvidencePriceReader {
           isNotNull(priceObservations.rawRecordHash),
           lte(priceObservations.observedAt, now),
           lte(priceObservations.fetchedAt, now),
+          lte(priceObservations.createdAt, now),
           eq(dataSources.runtimeState, "approved"),
+          lte(dataSources.createdAt, now),
+          lte(dataSources.publicStateChangedAt, now),
+          isNotNull(dataSources.permissionReviewedAt),
+          lte(dataSources.permissionReviewedAt, now),
+          or(
+            isNull(dataSources.permissionExpiresAt),
+            gt(dataSources.permissionExpiresAt, now),
+          ),
           eq(sourcePermissions.decision, "approved"),
           lte(sourcePermissions.reviewedAt, now),
+          lte(sourcePermissions.createdAt, now),
           or(
             isNull(sourcePermissions.validUntil),
             gt(sourcePermissions.validUntil, now),
@@ -153,6 +168,8 @@ export class PostgresEvidencePriceReader {
               .where(
                 and(
                   eq(newerSourcePermissions.sourceId, sourcePermissions.sourceId),
+                  lte(newerSourcePermissions.reviewedAt, now),
+                  lte(newerSourcePermissions.createdAt, now),
                   or(
                     gt(
                       newerSourcePermissions.reviewedAt,
@@ -172,12 +189,20 @@ export class PostgresEvidencePriceReader {
           eq(ingestionRuns.status, "completed"),
           isNotNull(ingestionRuns.completedAt),
           lte(ingestionRuns.completedAt, now),
+          lte(ingestionRuns.createdAt, now),
+          isNotNull(ingestionRuns.terminalizedAt),
+          lte(ingestionRuns.terminalizedAt, now),
           eq(canonicalProducts.status, "active"),
+          lte(canonicalProducts.createdAt, now),
+          lte(canonicalProducts.publicStateChangedAt, now),
           eq(geographicScopes.scopeKind, "national"),
           eq(geographicScopes.countryCode, "NO"),
           eq(geographicScopes.status, "active"),
+          lte(geographicScopes.createdAt, now),
+          lte(geographicScopes.publicStateChangedAt, now),
           eq(priceCoverageChecks.state, "priced"),
           lte(priceCoverageChecks.checkedAt, now),
+          lte(priceCoverageChecks.createdAt, now),
         ),
       )
       .orderBy(desc(priceObservations.observedAt), desc(priceObservations.id));

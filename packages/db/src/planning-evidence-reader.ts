@@ -320,6 +320,10 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
           and pi.confidence = 100
           and pi.verified_at is not null
           and pi.verified_at <= ${at}
+          and pi.created_at <= ${at}
+          and pi.public_state_changed_at <= ${at}
+          and cp.created_at <= ${at}
+          and cp.public_state_changed_at <= ${at}
           and cp.status = 'active'
       ),
       effective_sources as (
@@ -334,10 +338,14 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
                  permission.valid_until, permission.permissions
           from source_permissions permission
           where permission.source_id = ds.id
+            and permission.reviewed_at <= ${at}
+            and permission.created_at <= ${at}
           order by permission.reviewed_at desc, permission.id desc
           limit 1
         ) permission on true
         where ds.runtime_state = 'approved'
+          and ds.created_at <= ${at}
+          and ds.public_state_changed_at <= ${at}
           and ds.permission_reviewed_at is not null
           and ds.permission_reviewed_at <= ${at}
           and (ds.permission_expires_at is null or ds.permission_expires_at > ${at})
@@ -370,12 +378,14 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
             select gsr.region_code
             from geographic_scope_regions gsr
             where gsr.scope_id = gs.id
+              and gsr.created_at <= ${at}
             order by gsr.region_code
           ), array[]::varchar[]) as region_codes,
           coalesce(array(
             select 'store:' || gss.store_id::text
             from geographic_scope_stores gss
             where gss.scope_id = gs.id
+              and gss.created_at <= ${at}
             order by gss.store_id
           ), array[]::text[]) as store_ids
         from requested_products rp
@@ -388,9 +398,20 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
         where run.status = 'completed'
           and run.completed_at is not null
           and run.completed_at <= ${at}
+          and run.created_at <= ${at}
+          and run.terminalized_at <= ${at}
           and po.observed_at >= ${windowStartsAt}
           and po.observed_at <= ${at}
           and po.fetched_at <= ${at}
+          and po.created_at <= ${at}
+          and (
+            po.geographic_scope_id is null
+            or (
+              gs.id is not null
+              and gs.created_at <= ${at}
+              and gs.public_state_changed_at <= ${at}
+            )
+          )
           and po.source_reference is not null
           and po.raw_record_hash is not null
           and po.confidence = 100
@@ -427,12 +448,14 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
             select gsr.region_code
             from geographic_scope_regions gsr
             where gsr.scope_id = gs.id
+              and gsr.created_at <= ${at}
             order by gsr.region_code
           ), array[]::varchar[]) as region_codes,
           coalesce(array(
             select 'store:' || gss.store_id::text
             from geographic_scope_stores gss
             where gss.scope_id = gs.id
+              and gss.created_at <= ${at}
             order by gss.store_id
           ), array[]::text[]) as store_ids
         from requested_products rp
@@ -443,8 +466,19 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
         where run.status = 'completed'
           and run.completed_at is not null
           and run.completed_at <= ${at}
+          and run.created_at <= ${at}
+          and run.terminalized_at <= ${at}
           and coverage.checked_at >= ${coverageStartsAt}
           and coverage.checked_at <= ${at}
+          and coverage.created_at <= ${at}
+          and (
+            coverage.geographic_scope_id is null
+            or (
+              gs.id is not null
+              and gs.created_at <= ${at}
+              and gs.public_state_changed_at <= ${at}
+            )
+          )
           and source.permissions @> '{"ordinaryPrice": true}'::jsonb
       )
       select

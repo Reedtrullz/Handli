@@ -8,8 +8,13 @@ import { createDatabase, type DatabaseConnection } from "./client";
 import { PostgresPublicCatalogIndexReader } from "./public-catalog-index-reader";
 
 const runDatabaseIntegration = process.env.RUN_DB_INTEGRATION === "1";
-const AT = new Date("2026-07-16T12:00:00.000Z");
-const RETRIEVED_AT = new Date("2026-07-16T10:00:00.000Z");
+const fixtureNow = Date.now();
+const AT = new Date(fixtureNow + 60_000);
+const RETRIEVED_AT = new Date(fixtureNow - 10 * 60_000);
+const STARTED_AT = new Date(fixtureNow - 20 * 60_000);
+const COMPLETED_AT = new Date(fixtureNow - 5 * 60_000);
+const SOURCE_REVIEWED_AT = new Date(fixtureNow - 30 * 60_000);
+const SOURCE_EXPIRES_AT = new Date(fixtureNow + 24 * 60 * 60_000);
 const nonceDigits = String((Date.now() + process.pid) % 10_000_000).padStart(7, "0");
 const catalogSourceId = `catalog-observation-test-${nonceDigits}-${process.pid}`;
 const observedMilkName = `Observed ${nonceDigits} milk`;
@@ -40,6 +45,9 @@ describe.skipIf(!runDatabaseIntegration).sequential(
     let firstReader: PostgresActiveCatalogReader;
     let secondReader: PostgresActiveCatalogReader;
     let publicReader: PostgresPublicCatalogIndexReader;
+    let webConnection: DatabaseConnection;
+    let webReader: PostgresActiveCatalogReader;
+    let webPublicReader: PostgresPublicCatalogIndexReader;
     let completedRunId: number;
     let canonicalMilkId: number;
 
@@ -49,6 +57,8 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       coffee: gtin13(3),
       runningOnly: gtin13(4),
       degradedOnly: gtin13(5),
+      lateBackdated: gtin13(6),
+      lateCompletedInsert: gtin13(7),
     } as const;
 
     async function createProduct(displayName: string): Promise<number> {
@@ -67,19 +77,22 @@ describe.skipIf(!runDatabaseIntegration).sequential(
     async function createRun(
       label: string,
       status: "completed" | "degraded" | "running",
+      createdAt?: Date,
     ): Promise<number> {
-      const completedAt = status === "running" ? null : "2026-07-16T11:00:00.000Z";
+      const completedAt = status === "running" ? null : COMPLETED_AT.toISOString();
       const [run] = await first.sql`
         insert into ingestion_runs (
-          job_id, source_id, run_type, status, started_at, completed_at, counts
+          job_id, source_id, run_type, status, started_at, completed_at, counts,
+          created_at
         ) values (
           ${`${catalogSourceId}:${label}`},
           ${catalogSourceId},
           'catalog',
           'running',
-          ${"2026-07-16T09:00:00.000Z"},
+          ${STARTED_AT.toISOString()},
           null,
-          '{}'::jsonb
+          '{}'::jsonb,
+          coalesce(${createdAt?.toISOString() ?? null}::timestamptz, now())
         )
         returning id::integer as id
       `;
@@ -107,12 +120,13 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       hashDigit: string;
       runId: number;
       sourceRecordId: string;
+      createdAt?: Date;
     }): Promise<void> {
       await first.sql`
         insert into catalog_observations (
           ingestion_run_id, source_record_id, canonical_product_id, gtin,
           display_name, brand, package_amount, package_unit, units_per_pack,
-          retrieved_at, source_updated_at, raw_record_hash
+          retrieved_at, source_updated_at, raw_record_hash, created_at
         ) values (
           ${input.runId},
           ${input.sourceRecordId},
@@ -124,8 +138,9 @@ describe.skipIf(!runDatabaseIntegration).sequential(
           ${input.gtin === gtins.milkAlias ? "piece" : "ml"},
           ${input.gtin === gtins.milkAlias ? 4 : 1},
           ${RETRIEVED_AT.toISOString()},
-          ${"2026-07-15T08:00:00.000Z"},
-          ${input.hashDigit.repeat(64)}
+          ${new Date(RETRIEVED_AT.getTime() - 60_000).toISOString()},
+          ${input.hashDigit.repeat(64)},
+          coalesce(${input.createdAt?.toISOString() ?? null}::timestamptz, now())
         )
       `;
     }
@@ -134,11 +149,17 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       if (!process.env.DATABASE_URL) {
         throw new Error("DATABASE_URL is required when RUN_DB_INTEGRATION=1");
       }
+      if (!process.env.WEB_DATABASE_URL) {
+        throw new Error("WEB_DATABASE_URL is required when RUN_DB_INTEGRATION=1");
+      }
       first = createDatabase(process.env.DATABASE_URL);
       second = createDatabase(process.env.DATABASE_URL);
+      webConnection = createDatabase(process.env.WEB_DATABASE_URL);
       firstReader = new PostgresActiveCatalogReader(first.db);
       secondReader = new PostgresActiveCatalogReader(second.db);
       publicReader = new PostgresPublicCatalogIndexReader(first.db);
+      webReader = new PostgresActiveCatalogReader(webConnection.db);
+      webPublicReader = new PostgresPublicCatalogIndexReader(webConnection.db);
 
       await first.sql`
         insert into data_sources (
@@ -149,8 +170,8 @@ describe.skipIf(!runDatabaseIntegration).sequential(
           'Catalog observation integration fixture',
           'catalog',
           'approved',
-          ${"2026-07-15T00:00:00.000Z"},
-          ${"2026-08-15T00:00:00.000Z"}
+          ${SOURCE_REVIEWED_AT.toISOString()},
+          ${SOURCE_EXPIRES_AT.toISOString()}
         )
       `;
       await first.sql`
@@ -160,14 +181,14 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         ) values (
           ${catalogSourceId},
           'approved',
-          ${"2026-07-15T00:00:00.000Z"},
-          ${"2026-08-15T00:00:00.000Z"},
+          ${SOURCE_REVIEWED_AT.toISOString()},
+          ${SOURCE_EXPIRES_AT.toISOString()},
           'https://example.invalid/catalog-observation-fixture',
           '{"catalog":true}'::jsonb
         )
       `;
 
-      completedRunId = await createRun("completed", "completed");
+      completedRunId = await createRun("completed", "running");
       canonicalMilkId = await createProduct("Mutable milk projection");
       const canonicalCoffeeId = await createProduct("Mutable coffee projection");
       await appendObservation({
@@ -196,6 +217,13 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         runId: completedRunId,
         sourceRecordId: "coffee-main",
       });
+      await first.sql`
+        update ingestion_runs
+        set status = 'completed',
+            completed_at = ${COMPLETED_AT.toISOString()},
+            counts = '{"accepted":3,"failed":0,"fetched":3,"persisted":3,"quarantined":0,"unknown":0}'::jsonb
+        where id = ${completedRunId}
+      `;
 
       const runningProductId = await createProduct("Running partial projection");
       await appendObservation({
@@ -207,18 +235,27 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         sourceRecordId: "running-only",
       });
       const degradedProductId = await createProduct("Degraded partial projection");
+      const degradedRunId = await createRun("degraded", "running");
       await appendObservation({
         canonicalProductId: degradedProductId,
         displayName: "Must stay hidden when degraded",
         gtin: gtins.degradedOnly,
         hashDigit: "e",
-        runId: await createRun("degraded", "degraded"),
+        runId: degradedRunId,
         sourceRecordId: "degraded-only",
       });
+      await first.sql`
+        update ingestion_runs
+        set status = 'degraded',
+            completed_at = ${COMPLETED_AT.toISOString()},
+            counts = '{"accepted":1,"failed":1,"fetched":1,"persisted":1,"quarantined":0,"unknown":0}'::jsonb,
+            error_class = 'FIXTURE_DEGRADED'
+        where id = ${degradedRunId}
+      `;
     });
 
     afterAll(async () => {
-      await Promise.all([first?.close(), second?.close()]);
+      await Promise.all([first?.close(), second?.close(), webConnection?.close()]);
     });
 
     it("returns only completed-run observation payloads and preserves exact aliases", async () => {
@@ -229,14 +266,16 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         gtins.coffee,
         gtins.milk,
       ];
-      const [firstResult, secondResult] = await Promise.all([
+      const [firstResult, secondResult, webResult] = await Promise.all([
         firstReader.getMany(requested, AT),
         secondReader.getMany([...requested].reverse(), AT),
+        webReader.getMany(requested, AT),
       ]);
 
       const expectedGtins = [gtins.coffee, gtins.milk, gtins.milkAlias].sort();
       expect(firstResult.map(({ gtin }) => gtin)).toEqual(expectedGtins);
       expect(secondResult).toEqual(firstResult);
+      expect(webResult).toEqual(firstResult);
       expect(firstResult.find(({ gtin }) => gtin === gtins.milk)).toMatchObject({
         brand: "Fixture",
         catalogEvidence: { observedAt: RETRIEVED_AT.toISOString() },
@@ -277,6 +316,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       const browse = await publicReader.browse(36, AT);
       const nameSearch = await publicReader.search(nonceDigits, 20, AT);
       const aliasSearch = await publicReader.search(gtins.milkAlias, 20, AT);
+      const webAliasSearch = await webPublicReader.search(gtins.milkAlias, 20, AT);
 
       const fixtureBrowse = browse.filter(({ catalogEvidence }) =>
         catalogEvidence.source.id === catalogSourceId);
@@ -289,6 +329,147 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       expect(fixtureNameSearch.filter(({ displayName }) => displayName === observedMilkName))
         .toHaveLength(1);
       expect(aliasSearch.map(({ gtin }) => gtin)).toEqual([gtins.milkAlias]);
+      expect(webAliasSearch).toEqual(aliasSearch);
+    });
+
+    it("keeps an old snapshot closed against a later backdated terminal run", async () => {
+      const productId = await createProduct("Late backdated catalog projection");
+      const snapshotAt = new Date(Date.now() - 100);
+      const persistedAt = new Date(snapshotAt.getTime() - 1_000);
+      const runId = await createRun("late-backdated", "running", persistedAt);
+      await appendObservation({
+        canonicalProductId: productId,
+        createdAt: persistedAt,
+        displayName: "Must stay outside the old snapshot",
+        gtin: gtins.lateBackdated,
+        hashDigit: "f",
+        runId,
+        sourceRecordId: "late-backdated",
+      });
+      await first.sql`
+        update ingestion_runs
+        set status = 'completed',
+            completed_at = ${COMPLETED_AT.toISOString()},
+            counts = '{"accepted":1,"failed":0,"fetched":1,"persisted":1,"quarantined":0,"unknown":0}'::jsonb
+        where id = ${runId}
+      `;
+
+      await expect(firstReader.getMany([gtins.lateBackdated], snapshotAt)).resolves.toEqual([]);
+      await expect(publicReader.search(gtins.lateBackdated, 20, snapshotAt)).resolves.toEqual([]);
+
+      const [run] = await first.sql`
+        select terminalized_at > ${snapshotAt.toISOString()}::timestamptz as terminalized_later
+        from ingestion_runs
+        where id = ${runId}
+      `;
+      expect(run?.terminalized_later).toBe(true);
+    });
+
+    it("rejects a backdated observation appended after run completion", async () => {
+      const productId = await createProduct("Late completed-run catalog projection");
+      const [snapshotClock] = await first.sql`
+        select clock_timestamp() as snapshot_at
+      `;
+      const snapshotAt = snapshotClock!.snapshot_at as Date;
+      await expect(
+        appendObservation({
+          canonicalProductId: productId,
+          createdAt: new Date(snapshotAt.getTime() - 1_000),
+          displayName: "Must never attach to a completed run",
+          gtin: gtins.lateCompletedInsert,
+          hashDigit: "1",
+          runId: completedRunId,
+          sourceRecordId: "late-completed-insert",
+        }),
+      ).rejects.toThrow(/running ingestion run/i);
+      await expect(
+        firstReader.getMany([gtins.lateCompletedInsert], snapshotAt),
+      ).resolves.toEqual([]);
+    });
+
+    it("database-stamps later permission decisions so old snapshots cannot be replayed", async () => {
+      const [snapshotClock] = await first.sql`
+        select clock_timestamp() as snapshot_at
+      `;
+      const snapshotAt = snapshotClock!.snapshot_at as Date;
+      const baseline = await firstReader.getMany([gtins.milk], snapshotAt);
+      expect(baseline).toHaveLength(1);
+
+      const [revocation] = await first.sql`
+        insert into source_permissions (
+          source_id, decision, reviewed_at, valid_until, permissions, notes,
+          created_at
+        ) values (
+          ${catalogSourceId}, 'revoked',
+          ${new Date(snapshotAt.getTime() - 1_000).toISOString()},
+          ${new Date(snapshotAt.getTime() + 24 * 60 * 60_000).toISOString()},
+          '{"catalog":true}'::jsonb,
+          ${`backdated-revocation-${nonceDigits}`},
+          '2000-01-01T00:00:00Z'
+        )
+        returning
+          created_at,
+          created_at > ${snapshotAt.toISOString()}::timestamptz as created_later
+      `;
+      expect(revocation!.created_later).toBe(true);
+      await expect(firstReader.getMany([gtins.milk], snapshotAt)).resolves.toEqual(baseline);
+      await expect(publicReader.search(gtins.milk, 20, snapshotAt)).resolves.toHaveLength(1);
+
+      await first.sql`
+        insert into source_permissions (
+          source_id, decision, reviewed_at, valid_until, permissions, notes
+        ) values (
+          ${catalogSourceId}, 'approved', clock_timestamp(),
+          clock_timestamp() + interval '1 day', '{"catalog":true}'::jsonb,
+          ${`restore-approval-${nonceDigits}`}
+        )
+      `;
+    });
+
+    it("does not let a later source approval or identity edit rewrite an old snapshot", async () => {
+      const changedDisplayName = `Changed after snapshot ${nonceDigits}`;
+      await first.sql`
+        update data_sources
+        set runtime_state = 'blocked'
+        where id = ${catalogSourceId}
+      `;
+      const [snapshotClock] = await first.sql`
+        select clock_timestamp() as snapshot_at
+      `;
+      const snapshotAt = snapshotClock!.snapshot_at as Date;
+
+      try {
+        await first.sql`
+          update data_sources
+          set runtime_state = 'approved', display_name = ${changedDisplayName}
+          where id = ${catalogSourceId}
+        `;
+
+        await expect(firstReader.getMany([gtins.milk], snapshotAt)).resolves.toEqual([]);
+        await expect(publicReader.search(gtins.milk, 20, snapshotAt)).resolves.toEqual([]);
+
+        const [sourceClock] = await first.sql`
+          select
+            public_state_changed_at > ${snapshotAt.toISOString()}::timestamptz
+              as changed_later,
+            clock_timestamp() + interval '1 second' as current_at
+          from data_sources
+          where id = ${catalogSourceId}
+        `;
+        expect(sourceClock?.changed_later).toBe(true);
+        const current = await firstReader.getMany(
+          [gtins.milk],
+          sourceClock!.current_at as Date,
+        );
+        expect(current[0]?.catalogEvidence.source.displayName).toBe(changedDisplayName);
+      } finally {
+        await first.sql`
+          update data_sources
+          set runtime_state = 'approved',
+              display_name = 'Catalog observation integration fixture'
+          where id = ${catalogSourceId}
+        `;
+      }
     });
 
     it("cancels a PostgreSQL read blocked on append-only catalog observations", async () => {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +39,17 @@ function collectKeys(value, keys = []) {
   return keys;
 }
 
+function canonicalizeJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalizeJson).join(",")}]`;
+
+  const entries = Object.keys(value)
+    .filter((key) => value[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalizeJson(value[key])}`);
+  return `{${entries.join(",")}}`;
+}
+
 function assertSchemaValid(label, schema, instance) {
   const validate = ajv.compile(schema);
   assert.equal(
@@ -53,16 +65,82 @@ const coverage = readJson("docs/data/launch-coverage.v1.json");
 const coverageSchema = readJson("docs/data/launch-coverage.v1.schema.json");
 const corpus = readJson("docs/data/benchmark-baskets.v1.json");
 const corpusSchema = readJson("docs/data/benchmark-baskets.v1.schema.json");
+const familyTaxonomy = readJson("docs/data/product-family-taxonomy.v1.json");
+const familyTaxonomySchema = readJson("docs/data/product-family-taxonomy.v1.schema.json");
 
 assert.equal(registry.$schema, "./source-registry.v1.schema.json");
 assert.equal(coverage.$schema, "./launch-coverage.v1.schema.json");
 assert.equal(corpus.$schema, "./benchmark-baskets.v1.schema.json");
+assert.equal(familyTaxonomy.$schema, "./product-family-taxonomy.v1.schema.json");
 assert.match(registrySchema.$id, /source-registry\.v1\.schema\.json$/);
 assert.match(coverageSchema.$id, /launch-coverage\.v1\.schema\.json$/);
 assert.match(corpusSchema.$id, /benchmark-baskets\.v1\.schema\.json$/);
+assert.match(familyTaxonomySchema.$id, /product-family-taxonomy\.v1\.schema\.json$/);
 assertSchemaValid("source registry", registrySchema, registry);
 assertSchemaValid("launch coverage", coverageSchema, coverage);
 assertSchemaValid("benchmark baskets", corpusSchema, corpus);
+assertSchemaValid("product-family taxonomy", familyTaxonomySchema, familyTaxonomy);
+
+// Reviewed-family vocabulary is versioned, immutable, bounded, and membership-free.
+assert.equal(familyTaxonomy.taxonomyId, "handleplan-reviewed-families");
+assert.equal(familyTaxonomy.taxonomyVersion, "1.0.0");
+assert.equal(
+  familyTaxonomy.versionId,
+  `${familyTaxonomy.taxonomyId}@${familyTaxonomy.taxonomyVersion}`,
+);
+const canonicalFamilies = canonicalizeJson(familyTaxonomy.families);
+assert.equal(
+  familyTaxonomy.contentSha256,
+  createHash("sha256").update(canonicalFamilies, "utf8").digest("hex"),
+  "family taxonomy checksum must cover the canonical family descriptors",
+);
+
+const familyIds = familyTaxonomy.families.map((family) => family.id);
+const familySlugs = familyTaxonomy.families.map((family) => family.slug);
+const familyAliases = familyTaxonomy.families.flatMap((family) => family.aliases);
+unique(familyIds, "family taxonomy ids");
+unique(familySlugs, "family taxonomy slugs");
+unique(familyAliases, "family taxonomy aliases");
+unique([...familySlugs, ...familyAliases], "family taxonomy lookup keys");
+assert.deepEqual(familyIds, sorted(familyIds), "family descriptors must have stable ID ordering");
+for (const family of familyTaxonomy.families) {
+  assert.deepEqual(family.aliases, sorted(family.aliases), `${family.id} aliases have stable ordering`);
+  for (const alias of family.aliases) {
+    assert.equal(alias.normalize("NFC"), alias, `${family.id} aliases use Unicode NFC`);
+  }
+  if (family.parentId !== undefined) {
+    assert.ok(familyIds.includes(family.parentId), `${family.id} parent exists in this version`);
+  }
+}
+
+const parentByFamilyId = new Map(
+  familyTaxonomy.families.map((family) => [family.id, family.parentId]),
+);
+for (const familyId of familyIds) {
+  const ancestors = new Set();
+  let candidate = familyId;
+  while (candidate !== undefined) {
+    assert.equal(ancestors.has(candidate), false, `${familyId} parent graph must be acyclic`);
+    ancestors.add(candidate);
+    candidate = parentByFamilyId.get(candidate);
+  }
+}
+
+assert.deepEqual(
+  familyTaxonomy.families.map(({ id, labelNo }) => ({ id, labelNo })),
+  [
+    { id: "family:brod", labelNo: "Brød" },
+    { id: "family:kaffe", labelNo: "Kaffe" },
+    { id: "family:melk", labelNo: "Melk" },
+  ],
+);
+for (const forbiddenKey of ["membership", "memberships", "productId", "productIds"]) {
+  assert.equal(
+    collectKeys(familyTaxonomy).includes(forbiddenKey),
+    false,
+    `family taxonomy vocabulary must not contain ${forbiddenKey}`,
+  );
+}
 
 // Source governance must be fail-closed and expose all four runtime states.
 const sourceStates = ["approved", "blocked", "conditional", "revoked"];
@@ -241,6 +319,7 @@ const registryDoc = readText("docs/data/source-registry.md");
 const killSwitchDoc = readText("docs/data/source-kill-switch.md");
 const classificationAdr = readText("docs/adr/0001-official-offer-vs-historical-price.md");
 const scopeAdr = readText("docs/adr/0002-launch-scope-policy.md");
+const familyTaxonomyDoc = readText("docs/data/product-family-taxonomy.md");
 const rootPackage = readJson("package.json");
 const ciWorkflow = readText(".github/workflows/ci.yml");
 
@@ -251,6 +330,9 @@ assert.match(classificationAdr, /Historical comparison.*not a promotion/is);
 assert.match(classificationAdr, /at least seven distinct days/i);
 assert.match(scopeAdr, /candidate_unverified/);
 assert.match(scopeAdr, /among verified prices/i);
+assert.match(familyTaxonomyDoc, /defines vocabulary only/i);
+assert.match(familyTaxonomyDoc, /does not contain product memberships/i);
+assert.match(familyTaxonomyDoc, /does not enable flexible matching/i);
 assert.equal(
   rootPackage.scripts["validate:v1-data"],
   "node tests/acceptance/validate-v1-data.mjs",
@@ -267,4 +349,6 @@ console.log("V1 data acceptance validation passed", {
   coverageCells: coverage.coverage.length,
   scenarios: corpus.scenarios.length,
   benchmarkRuns: corpus.runs.length,
+  reviewedFamilies: familyTaxonomy.families.length,
+  familyTaxonomyVersion: familyTaxonomy.versionId,
 });

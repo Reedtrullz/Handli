@@ -396,6 +396,10 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
     const futureObservationEan = integrationEan(12);
     const futureFetchEan = integrationEan(13);
     const futureCoverageEan = integrationEan(14);
+    const lateTerminalEan = integrationEan(15);
+    const mutableIdentifierEan = integrationEan(16);
+    const mutableProductEan = integrationEan(17);
+    const mutableScopeEan = integrationEan(18);
     const eligibleObservedAt = "2026-07-15T11:00:00.000Z";
     const futureAt = new Date(Date.now() + 60_000).toISOString();
     const furtherFutureAt = new Date(Date.now() + 120_000).toISOString();
@@ -419,6 +423,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
         overrides: {
           checkedAt?: string;
           completedAt?: string | null;
+          createdAt?: string;
           fetchedAt?: string;
           observedAt?: string;
           verifiedAt?: string;
@@ -426,16 +431,22 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       ) => {
         const [product] = await connection.sql`
           insert into canonical_products (
-            display_name, package_amount, package_unit, units_per_pack, status
-          ) values (${`Reader evidence ${ean}`}, 1, 'package', 1, 'active')
+            display_name, package_amount, package_unit, units_per_pack, status,
+            created_at
+          ) values (
+            ${`Reader evidence ${ean}`}, 1, 'package', 1, 'active',
+            coalesce(${overrides.createdAt ?? null}::timestamptz, now())
+          )
           returning id
         `;
         await connection.sql`
           insert into product_identifiers (
-            product_id, scheme, value, source_id, confidence, verified_at
+            product_id, scheme, value, source_id, confidence, verified_at,
+            created_at
           ) values (
             ${product!.id}, 'ean13', ${ean}, null, 100,
-            ${overrides.verifiedAt ?? new Date().toISOString()}
+            ${overrides.verifiedAt ?? new Date().toISOString()},
+            coalesce(${overrides.createdAt ?? null}::timestamptz, now())
           )
         `;
         const completedAt = overrides.completedAt === undefined
@@ -445,11 +456,13 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
           : overrides.completedAt;
         const [run] = await connection.sql`
           insert into ingestion_runs (
-            source_id, run_type, status, started_at, completed_at, counts
+            source_id, run_type, status, started_at, completed_at, counts,
+            created_at
           ) values (
-            'kassalapp', 'eligible_reader_test', 'running',
-            ${new Date(Date.now() - 1_000).toISOString()},
-            null, '{}'
+            'kassalapp', 'benchmark-prices', 'running',
+            ${overrides.createdAt ?? new Date(Date.now() - 1_000).toISOString()},
+            null, '{}',
+            coalesce(${overrides.createdAt ?? null}::timestamptz, now())
           )
           returning id
         `;
@@ -457,25 +470,28 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
           insert into price_observations (
             evidence_key, product_id, chain, amount_ore, observed_at, fetched_at,
             source_id, source_reference, ingestion_run_id, geographic_scope_id,
-            evidence_level, confidence, claim_eligibility, raw_record_hash
+            evidence_level, confidence, claim_eligibility, raw_record_hash,
+            created_at
           ) values (
             ${`eligible-reader-${ean}-${integrationNonce}`}, ${product!.id}, 'extra',
             2490, ${overrides.observedAt ?? eligibleObservedAt},
             ${overrides.fetchedAt ?? "2026-07-15T12:00:00.000Z"}, 'kassalapp',
             'fixture:eligible-reader', ${run!.id}, ${scope!.id}, 'chain', 100,
             'ordinary_only',
-            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            coalesce(${overrides.createdAt ?? null}::timestamptz, now())
           )
           returning id
         `;
         await connection.sql`
           insert into price_coverage_checks (
             ingestion_run_id, product_id, chain, geographic_scope_id,
-            state, reason, checked_at
+            state, reason, checked_at, created_at
           ) values (
             ${run!.id}, ${product!.id}, 'extra', ${scope!.id},
             'priced', 'eligible_reader_test',
-            ${overrides.checkedAt ?? "2026-07-15T12:00:00.000Z"}
+            ${overrides.checkedAt ?? "2026-07-15T12:00:00.000Z"},
+            coalesce(${overrides.createdAt ?? null}::timestamptz, now())
           )
         `;
         if (runStatus !== "running") {
@@ -486,6 +502,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
           `;
         }
         expect(evidence).toBeDefined();
+        return run!.id as number;
       };
 
       await insertEvidence(eligibleEan, "completed");
@@ -501,6 +518,9 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       });
       await insertEvidence(futureFetchEan, "completed", { fetchedAt: futureAt });
       await insertEvidence(futureCoverageEan, "completed", { checkedAt: futureAt });
+      await insertEvidence(mutableIdentifierEan, "completed");
+      await insertEvidence(mutableProductEan, "completed");
+      await insertEvidence(mutableScopeEan, "completed");
 
       await expect(
         reader.getMany([
@@ -560,13 +580,123 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
         ]),
       ).resolves.toEqual([]);
 
+      const [snapshotClock] = await connection.sql`
+        select clock_timestamp() as snapshot_at
+      `;
+      const snapshotAt = snapshotClock!.snapshot_at as Date;
+      const persistedAt = new Date(snapshotAt.getTime() - 1_000).toISOString();
+      const completedBeforeSnapshot = new Date(snapshotAt.getTime() - 500).toISOString();
+      const observedBeforeSnapshot = new Date(snapshotAt.getTime() - 2_000).toISOString();
+      const lateRunId = await insertEvidence(lateTerminalEan, "completed", {
+        checkedAt: completedBeforeSnapshot,
+        completedAt: completedBeforeSnapshot,
+        createdAt: persistedAt,
+        fetchedAt: completedBeforeSnapshot,
+        observedAt: observedBeforeSnapshot,
+        verifiedAt: completedBeforeSnapshot,
+      });
+      const historicalReader = new PostgresEvidencePriceReader(
+        connection.db,
+        () => snapshotAt,
+      );
+      await expect(historicalReader.getMany([lateTerminalEan])).resolves.toEqual([]);
+      const [lateRun] = await connection.sql`
+        select terminalized_at > ${snapshotAt.toISOString()}::timestamptz
+          as terminalized_later
+        from ingestion_runs
+        where id = ${lateRunId}
+      `;
+      expect(lateRun?.terminalized_later).toBe(true);
+
+      const [mutableIdentifier] = await connection.sql`
+        select id, product_id
+        from product_identifiers
+        where value = ${mutableIdentifierEan}
+      `;
+      await connection.sql`
+        update product_identifiers set verified_at = null
+        where id = ${mutableIdentifier!.id}
+      `;
+      const [identifierSnapshotClock] = await connection.sql`
+        select clock_timestamp() as snapshot_at
+      `;
+      const identifierSnapshotAt = identifierSnapshotClock!.snapshot_at as Date;
+      await connection.sql`
+        update product_identifiers
+        set verified_at = ${new Date(identifierSnapshotAt.getTime() - 1_000).toISOString()}
+        where id = ${mutableIdentifier!.id}
+      `;
+      await expect(
+        new PostgresEvidencePriceReader(
+          connection.db,
+          () => identifierSnapshotAt,
+        ).getMany([mutableIdentifierEan]),
+      ).resolves.toEqual([]);
+      await expect(reader.getMany([mutableIdentifierEan])).resolves.toHaveLength(1);
+
+      const [mutableProduct] = await connection.sql`
+        select product_id
+        from product_identifiers
+        where value = ${mutableProductEan}
+      `;
+      await connection.sql`
+        update canonical_products set status = 'retired'
+        where id = ${mutableProduct!.product_id}
+      `;
+      const [productSnapshotClock] = await connection.sql`
+        select clock_timestamp() as snapshot_at
+      `;
+      const productSnapshotAt = productSnapshotClock!.snapshot_at as Date;
+      await connection.sql`
+        update canonical_products set status = 'active'
+        where id = ${mutableProduct!.product_id}
+      `;
+      await expect(
+        new PostgresEvidencePriceReader(
+          connection.db,
+          () => productSnapshotAt,
+        ).getMany([mutableProductEan]),
+      ).resolves.toEqual([]);
+      await expect(reader.getMany([mutableProductEan])).resolves.toHaveLength(1);
+
+      await connection.sql`
+        update geographic_scopes set status = 'retired'
+        where id = ${scope!.id}
+      `;
+      const [scopeSnapshotClock] = await connection.sql`
+        select clock_timestamp() as snapshot_at
+      `;
+      const scopeSnapshotAt = scopeSnapshotClock!.snapshot_at as Date;
+      await connection.sql`
+        update geographic_scopes set status = 'active'
+        where id = ${scope!.id}
+      `;
+      await expect(
+        new PostgresEvidencePriceReader(
+          connection.db,
+          () => scopeSnapshotAt,
+        ).getMany([mutableScopeEan]),
+      ).resolves.toEqual([]);
+      await expect(reader.getMany([mutableScopeEan])).resolves.toHaveLength(1);
+
       await connection.sql`
         update data_sources set runtime_state = 'blocked' where id = 'kassalapp'
       `;
       await expect(reader.getMany([eligibleEan])).resolves.toEqual([]);
+      const [sourceSnapshotClock] = await connection.sql`
+        select clock_timestamp() as snapshot_at
+      `;
+      const sourceSnapshotAt = sourceSnapshotClock!.snapshot_at as Date;
       await connection.sql`
         update data_sources set runtime_state = 'approved' where id = 'kassalapp'
       `;
+      await expect(
+        new PostgresEvidencePriceReader(
+          connection.db,
+          () => sourceSnapshotAt,
+        ).getMany([eligibleEan]),
+      ).resolves.toEqual([]);
+      await expect(reader.getMany([eligibleEan])).resolves.toHaveLength(1);
 
       await connection.sql`
         insert into source_permissions (
@@ -622,6 +752,35 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
     await expect(
       connection.sql`
         update source_permissions set decision = 'approved' where id = ${permission!.id}
+      `,
+    ).rejects.toThrow(/append-only/i);
+  });
+
+  it("database-stamps and seals geographic scope membership", async () => {
+    const [scope] = await connection.sql`
+      insert into geographic_scopes (scope_key, scope_kind, label, status)
+      values (${`test:region:${integrationNonce}`}, 'region', 'Test region', 'active')
+      returning id
+    `;
+    const [membership] = await connection.sql`
+      insert into geographic_scope_regions (scope_id, region_code, created_at)
+      values (${scope!.id}, ${`region-${integrationNonce}`}, '2000-01-01T00:00:00Z')
+      returning created_at
+    `;
+
+    expect((membership!.created_at as Date).getTime()).toBeGreaterThan(
+      new Date("2000-01-01T00:00:00Z").getTime(),
+    );
+    await expect(
+      connection.sql`
+        update geographic_scope_regions
+        set region_code = ${`changed-${integrationNonce}`}
+        where scope_id = ${scope!.id}
+      `,
+    ).rejects.toThrow(/append-only/i);
+    await expect(
+      connection.sql`
+        delete from geographic_scope_regions where scope_id = ${scope!.id}
       `,
     ).rejects.toThrow(/append-only/i);
   });

@@ -37,6 +37,9 @@ const restoreFixture = fileURLToPath(
 const backupRestoreRunbook = fileURLToPath(
   new URL("../../../docs/runbooks/database-backup-restore.md", import.meta.url),
 );
+const productFamilyTaxonomy = fileURLToPath(
+  new URL("../../../docs/data/product-family-taxonomy.v1.json", import.meta.url),
+);
 
 function runMigrationWith(overrides: Record<string, string>) {
   return spawnSync(process.execPath, [migrationRunner], {
@@ -72,12 +75,13 @@ describe("forward-only v1 migrations", () => {
       "009_ingestion_outcomes.sql",
       "010_worker_job_results.sql",
       "011_catalog_observations.sql",
+      "012_reviewed_family_taxonomy.sql",
     ]);
   });
 
   it("uses additive SQL and preserves price_cache as rollback state", async () => {
     const files = (await readdir(migrationsDirectory))
-      .filter((file) => /^(?:00[2-9]|01[01])_[a-z0-9_]+\.sql$/.test(file))
+      .filter((file) => /^(?:00[2-9]|01[0-2])_[a-z0-9_]+\.sql$/.test(file))
       .sort();
     const source = (
       await Promise.all(
@@ -269,6 +273,144 @@ describe("forward-only v1 migrations", () => {
     expect(runner).toContain("catalog_observations_id_seq");
   });
 
+  it("publishes the exact reviewed-family artifact with immutable versioned decisions", async () => {
+    const [migration, runner, artifactSource, packageManifest] = await Promise.all([
+      readFile(
+        path.join(migrationsDirectory, "012_reviewed_family_taxonomy.sql"),
+        "utf8",
+      ),
+      readFile(migrationRunner, "utf8"),
+      readFile(productFamilyTaxonomy, "utf8"),
+      readFile(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
+    ]);
+    const artifact = JSON.parse(artifactSource) as {
+      contentSha256: string;
+      publishedAt: string;
+      versionId: string;
+    };
+
+    expect(migration).toContain("create table family_taxonomy_versions");
+    expect(migration).toContain("create table reviewed_family_definitions");
+    expect(migration).toContain("create table reviewed_family_aliases");
+    expect(migration).toContain("create table reviewed_family_membership_decisions");
+    expect(migration).toContain("add column terminalized_at timestamptz");
+    expect(migration).toContain("greatest(transaction_timestamp(), created_at)");
+    expect(migration).toContain("new.terminalized_at := statement_timestamp()");
+    expect(migration).toContain("ingestion_runs_terminalization_state");
+    expect(migration).toContain("create function stamp_public_state_change()");
+    expect(migration).toContain("new.public_state_changed_at := statement_timestamp()");
+    for (const table of [
+      "data_sources",
+      "canonical_products",
+      "product_identifiers",
+      "geographic_scopes",
+    ]) {
+      expect(migration).toContain(`constraint ${table}_public_state_clock`);
+      expect(migration).toContain(`create trigger ${table}_public_state_clock`);
+    }
+    expect(migration).toContain("create function stamp_persisted_creation_clock()");
+    for (const table of [
+      "geographic_scope_regions",
+      "geographic_scope_postal_codes",
+      "geographic_scope_stores",
+    ]) {
+      expect(migration).toContain(`create trigger ${table}_creation_clock`);
+      expect(migration).toContain(`create trigger ${table}_append_only`);
+    }
+    expect(migration).toContain("alter table source_record_outcomes add column created_at");
+    for (const table of [
+      "source_permissions",
+      "price_observations",
+      "price_coverage_checks",
+      "source_record_outcomes",
+      "catalog_observations",
+      "reviewed_family_membership_decisions",
+    ]) {
+      expect(migration).toContain(`create trigger ${table}_creation_clock`);
+    }
+    expect(migration).toContain(
+      "create function enforce_running_ingestion_evidence_insert()",
+    );
+    expect(migration).toContain("validate_existing_ingestion_evidence_provenance");
+    expect(migration).toContain("existing price observation has incompatible run provenance");
+    expect(migration).toContain("run.source_id = 'legacy-import'");
+    expect(migration).toContain("from ingestion_runs\n  where id = new.ingestion_run_id\n  for update");
+    expect(migration).toContain("'benchmark-prices',\n       'historical-prices',\n       'interactive_price_mirror'");
+    expect(migration).toContain(
+      "run_type not in ('benchmark-prices', 'interactive_price_mirror')",
+    );
+    expect(migration).toContain("eligibility must match its ingestion run");
+    expect(migration).toContain("source must match its ingestion run");
+    for (const table of [
+      "catalog_observations",
+      "price_observations",
+      "price_coverage_checks",
+      "source_record_outcomes",
+    ]) {
+      expect(migration).toContain(`create trigger ${table}_running_run_guard`);
+    }
+    expect(migration).toContain("create function canonical_family_taxonomy_json");
+    expect(migration).toContain("create function assert_family_taxonomy_publication");
+    expect(migration).toContain("create function validate_family_taxonomy_publication");
+    expect(migration).toContain("create constraint trigger family_taxonomy_versions_publication_check");
+    expect(migration).toContain("create constraint trigger reviewed_family_definitions_publication_check");
+    expect(migration).toContain("create constraint trigger reviewed_family_aliases_publication_check");
+    expect(migration).toContain("deferrable initially deferred");
+    expect(migration).toContain("expected_family_count");
+    expect(migration).toContain("expected_alias_count");
+    expect(migration).toContain("content_json jsonb not null");
+    expect(migration).toContain("sha256(convert_to");
+    expect(runner).toContain("assert_family_taxonomy_publication(\n        'handleplan-reviewed-families@1.0.0'");
+    expect(runner).toContain("select assert_family_taxonomy_publication(version_id)");
+    expect(migration).toContain("create view reviewed_family_membership_public");
+    expect(migration).toContain("with (security_barrier = true)");
+    expect(migration).toContain("as reviewer_attested");
+    expect(migration).toContain("reviewed_family_membership_decisions_latest_idx");
+    expect(migration).toContain("create function enforce_family_taxonomy_build_window()");
+    expect(migration).toContain("version.created_at = transaction_timestamp()");
+    expect(migration).toContain("create trigger reviewed_family_definitions_build_window");
+    expect(migration).toContain("create trigger reviewed_family_aliases_build_window");
+    expect(migration).toContain("decision in ('approved', 'candidate', 'rejected')");
+    expect(migration).toContain("method in ('deterministic_rule', 'human_review')");
+    expect(migration).toContain("reviewer_id is not null");
+    expect(migration).toContain("rule_version is not null");
+    for (const table of [
+      "family_taxonomy_versions",
+      "reviewed_family_definitions",
+      "reviewed_family_aliases",
+      "reviewed_family_membership_decisions",
+    ]) {
+      expect(migration).toContain(`create trigger ${table}_append_only`);
+    }
+    expect(migration).toContain(artifact.versionId);
+    expect(migration).toContain(artifact.publishedAt);
+    expect(migration).toContain(artifact.contentSha256);
+    expect(migration).toContain("'family:brod', 'brod', 'Brød'");
+    expect(migration).toContain("'family:kaffe', 'kaffe', 'Kaffe'");
+    expect(migration).toContain("'family:melk', 'melk', 'Melk'");
+    expect(migration).toContain("'family:brod', 'brød'");
+    expect(migration).toContain("'family:melk', 'mjølk'");
+    expect(runner).toMatch(/webReadOnlyTables[\s\S]*family_taxonomy_versions/);
+    expect(runner).toMatch(/webReadOnlyTables[\s\S]*reviewed_family_membership_public/);
+    const webList = runner.match(/const webReadOnlyTables = \[([\s\S]*?)\];/)?.[1] ?? "";
+    expect(webList).not.toContain('"reviewed_family_membership_decisions"');
+    const workerLists = [
+      "protectedAppendOnlyTables",
+      "workerReadOnlyTables",
+      "insertUpdateTables",
+      "replaceableTables",
+      "ephemeralRequestBudgetTables",
+      "runtimeSequences",
+    ].map((name) => runner.match(new RegExp(`const ${name} = \\[([\\s\\S]*?)\\];`))?.[1] ?? "");
+    expect(workerLists.join("\n")).not.toContain("family_taxonomy_versions");
+    expect(workerLists.join("\n")).not.toContain("reviewed_family_definitions");
+    expect(workerLists.join("\n")).not.toContain("reviewed_family_aliases");
+    expect(workerLists.join("\n")).not.toContain("reviewed_family_membership_decisions");
+    expect(JSON.parse(packageManifest).exports["./reviewed-family-reader"]).toBe(
+      "./src/reviewed-family-reader.ts",
+    );
+  });
+
   it("separates the migration owner, write-capable worker, and read-only web roles", async () => {
     const [runner, compose, rollbackCompose, entrypoint, deploy, proof, workflow] = await Promise.all([
       readFile(migrationRunner, "utf8"),
@@ -286,6 +428,7 @@ describe("forward-only v1 migrations", () => {
     expect(runner).toContain('const workerRole = "handleplan_app"');
     expect(runner).toContain('const webRole = "handleplan_web"');
     expect(runner).toContain("webReadOnlyTables");
+    expect(runner).toContain('"public_state_changed_at"');
     expect(runner).toContain('"handleplan_schema_migrations"');
     expect(runner).not.toContain("reassign owned by");
     expect(runner).not.toMatch(
@@ -430,19 +573,27 @@ describe("forward-only v1 migrations", () => {
     expect(proof).toContain('"pg_dump"');
     expect(proof).toContain('"pg_restore"');
     expect(proof).toContain('"--interactive"');
+    expect(proof).toContain("verifyTaxonomyPublicationGuards(source)");
+    expect(proof).toContain("verifyTaxonomyPublicationGuards(restored)");
+    expect(proof).toContain("set constraints all immediate");
+    expect(proof).toContain("family:proof-late-definition");
+    expect(proof).toContain("family:proof-late-alias");
     expect(proof).not.toContain(".catch(() => undefined)");
     expect(legacy).toContain("insert into price_cache");
     expect(restore).toContain("insert into source_permissions");
     expect(restore).toContain("insert into publication_captures");
     expect(restore).toContain("insert into review_actions");
     expect(restore).toContain("insert into catalog_observations");
+    expect(restore).toContain("insert into reviewed_family_membership_decisions");
     expect(workflow).toMatch(
       /- name: Prove migration upgrade and backup restore[\s\S]*node tests\/acceptance\/prove-database-upgrade\.mjs/,
     );
     expect(runbook).toMatch(/permission audit.*publication capture.*review audit/is);
     expect(runbook).toMatch(/ordinary-only.*blocked.*official claims/is);
-    expect(runbook).toMatch(/migrations 002 through 011.*all eleven/is);
+    expect(runbook).toMatch(/migrations 002 through 012.*all twelve/is);
     expect(runbook).toMatch(/request-budget.*ephemeral.*SELECT.*INSERT.*DELETE/is);
+    expect(runbook).toMatch(/terminalized_at.*backfilled.*fails closed/is);
+    expect(runbook).toMatch(/content_json.*SHA-256.*pg_restore/is);
     expect(runbook).toMatch(/does not prove.*off-host.*retention/is);
   });
 });

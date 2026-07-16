@@ -1,14 +1,17 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 import { PostgresActiveCatalogReader } from "@handleplan/db/catalog-reader";
 import { PostgresPlanningEvidenceReader } from "@handleplan/db/planning-evidence-reader";
 import { PostgresPublicCatalogIndexReader } from "@handleplan/db/public-catalog-index-reader";
+import { PostgresReviewedFamilyReader } from "@handleplan/db/reviewed-family-reader";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
 import { createServerContainer, FAKE_EVALUATION_TIME } from "./container";
 import { readServerEnv } from "./env";
+import { FamilyCandidateService } from "./family-candidate-service";
 import { PriceService } from "./price-service";
 
 afterEach(() => vi.unstubAllEnvs());
@@ -64,7 +67,7 @@ describe("fake server container", () => {
 
   it("rehydrates exact GTIN requests from the server-owned active catalog", async () => {
     const container = createServerContainer({ mode: "fake" });
-    const result = await container.planService.calculateExact!({
+    const result = await container.planService.calculateExact({
       contractVersion: 1,
       maxStores: 1,
       needs: [{
@@ -100,9 +103,91 @@ describe("fake server container", () => {
     });
   });
 
+  it("serves deterministic reviewed-family candidates without network access", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const container = createServerContainer({ mode: "fake" });
+
+    const result = await container.familyCandidateService.inspect({
+      contractVersion: 2,
+      families: [
+        { familyId: "family:kaffe" },
+        { allowedBrands: [" TINE "], familyId: "family:melk" },
+      ],
+    });
+
+    expect(result.generatedAt).toBe(FAKE_EVALUATION_TIME);
+    expect(result.candidateSets).toEqual([
+      expect.objectContaining({
+        candidateProductIds: ["product:7038010000027"],
+        family: expect.objectContaining({ id: "family:kaffe", labelNo: "Kaffe" }),
+      }),
+      expect.objectContaining({
+        allowedBrands: ["tine"],
+        candidateProductIds: ["product:7038010000010"],
+        family: expect.objectContaining({ id: "family:melk", labelNo: "Melk" }),
+      }),
+    ]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it("plans a deterministic mixed reviewed-family basket without network access", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const container = createServerContainer({ mode: "fake" });
+    const inspection = await container.familyCandidateService.inspect({
+      contractVersion: 2,
+      families: [{ familyId: "family:melk" }],
+    });
+    const confirmed = inspection.candidateSets[0]!;
+
+    const result = await container.planService.calculateReviewed({
+      contractVersion: 2,
+      maxStores: 2,
+      needs: [
+        {
+          id: "need:coffee",
+          match: {
+            kind: "exact-product",
+            product: { kind: "gtin", value: "7038010000027" },
+            userApproved: true,
+          },
+          quantity: 1,
+          quantityUnit: "package",
+          required: true,
+        },
+        {
+          id: "need:milk",
+          match: {
+            confirmation: {
+              candidateSetId: confirmed.candidateSetId,
+              taxonomyVersionId: confirmed.taxonomyVersionId,
+              userApproved: true,
+            },
+            familyId: "family:melk",
+            kind: "reviewed-family",
+          },
+          quantity: 1,
+          quantityUnit: "package",
+          required: true,
+        },
+      ],
+    });
+
+    expect(result.generatedAt).toBe(FAKE_EVALUATION_TIME);
+    expect(result.needMatches.map(({ kind }) => kind)).toEqual([
+      "exact-product",
+      "reviewed-family",
+    ]);
+    expect(result.plans).toHaveLength(2);
+    expect(result.plans.every(({ chains }) => chains.length <= 2)).toBe(true);
+    expect(result.evidence.memberships).toHaveLength(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
   it("keeps the intentionally stale price fixture ineligible", async () => {
     const container = createServerContainer({ mode: "fake" });
-    const result = await container.planService.calculateExact!({
+    const result = await container.planService.calculateExact({
       contractVersion: 1,
       maxStores: 3,
       needs: [{
@@ -124,6 +209,14 @@ describe("fake server container", () => {
 });
 
 describe("real server container", () => {
+  it("keeps the public web package independent of the upstream provider client", () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+
+    expect(manifest.dependencies).not.toHaveProperty("@handleplan/kassalapp");
+  });
+
   it("composes only read-only persisted catalog and evidence readers", () => {
     const container = createServerContainer({
       mode: "real",
@@ -131,9 +224,8 @@ describe("real server container", () => {
     });
     const planDependencies = (container.planService as unknown as {
       dependencies: {
-        cache?: unknown;
         catalog?: unknown;
-        gateway?: unknown;
+        familyCandidateService?: unknown;
         priceService?: unknown;
       };
     }).dependencies;
@@ -142,15 +234,20 @@ describe("real server container", () => {
     }).dependencies;
 
     expect(container.publicCatalogIndex).toBeInstanceOf(PostgresPublicCatalogIndexReader);
+    expect(container.familyCandidateService).toBeInstanceOf(FamilyCandidateService);
+    expect("calculate" in container.planService).toBe(false);
     expect(planDependencies.catalog).toBeInstanceOf(PostgresActiveCatalogReader);
+    expect(planDependencies.familyCandidateService).toBe(container.familyCandidateService);
     expect(planDependencies.priceService).toBeInstanceOf(PriceService);
-    expect(planDependencies.cache).toBeUndefined();
-    expect(planDependencies.gateway).toBeUndefined();
     expect(discoveryDependencies.catalog).toBe(container.publicCatalogIndex);
     expect(discoveryDependencies.priceService).toBe(planDependencies.priceService);
     const priceDependencies = (planDependencies.priceService as unknown as {
       dependencies: { reader: unknown };
     }).dependencies;
     expect(priceDependencies.reader).toBeInstanceOf(PostgresPlanningEvidenceReader);
+    const candidateDependencies = (container.familyCandidateService as unknown as {
+      dependencies: { reader: unknown };
+    }).dependencies;
+    expect(candidateDependencies.reader).toBeInstanceOf(PostgresReviewedFamilyReader);
   });
 });

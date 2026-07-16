@@ -2,19 +2,39 @@ import {
   exactProductPlanApiEvidenceEnvelopeSchema,
   type ExactProductPlanApiRequest,
   planResultV2Schema,
+  type ReviewedFamilyPlanApiRequestV2,
 } from "@handleplan/domain";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
+import { createServerContainer } from "../../../lib/server/container";
+import { FamilyCandidateServiceError } from "../../../lib/server/family-candidate-service";
 import type { PlanServiceContract } from "../../../lib/server/plan-service";
 import {
   CatalogUnavailableError,
   PlanRequestCancelledError,
   PriceDataUnavailableError,
+  ReviewedFamilyPlanError,
   UnknownExactProductError,
 } from "../../../lib/server/plan-service";
 import { createPlansHandler, PLAN_CAVEATS } from "./route";
+
+const unusedCalculateReviewed: PlanServiceContract["calculateReviewed"] = async () => {
+  throw new Error("reviewed planning must not be called by this exact-contract test");
+};
+
+function serviceWithExact(
+  calculateExact: PlanServiceContract["calculateExact"],
+): PlanServiceContract {
+  return { calculateExact, calculateReviewed: unusedCalculateReviewed };
+}
+
+function serviceWithReviewed(
+  calculateReviewed: PlanServiceContract["calculateReviewed"],
+): PlanServiceContract {
+  return { calculateExact: vi.fn(), calculateReviewed };
+}
 
 const body = {
   matchingRules: [
@@ -56,6 +76,26 @@ const exactBody: ExactProductPlanApiRequest = {
       required: true,
     },
   ],
+};
+
+const reviewedBody: ReviewedFamilyPlanApiRequestV2 = {
+  contractVersion: 2,
+  maxStores: 2,
+  needs: [{
+    id: "need:milk",
+    match: {
+      confirmation: {
+        candidateSetId: `candidate-set:${"a".repeat(64)}`,
+        taxonomyVersionId: "handleplan-reviewed-families@1.0.0",
+        userApproved: true,
+      },
+      familyId: "family:melk",
+      kind: "reviewed-family",
+    },
+    quantity: 1,
+    quantityUnit: "package",
+    required: true,
+  }],
 };
 
 const canonicalProduct = {
@@ -196,19 +236,18 @@ function streamingRequest(
 
 describe("POST /api/plans", () => {
   it("rejects the unversioned browser-trusted contract before resolving the service", async () => {
-    const getService = vi.fn<() => PlanServiceContract>(() => ({
-      calculate: vi.fn(),
-    }));
+    const getService = vi.fn<() => PlanServiceContract>(() =>
+      serviceWithExact(vi.fn()));
 
     const response = await createPlansHandler(getService)(request());
 
     expect(response.status).toBe(400);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(await response.json()).toEqual({ code: "CONTRACT_VERSION_REQUIRED" });
     expect(getService).not.toHaveBeenCalled();
   });
 
   it("routes versioned requests to the exact-product service", async () => {
-    const calculate = vi.fn();
     const calculateExact = vi.fn(async () => ({
       evidence: exactEvidence,
       generatedAt: "2026-07-15T12:00:00.000Z",
@@ -217,12 +256,12 @@ describe("POST /api/plans", () => {
       products: [canonicalProduct],
     }));
 
-    const response = await createPlansHandler(() => ({ calculate, calculateExact }))(
+    const response = await createPlansHandler(() => serviceWithExact(calculateExact))(
       request(exactBody),
     );
 
     expect(response.status).toBe(200);
-    expect(calculate).not.toHaveBeenCalled();
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(calculateExact).toHaveBeenCalledWith(exactBody, expect.any(AbortSignal));
     await expect(response.json()).resolves.toEqual({
       caveats: [
@@ -237,6 +276,114 @@ describe("POST /api/plans", () => {
       priceDataSource: "cache",
       products: [canonicalProduct],
     });
+  });
+
+  it("dispatches contract v2 to deterministic mixed reviewed-family planning", async () => {
+    const container = createServerContainer({ mode: "fake" });
+    const candidateInspection = await container.familyCandidateService.inspect({
+      contractVersion: 2,
+      families: [{ familyId: "family:melk" }],
+    });
+    const candidateSet = candidateInspection.candidateSets[0]!;
+    const bodyWithFreshConfirmation: ReviewedFamilyPlanApiRequestV2 = {
+      ...reviewedBody,
+      needs: [{
+        id: "need:milk",
+        match: {
+          confirmation: {
+            candidateSetId: candidateSet.candidateSetId,
+            taxonomyVersionId: candidateSet.taxonomyVersionId,
+            userApproved: true,
+          },
+          familyId: "family:melk",
+          kind: "reviewed-family",
+        },
+        quantity: 1,
+        quantityUnit: "package",
+        required: true,
+      }],
+    };
+
+    const response = await createPlansHandler(() => container.planService)(
+      request(bodyWithFreshConfirmation),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    await expect(response.json()).resolves.toMatchObject({
+      caveats: PLAN_CAVEATS,
+      contractVersion: 2,
+      needMatches: [{
+        candidateProductIds: ["product:7038010000010"],
+        familyId: "family:melk",
+        kind: "reviewed-family",
+        needId: "need:milk",
+      }],
+      plans: [expect.objectContaining({
+        substitutions: ["need:milk"],
+      })],
+      priceDataSource: "cache",
+    });
+  });
+
+  it("rejects unsupported contract versions before resolving the service", async () => {
+    const getService = vi.fn<() => PlanServiceContract>();
+    const response = await createPlansHandler(getService)(request({
+      ...reviewedBody,
+      contractVersion: 3,
+    }));
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.json()).toEqual({ code: "UNSUPPORTED_CONTRACT_VERSION" });
+    expect(getService).not.toHaveBeenCalled();
+  });
+
+  it("rejects browser-owned reviewed product metadata before planning", async () => {
+    const calculateReviewed = vi.fn();
+    const familyNeed = reviewedBody.needs[0]!;
+    const response = await createPlansHandler(() => serviceWithReviewed(calculateReviewed))(
+      request({
+        ...reviewedBody,
+        needs: [{
+          ...familyNeed,
+          match: {
+            ...familyNeed.match,
+            candidateProductIds: ["product:forged"],
+            packageMeasure: { amount: 1, unit: "piece" },
+            query: "billigste melk",
+            reviewerId: "private-reviewer",
+          },
+        }],
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ code: "INVALID_REQUEST" });
+    expect(calculateReviewed).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [new ReviewedFamilyPlanError("CANDIDATE_CONFIRMATION_STALE"), 409, "CANDIDATE_CONFIRMATION_STALE"],
+    [new ReviewedFamilyPlanError("AMBIGUOUS_FAMILY_SELECTION"), 422, "AMBIGUOUS_FAMILY_SELECTION"],
+    [new FamilyCandidateServiceError("UNKNOWN_FAMILY"), 422, "UNKNOWN_FAMILY"],
+    [new FamilyCandidateServiceError("FAMILY_NO_CANDIDATES"), 422, "FAMILY_NO_CANDIDATES"],
+    [new FamilyCandidateServiceError("NO_MATCHING_BRANDS"), 422, "NO_MATCHING_BRANDS"],
+    [new FamilyCandidateServiceError("CANDIDATE_SET_TOO_LARGE"), 422, "CANDIDATE_SET_TOO_LARGE"],
+    [new FamilyCandidateServiceError("AMBIGUOUS_FAMILY_MEMBERSHIP"), 422, "AMBIGUOUS_FAMILY_MEMBERSHIP"],
+    [new FamilyCandidateServiceError("CANDIDATE_SET_INCOMPLETE"), 503, "CANDIDATE_SET_INCOMPLETE"],
+    [new FamilyCandidateServiceError("EVIDENCE_UNAVAILABLE"), 503, "EVIDENCE_UNAVAILABLE"],
+    [new CatalogUnavailableError(), 503, "CATALOG_UNAVAILABLE"],
+    [new PriceDataUnavailableError(), 503, "PRICE_DATA_UNAVAILABLE"],
+    [new PlanRequestCancelledError(), 499, "REQUEST_CANCELLED"],
+  ] as const)("maps reviewed planning failures without leaking details", async (error, status, code) => {
+    const response = await createPlansHandler(() => serviceWithReviewed(
+      async () => { throw error; },
+    ))(request(reviewedBody));
+
+    expect(response.status).toBe(status);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.json()).toEqual({ code });
   });
 
   it("counts UTF-8 response bytes and rejects an oversized strict result", async () => {
@@ -294,39 +441,35 @@ describe("POST /api/plans", () => {
     expect(serialized.length).toBeLessThanOrEqual(128 * 1024);
     expect(new TextEncoder().encode(serialized).byteLength).toBeGreaterThan(128 * 1024);
 
-    const response = await createPlansHandler(() => ({
-      calculate: vi.fn(),
-      calculateExact: async () => ({
+    const response = await createPlansHandler(() => serviceWithExact(
+      async () => ({
         evidence: strictEvidence,
         generatedAt: "2026-07-15T12:00:00.000Z",
         plans: [],
         priceDataSource: "cache" as const,
         products: [canonicalProduct],
       }),
-    }))(request(exactBody));
+    ))(request(exactBody));
 
     expect(response.status).toBe(503);
     expect(response.headers.get("content-type")).toContain("application/json");
     expect(await response.json()).toEqual({ code: "RESPONSE_TOO_LARGE" });
   });
 
-  it("never downgrades a body with its own contractVersion to the legacy parser", async () => {
-    const calculate = vi.fn();
+  it("rejects the removed legacy shape even when it carries the exact contract version", async () => {
     const calculateExact = vi.fn();
-    const response = await createPlansHandler(() => ({ calculate, calculateExact }))(
+    const response = await createPlansHandler(() => serviceWithExact(calculateExact))(
       request({ ...body, contractVersion: 1 }),
     );
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ code: "INVALID_REQUEST" });
-    expect(calculate).not.toHaveBeenCalled();
     expect(calculateExact).not.toHaveBeenCalled();
   });
 
-  it("rejects a digit-shaped invalid GTIN before either service or gateway path", async () => {
-    const calculate = vi.fn();
+  it("rejects a digit-shaped invalid GTIN before the exact service path", async () => {
     const calculateExact = vi.fn();
-    const response = await createPlansHandler(() => ({ calculate, calculateExact }))(
+    const response = await createPlansHandler(() => serviceWithExact(calculateExact))(
       request({
         ...exactBody,
         needs: [{
@@ -341,7 +484,6 @@ describe("POST /api/plans", () => {
 
     expect(response.status).toBe(422);
     expect(await response.json()).toEqual({ code: "INVALID_EXACT_PRODUCT" });
-    expect(calculate).not.toHaveBeenCalled();
     expect(calculateExact).not.toHaveBeenCalled();
   });
 
@@ -349,17 +491,16 @@ describe("POST /api/plans", () => {
     [new UnknownExactProductError(), 422, "UNKNOWN_EXACT_PRODUCT"],
     [new CatalogUnavailableError(), 503, "CATALOG_UNAVAILABLE"],
   ] as const)("maps exact catalog errors without leaking details", async (error, status, code) => {
-    const response = await createPlansHandler(() => ({
-      calculate: vi.fn(),
-      calculateExact: async () => { throw error; },
-    }))(request(exactBody));
+    const response = await createPlansHandler(() => serviceWithExact(
+      async () => { throw error; },
+    ))(request(exactBody));
 
     expect(response.status).toBe(status);
     expect(await response.json()).toEqual({ code });
   });
 
   it("rejects non-JSON, malformed JSON, and oversized bodies before the service", async () => {
-    const service: PlanServiceContract = { calculate: vi.fn() };
+    const service: PlanServiceContract = serviceWithExact(vi.fn());
     const handler = createPlansHandler(() => service);
 
     const wrongType = await handler(request(body, { "content-type": "text/plain" }));
@@ -381,11 +522,11 @@ describe("POST /api/plans", () => {
     expect(wrongType.status).toBe(415);
     expect(malformed.status).toBe(400);
     expect(oversized.status).toBe(413);
-    expect(service.calculate).not.toHaveBeenCalled();
+    expect(service.calculateExact).not.toHaveBeenCalled();
   });
 
   it("stops an oversized stream without trusting Content-Length", async () => {
-    const service: PlanServiceContract = { calculate: vi.fn() };
+    const service: PlanServiceContract = serviceWithExact(vi.fn());
     const cancelled = vi.fn();
     const response = await createPlansHandler(() => service)(
       streamingRequest([
@@ -397,14 +538,14 @@ describe("POST /api/plans", () => {
     expect(response.status).toBe(413);
     expect(await response.json()).toEqual({ code: "REQUEST_TOO_LARGE" });
     expect(cancelled).toHaveBeenCalledOnce();
-    expect(service.calculate).not.toHaveBeenCalled();
+    expect(service.calculateExact).not.toHaveBeenCalled();
   });
 
   it.each([
     ["missing body", undefined],
     ["malformed UTF-8", new Uint8Array([0xff])],
   ] as const)("rejects %s with a sanitized response", async (_label, bytes) => {
-    const service: PlanServiceContract = { calculate: vi.fn() };
+    const service: PlanServiceContract = serviceWithExact(vi.fn());
     const incoming =
       bytes === undefined
         ? new Request("https://handleplan.no/api/plans", {
@@ -417,11 +558,11 @@ describe("POST /api/plans", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ code: "INVALID_REQUEST" });
-    expect(service.calculate).not.toHaveBeenCalled();
+    expect(service.calculateExact).not.toHaveBeenCalled();
   });
 
   it("sanitizes a locked request stream instead of throwing", async () => {
-    const service: PlanServiceContract = { calculate: vi.fn() };
+    const service: PlanServiceContract = serviceWithExact(vi.fn());
     const incoming = request();
     const lock = incoming.body!.getReader();
 
@@ -430,7 +571,7 @@ describe("POST /api/plans", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ code: "INVALID_REQUEST" });
-    expect(service.calculate).not.toHaveBeenCalled();
+    expect(service.calculateExact).not.toHaveBeenCalled();
   });
 
   it("best-effort cancels an early Content-Length rejection without leaking cancel errors", async () => {
@@ -448,7 +589,7 @@ describe("POST /api/plans", () => {
       method: "POST",
     } as RequestInit & { duplex: "half" });
 
-    const response = await createPlansHandler(() => ({ calculate: vi.fn() }))(incoming);
+    const response = await createPlansHandler(() => serviceWithExact(vi.fn()))(incoming);
 
     expect(response.status).toBe(413);
     expect(await response.json()).toEqual({ code: "REQUEST_TOO_LARGE" });
@@ -456,23 +597,22 @@ describe("POST /api/plans", () => {
   });
 
   it("rejects invalid public bodies without returning raw Zod details", async () => {
-    const service: PlanServiceContract = { calculate: vi.fn() };
+    const service: PlanServiceContract = serviceWithExact(vi.fn());
     const response = await createPlansHandler(() => service)(request({ ...exactBody, maxStores: 4 }));
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ code: "INVALID_REQUEST" });
-    expect(service.calculate).not.toHaveBeenCalled();
+    expect(service.calculateExact).not.toHaveBeenCalled();
   });
 
   it("maps an unsafe or incomplete fallback to the required sanitized 503", async () => {
-    const service: PlanServiceContract = {
-      calculate: vi.fn(),
-      calculateExact: async () => {
+    const service: PlanServiceContract = serviceWithExact(
+      async () => {
         const error = new PriceDataUnavailableError();
         error.stack = "secret stack with ?query=milk";
         throw error;
       },
-    };
+    );
 
     const response = await createPlansHandler(() => service)(request(exactBody));
 
@@ -481,12 +621,11 @@ describe("POST /api/plans", () => {
   });
 
   it("maps cancellation to a sanitized best-effort client-closed response", async () => {
-    const service: PlanServiceContract = {
-      calculate: vi.fn(),
-      calculateExact: async () => {
+    const service: PlanServiceContract = serviceWithExact(
+      async () => {
         throw new PlanRequestCancelledError();
       },
-    };
+    );
 
     const response = await createPlansHandler(() => service)(request(exactBody));
 
@@ -494,25 +633,151 @@ describe("POST /api/plans", () => {
     expect(await response.json()).toEqual({ code: "REQUEST_CANCELLED" });
   });
 
-  it("forwards the incoming cancellation signal to planning", async () => {
-    let seenSignal: AbortSignal | undefined;
-    const service: PlanServiceContract = {
-      calculate: vi.fn(),
-      calculateExact: async (_value, signal) => {
+  it("bounds body ingestion with a sanitized server deadline and cancels the stream", async () => {
+    vi.useFakeTimers();
+    try {
+      const getService = vi.fn<() => PlanServiceContract>();
+      const cancelled = vi.fn();
+      const pending = createPlansHandler(getService, { timeoutMs: 25 })(
+        streamingRequest([], cancelled, true),
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      const response = await pending;
+
+      expect(response.status).toBe(503);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(await response.json()).toEqual({ code: "REQUEST_TIMEOUT" });
+      expect(cancelled).toHaveBeenCalledOnce();
+      expect(getService).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects invalid internal deadline configuration before serving requests", () => {
+    expect(() => createPlansHandler(() => serviceWithExact(vi.fn()), { timeoutMs: 0 }))
+      .toThrow(RangeError);
+    expect(() => createPlansHandler(() => serviceWithExact(vi.fn()), { timeoutMs: 60_001 }))
+      .toThrow(RangeError);
+  });
+
+  it("bounds service resolution as part of the same request deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = createPlansHandler(
+        () => new Promise<PlanServiceContract>(() => undefined),
+        { timeoutMs: 25 },
+      )(request(exactBody));
+
+      await vi.advanceTimersByTimeAsync(25);
+      const response = await pending;
+
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ code: "REQUEST_TIMEOUT" });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ["exact", exactBody],
+    ["reviewed", reviewedBody],
+  ] as const)("bounds ignored cancellation in %s planning with a sanitized 503", async (
+    version,
+    requestBody,
+  ) => {
+    vi.useFakeTimers();
+    try {
+      let seenSignal: AbortSignal | undefined;
+      const never = () => new Promise<never>(() => undefined);
+      const service = version === "exact"
+        ? serviceWithExact(async (_value, signal) => {
+            seenSignal = signal;
+            return never();
+          })
+        : serviceWithReviewed(async (_value, signal) => {
+            seenSignal = signal;
+            return never();
+          });
+      const pending = createPlansHandler(() => service, { timeoutMs: 25 })(
+        request(requestBody),
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      const response = await pending;
+
+      expect(response.status).toBe(503);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(await response.json()).toEqual({ code: "REQUEST_TIMEOUT" });
+      expect(seenSignal).toBeInstanceOf(AbortSignal);
+      expect(seenSignal?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps genuine client cancellation distinct from the server deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new AbortController();
+      let seenSignal: AbortSignal | undefined;
+      const service = serviceWithExact(async (_value, signal) => {
         seenSignal = signal;
-        return {
-          evidence: exactEvidence,
-          generatedAt: "2026-07-15T12:00:00.000Z",
-          plans: [exactPlan],
-          priceDataSource: "cache",
-          products: [canonicalProduct],
-        };
-      },
-    };
+        return new Promise<never>(() => undefined);
+      });
+      const incoming = new Request("https://handleplan.no/api/plans", {
+        body: JSON.stringify(exactBody),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+        signal: client.signal,
+      });
+      const pending = createPlansHandler(() => service, { timeoutMs: 25 })(incoming);
 
-    const versionedIncoming = request(exactBody);
-    await createPlansHandler(() => service)(versionedIncoming);
+      await vi.advanceTimersByTimeAsync(10);
+      client.abort();
+      const response = await pending;
 
-    expect(seenSignal).toBe(versionedIncoming.signal);
+      expect(response.status).toBe(499);
+      expect(await response.json()).toEqual({ code: "REQUEST_CANCELLED" });
+      expect(seenSignal?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("composes incoming cancellation for planning and clears a successful deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      let seenSignal: AbortSignal | undefined;
+      const service: PlanServiceContract = serviceWithExact(
+        async (_value, signal) => {
+          seenSignal = signal;
+          return {
+            evidence: exactEvidence,
+            generatedAt: "2026-07-15T12:00:00.000Z",
+            plans: [exactPlan],
+            priceDataSource: "cache",
+            products: [canonicalProduct],
+          };
+        },
+      );
+
+      const versionedIncoming = request(exactBody);
+      const response = await createPlansHandler(() => service, { timeoutMs: 25 })(
+        versionedIncoming,
+      );
+
+      expect(response.status).toBe(200);
+      expect(seenSignal).not.toBe(versionedIncoming.signal);
+      expect(seenSignal?.aborted).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

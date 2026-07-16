@@ -5,10 +5,12 @@ import {
   BASKET_STORAGE_MAX_CODE_UNITS,
   DEFAULT_CONVENIENCE_WEIGHT_BASIS_POINTS,
   LEGACY_BASKET_STORAGE_KEY,
+  LEGACY_BASKET_V2_STORAGE_KEY,
   BASKET_QUANTITY_MAX,
   BASKET_QUANTITY_MIN,
   addExactProductToBasket,
-  emptyBasketV2,
+  addReviewedFamilyToBasket,
+  emptyBasketV3,
   loadBasket,
   removeBasketNeed,
   saveBasket,
@@ -32,7 +34,7 @@ function memoryStorage(initial?: string, key = BASKET_STORAGE_KEY): Storage {
 }
 
 const populatedBasket = {
-  version: 2 as const,
+  version: 3 as const,
   needs: [
     {
       id: "need-1",
@@ -63,6 +65,7 @@ const populatedBasket = {
     },
   ],
   convenienceWeightBasisPoints: 5_000,
+  familyConfirmations: [],
   travel: { enabled: false, mode: "car" as const },
 };
 
@@ -91,7 +94,7 @@ describe("browser basket persistence", () => {
   });
 
   it.each(["flexible", "constrained"] as const)(
-    "requires new exact approval for a %s rule instead of creating a legacy request",
+    "requires reviewed approval for a legacy %s rule instead of creating a request",
     (mode) => {
       const generic = {
         ...populatedBasket,
@@ -113,24 +116,112 @@ describe("browser basket persistence", () => {
             }],
       };
 
-      expect(strictPlanRequestReadiness(generic)).toEqual({ state: "requires-exact-approval" });
+      expect(strictPlanRequestReadiness(generic)).toEqual({ state: "requires-reviewed-approval" });
     },
   );
 
-  it("returns a fresh empty version 2 basket when storage is empty", () => {
+  it("projects a confirmed reviewed family and exact product onto contract v2 only", () => {
+    const ids = ["need-family", "rule-family"];
+    const basket = addReviewedFamilyToBasket(populatedBasket, {
+      candidateCount: 2,
+      confirmation: {
+        candidateSetId: `candidate-set:${"a".repeat(64)}`,
+        taxonomyVersionId: "handleplan-reviewed-families@1.0.0",
+        userApproved: true,
+      },
+      family: {
+        aliases: ["brød"],
+        id: "family:brod",
+        labelNo: "Brød",
+        slug: "brod",
+        status: "active",
+      },
+      quantity: 3,
+    }, () => ids.shift()!);
+
+    expect(strictPlanRequestReadiness(basket)).toEqual({
+      state: "ready",
+      request: {
+        contractVersion: 2,
+        maxStores: 3,
+        needs: [
+          {
+            id: "need-1",
+            match: {
+              kind: "exact-product",
+              product: { kind: "gtin", value: "7038010000010" },
+              userApproved: true,
+            },
+            quantity: 2,
+            quantityUnit: "each",
+            required: true,
+          },
+          {
+            id: "need-family",
+            match: {
+              confirmation: {
+                candidateSetId: `candidate-set:${"a".repeat(64)}`,
+                taxonomyVersionId: "handleplan-reviewed-families@1.0.0",
+                userApproved: true,
+              },
+              familyId: "family:brod",
+              kind: "reviewed-family",
+            },
+            quantity: 3,
+            quantityUnit: "each",
+            required: true,
+          },
+        ],
+      },
+    });
+    const serialized = JSON.stringify(strictPlanRequestReadiness(basket));
+    expect(serialized).not.toMatch(/Brød|brød|query|matchingRules|products|explanation|travel|origin|TINE/);
+  });
+
+  it("fails closed when a reviewed-family confirmation is missing or does not bind its rule", () => {
+    const ids = ["need-family", "rule-family"];
+    const basket = addReviewedFamilyToBasket(emptyBasketV3, {
+      candidateCount: 1,
+      confirmation: {
+        candidateSetId: `candidate-set:${"b".repeat(64)}`,
+        taxonomyVersionId: "handleplan-reviewed-families@1.0.0",
+        userApproved: true,
+      },
+      family: {
+        aliases: ["mjølk"],
+        id: "family:melk",
+        labelNo: "Melk",
+        slug: "melk",
+        status: "active",
+      },
+      quantity: 1,
+    }, () => ids.shift()!);
+
+    expect(strictPlanRequestReadiness({ ...basket, familyConfirmations: [] }))
+      .toEqual({ state: "requires-reviewed-approval" });
+    expect(loadBasket(memoryStorage(JSON.stringify({
+      ...basket,
+      familyConfirmations: [{
+        ...basket.familyConfirmations[0],
+        matchRuleId: "forged-rule",
+      }],
+    })))).toEqual(emptyBasketV3);
+  });
+
+  it("returns a fresh empty version 3 basket when storage is empty", () => {
     const storage = memoryStorage();
 
-    expect(loadBasket(storage)).toEqual(emptyBasketV2);
-    expect(loadBasket(storage)).not.toBe(emptyBasketV2);
+    expect(loadBasket(storage)).toEqual(emptyBasketV3);
+    expect(loadBasket(storage)).not.toBe(emptyBasketV3);
   });
 
   it.each([
     "not json",
-    JSON.stringify({ version: 3, needs: [], matchingRules: [], products: [], travel: {} }),
+    JSON.stringify({ version: 4, needs: [], matchingRules: [], products: [], travel: {} }),
     JSON.stringify({ ...populatedBasket, origin: "Storgata 1" }),
     JSON.stringify({ ...populatedBasket, needs: [{ ...populatedBasket.needs[0], quantity: 0 }] }),
   ])("recovers from corrupt, incompatible, or unsafe state", (value) => {
-    expect(loadBasket(memoryStorage(value))).toEqual(emptyBasketV2);
+    expect(loadBasket(memoryStorage(value))).toEqual(emptyBasketV3);
   });
 
   it("rejects overlong user-facing fields before they can reach rendering", () => {
@@ -139,13 +230,13 @@ describe("browser basket persistence", () => {
       needs: [{ ...populatedBasket.needs[0], query: "x".repeat(501) }],
     });
 
-    expect(loadBasket(memoryStorage(stored))).toEqual(emptyBasketV2);
+    expect(loadBasket(memoryStorage(stored))).toEqual(emptyBasketV3);
   });
 
   it("drops an oversized stored payload before parsing it", () => {
     const storage = memoryStorage("x".repeat(BASKET_STORAGE_MAX_CODE_UNITS + 1));
 
-    expect(loadBasket(storage)).toEqual(emptyBasketV2);
+    expect(loadBasket(storage)).toEqual(emptyBasketV3);
     expect(storage.getItem(BASKET_STORAGE_KEY)).toBeNull();
   });
 
@@ -162,7 +253,7 @@ describe("browser basket persistence", () => {
 
     expect(loadBasket(memoryStorage(stored))).toEqual(valid
       ? { ...populatedBasket, needs: [{ ...populatedBasket.needs[0], quantity }] }
-      : emptyBasketV2);
+      : emptyBasketV3);
   });
 
   it.each([
@@ -203,7 +294,7 @@ describe("browser basket persistence", () => {
       },
     ],
   ])("resets stored state with %s", (_label, basket) => {
-    expect(loadBasket(memoryStorage(JSON.stringify(basket)))).toEqual(emptyBasketV2);
+    expect(loadBasket(memoryStorage(JSON.stringify(basket)))).toEqual(emptyBasketV3);
   });
 
   it("round-trips only the strict safe basket shape and never an origin", () => {
@@ -215,7 +306,7 @@ describe("browser basket persistence", () => {
     expect(storage.getItem(BASKET_STORAGE_KEY)).not.toContain("origin");
   });
 
-  it("resets a flexible or constrained basket without a stored matching candidate", () => {
+  it("retains an old flexible or constrained choice but never plans without reviewed confirmation", () => {
     const generic = {
       ...populatedBasket,
       needs: [{ ...populatedBasket.needs[0], query: "havregryn", matchRuleId: "rule-generic" }],
@@ -226,8 +317,10 @@ describe("browser basket persistence", () => {
       matchingRules: [{ id: "rule-generic", mode: "constrained" as const, productFamily: "lettmelk", allowedBrands: ["Q"], userApproved: true as const, explanation: "Bare Q" }],
     };
 
-    expect(loadBasket(memoryStorage(JSON.stringify(generic)))).toEqual(emptyBasketV2);
-    expect(loadBasket(memoryStorage(JSON.stringify(constrained)))).toEqual(emptyBasketV2);
+    expect(strictPlanRequestReadiness(loadBasket(memoryStorage(JSON.stringify(generic)))))
+      .toEqual({ state: "requires-reviewed-approval" });
+    expect(strictPlanRequestReadiness(loadBasket(memoryStorage(JSON.stringify(constrained)))))
+      .toEqual({ state: "requires-reviewed-approval" });
   });
 
   it("round-trips only a normalized preference rather than a brittle plan ID", () => {
@@ -269,7 +362,7 @@ describe("browser basket persistence", () => {
       },
     } as unknown as Storage;
 
-    expect(loadBasket(unavailable)).toEqual(emptyBasketV2);
+    expect(loadBasket(unavailable)).toEqual(emptyBasketV3);
     expect(() => saveBasket(populatedBasket, unavailable)).not.toThrow();
   });
 
@@ -310,8 +403,13 @@ describe("browser basket persistence", () => {
       version: 1,
       selectedPlanId: "plan-from-old-price-snapshot",
     };
-    const { convenienceWeightBasisPoints: _preference, ...withoutV2Preference } = legacy;
+    const {
+      convenienceWeightBasisPoints: _preference,
+      familyConfirmations: _confirmations,
+      ...withoutV2Preference
+    } = legacy;
     void _preference;
+    void _confirmations;
     const storage = memoryStorage(
       JSON.stringify(withoutV2Preference),
       LEGACY_BASKET_STORAGE_KEY,
@@ -323,5 +421,21 @@ describe("browser basket persistence", () => {
     });
     expect(storage.getItem(LEGACY_BASKET_STORAGE_KEY)).toBeNull();
     expect(storage.getItem(BASKET_STORAGE_KEY)).not.toContain("selectedPlanId");
+  });
+
+  it("migrates a valid exact v2 basket losslessly and removes the old key", () => {
+    const {
+      familyConfirmations: _confirmations,
+      ...legacyV2
+    } = { ...populatedBasket, version: 2 as const };
+    void _confirmations;
+    const storage = memoryStorage(
+      JSON.stringify(legacyV2),
+      LEGACY_BASKET_V2_STORAGE_KEY,
+    );
+
+    expect(loadBasket(storage)).toEqual(populatedBasket);
+    expect(storage.getItem(LEGACY_BASKET_V2_STORAGE_KEY)).toBeNull();
+    expect(storage.getItem(BASKET_STORAGE_KEY)).not.toBeNull();
   });
 });

@@ -14,6 +14,7 @@ const webRole = "handleplan_web";
 const webTableSelects = [
   "catalog_observations",
   "canonical_products",
+  "family_taxonomy_versions",
   "geographic_scope_regions",
   "geographic_scope_stores",
   "geographic_scopes",
@@ -25,6 +26,9 @@ const webTableSelects = [
   "price_coverage_checks",
   "price_observations",
   "product_identifiers",
+  "reviewed_family_aliases",
+  "reviewed_family_definitions",
+  "reviewed_family_membership_public",
 ];
 const workerReadOnlyTables = [
   "data_sources",
@@ -66,6 +70,7 @@ const webColumnSelects = {
     "permission_expires_at",
     "permission_reviewed_at",
     "public_reference_url",
+    "public_state_changed_at",
     "runtime_state",
     "source_kind",
     "updated_at",
@@ -224,7 +229,7 @@ async function dropProofDatabase(sql) {
 async function expectDenied(operation, label) {
   await assert.rejects(
     operation,
-    /permission denied|must be owner|must be superuser|not permitted|append-only|lifecycle/i,
+    /permission denied|must be owner|must be superuser|not permitted|append-only|lifecycle|running ingestion run/i,
     label,
   );
 }
@@ -427,6 +432,19 @@ try {
         as catalog_observation_update,
       has_table_privilege(current_user, 'catalog_observations', 'DELETE')
         as catalog_observation_delete,
+      has_table_privilege(current_user, 'family_taxonomy_versions', 'SELECT')
+        as taxonomy_version_select,
+      has_table_privilege(current_user, 'reviewed_family_definitions', 'SELECT')
+        as family_definition_select,
+      has_table_privilege(current_user, 'reviewed_family_aliases', 'SELECT')
+        as family_alias_select,
+      has_table_privilege(current_user, 'reviewed_family_membership_public', 'SELECT')
+        as family_membership_public_select,
+      has_table_privilege(
+        current_user,
+        'reviewed_family_membership_decisions',
+        'SELECT, INSERT, UPDATE, DELETE'
+      ) as family_membership_private_access,
       has_table_privilege(
         current_user,
         'worker_leases',
@@ -509,6 +527,11 @@ try {
     catalog_observation_insert: true,
     catalog_observation_update: false,
     catalog_observation_delete: false,
+    taxonomy_version_select: false,
+    family_definition_select: false,
+    family_alias_select: false,
+    family_membership_public_select: false,
+    family_membership_private_access: false,
     worker_lease_write: true,
     source_health_append: false,
     private_pipeline_access: false,
@@ -660,6 +683,16 @@ try {
     )
     returning id
   `;
+  await expectDenied(
+    () => runtime`
+      update ingestion_runs
+      set status = 'completed',
+          completed_at = now(),
+          terminalized_at = '2000-01-01T00:00:00Z'
+      where id = ${ingestionRun.id}
+    `,
+    "runtime role must not forge the database terminalization clock",
+  );
   const [product] = await runtime`
     insert into canonical_products (
       display_name,
@@ -668,6 +701,48 @@ try {
       units_per_pack,
       status
     ) values ('Runtime role proof product', 1, 'package', 1, 'active')
+    returning id, public_state_changed_at
+  `;
+  await runtime`
+    update canonical_products
+    set status = 'quarantined',
+        public_state_changed_at = '2000-01-01T00:00:00Z'
+    where id = ${product.id}
+  `;
+  const [changedProduct] = await runtime`
+    select status, public_state_changed_at
+    from canonical_products
+    where id = ${product.id}
+  `;
+  assert.equal(changedProduct?.status, "quarantined");
+  assert.notEqual(
+    changedProduct?.public_state_changed_at.toISOString(),
+    "2000-01-01T00:00:00.000Z",
+    "worker input must not forge the database-owned public-state clock",
+  );
+  assert.ok(
+    changedProduct.public_state_changed_at >= product.public_state_changed_at,
+    "public-state mutation clock must advance monotonically across worker updates",
+  );
+  await runtime`
+    update canonical_products set status = 'active' where id = ${product.id}
+  `;
+  const [priceIngestionRun] = await runtime`
+    insert into ingestion_runs (
+      source_id,
+      run_type,
+      status,
+      started_at,
+      completed_at,
+      counts
+    ) values (
+      'kassalapp',
+      'benchmark-prices',
+      'running',
+      now() - interval '1 minute',
+      null,
+      '{}'::jsonb
+    )
     returning id
   `;
   const [observation] = await runtime`
@@ -684,7 +759,8 @@ try {
       evidence_level,
       confidence,
       claim_eligibility,
-      raw_record_hash
+      raw_record_hash,
+      created_at
     ) values (
       'runtime-role-proof-evidence',
       ${product.id},
@@ -694,14 +770,16 @@ try {
       now(),
       'kassalapp',
       'runtime-role-proof',
-      ${ingestionRun.id},
+      ${priceIngestionRun.id},
       'chain',
       100,
       'ordinary_only',
-      ${"b".repeat(64)}
+      ${"b".repeat(64)},
+      '2000-01-01T00:00:00Z'
     )
-    returning id
+    returning id, created_at
   `;
+  assert.notEqual(observation.created_at.toISOString(), "2000-01-01T00:00:00.000Z");
   const [coverage] = await runtime`
     insert into price_coverage_checks (
       ingestion_run_id,
@@ -709,17 +787,43 @@ try {
       chain,
       state,
       reason,
-      checked_at
+      checked_at,
+      created_at
     ) values (
-      ${ingestionRun.id},
+      ${priceIngestionRun.id},
       ${product.id},
       'extra',
       'priced',
       'runtime_role_proof',
-      now()
+      now(),
+      '2000-01-01T00:00:00Z'
     )
-    returning id
+    returning id, created_at
   `;
+  assert.notEqual(coverage.created_at.toISOString(), "2000-01-01T00:00:00.000Z");
+  const [outcome] = await runtime`
+    insert into source_record_outcomes (
+      ingestion_run_id,
+      record_kind,
+      source_record_id,
+      outcome_state,
+      reason,
+      outcome_hash,
+      recorded_at,
+      created_at
+    ) values (
+      ${priceIngestionRun.id},
+      'price',
+      'runtime-role-proof-outcome',
+      'accepted',
+      null,
+      ${"c".repeat(64)},
+      now(),
+      '2000-01-01T00:00:00Z'
+    )
+    returning id, created_at
+  `;
+  assert.notEqual(outcome.created_at.toISOString(), "2000-01-01T00:00:00.000Z");
   const protectedRows = await runtime`
     select amount_ore from price_observations where id = ${observation.id}
   `;
@@ -737,7 +841,8 @@ try {
       units_per_pack,
       retrieved_at,
       source_updated_at,
-      raw_record_hash
+      raw_record_hash,
+      created_at
     ) values (
       ${ingestionRun.id},
       'runtime-role-proof-catalog',
@@ -750,10 +855,15 @@ try {
       1,
       now() - interval '30 seconds',
       now() - interval '2 minutes',
-      ${"a".repeat(64)}
+      ${"a".repeat(64)},
+      '2000-01-01T00:00:00Z'
     )
-    returning id
+    returning id, created_at
   `;
+  assert.notEqual(
+    catalogObservation.created_at.toISOString(),
+    "2000-01-01T00:00:00.000Z",
+  );
   const catalogRows = await runtime`
     select display_name, source_updated_at, retrieved_at
     from catalog_observations
@@ -818,6 +928,73 @@ try {
         counts = '{"observations":1}'::jsonb
     where id = ${ingestionRun.id}
   `;
+  await runtime`
+    update ingestion_runs
+    set status = 'completed',
+        completed_at = now(),
+        counts = '{"observations":1,"coverage":1}'::jsonb
+    where id = ${priceIngestionRun.id}
+  `;
+  const [terminalizedRun] = await runtime`
+    select created_at, completed_at, terminalized_at
+    from ingestion_runs
+    where id = ${ingestionRun.id}
+  `;
+  assert.ok(terminalizedRun?.terminalized_at instanceof Date);
+  assert.ok(terminalizedRun.terminalized_at >= terminalizedRun.created_at);
+  assert.ok(terminalizedRun.terminalized_at >= terminalizedRun.completed_at);
+  await expectDenied(
+    () => runtime`
+      insert into source_record_outcomes (
+        ingestion_run_id, record_kind, source_record_id, outcome_state,
+        reason, outcome_hash, recorded_at, created_at
+      ) values (
+        ${priceIngestionRun.id}, 'price', 'runtime-role-proof-late-outcome',
+        'accepted', null, ${"d".repeat(64)}, now(), '2000-01-01T00:00:00Z'
+      )
+    `,
+    "runtime role must not append outcomes to a terminal ingestion run",
+  );
+  await expectDenied(
+    () => runtime`
+      insert into catalog_observations (
+        ingestion_run_id, source_record_id, canonical_product_id, gtin,
+        display_name, package_amount, package_unit, units_per_pack,
+        retrieved_at, raw_record_hash, created_at
+      ) values (
+        ${ingestionRun.id}, 'runtime-role-proof-late-catalog', ${product.id},
+        '7038010000010', 'Late catalog', 1, 'package', 1, now(),
+        ${"e".repeat(64)}, '2000-01-01T00:00:00Z'
+      )
+    `,
+    "runtime role must not append catalog evidence to a terminal ingestion run",
+  );
+  await expectDenied(
+    () => runtime`
+      insert into price_observations (
+        evidence_key, product_id, chain, amount_ore, observed_at, fetched_at,
+        source_id, source_reference, ingestion_run_id, evidence_level,
+        confidence, claim_eligibility, raw_record_hash, created_at
+      ) values (
+        'runtime-role-proof-late-price', ${product.id}, 'extra', 3190,
+        now() - interval '1 minute', now(), 'kassalapp', 'late',
+        ${priceIngestionRun.id}, 'chain', 100, 'ordinary_only', ${"f".repeat(64)},
+        '2000-01-01T00:00:00Z'
+      )
+    `,
+    "runtime role must not append price evidence to a terminal ingestion run",
+  );
+  await expectDenied(
+    () => runtime`
+      insert into price_coverage_checks (
+        ingestion_run_id, product_id, chain, state, reason, checked_at, created_at
+      ) values (
+        ${priceIngestionRun.id}, ${product.id}, 'extra', 'priced', 'late', now(),
+        '2000-01-01T00:00:00Z'
+      )
+    `,
+    "runtime role must not append coverage to a terminal ingestion run",
+  );
   await expectDenied(
     () => runtime`
       update ingestion_runs
@@ -868,6 +1045,16 @@ try {
         as evidence_select,
       has_table_privilege(current_user, 'price_observations', 'INSERT, UPDATE, DELETE')
         as evidence_write,
+      has_table_privilege(current_user, 'family_taxonomy_versions', 'SELECT')
+        as taxonomy_version_select,
+      has_table_privilege(current_user, 'reviewed_family_definitions', 'SELECT')
+        as family_definition_select,
+      has_table_privilege(current_user, 'reviewed_family_aliases', 'SELECT')
+        as family_alias_select,
+      has_table_privilege(current_user, 'reviewed_family_membership_public', 'SELECT')
+        as family_membership_public_select,
+      has_table_privilege(current_user, 'reviewed_family_membership_decisions', 'SELECT')
+        as family_membership_private_select,
       has_column_privilege(current_user, 'source_permissions', 'permissions', 'SELECT')
         as source_permission_public_select,
       has_column_privilege(
@@ -922,6 +1109,11 @@ try {
     catalog_observation_write: false,
     evidence_select: true,
     evidence_write: false,
+    taxonomy_version_select: true,
+    family_definition_select: true,
+    family_alias_select: true,
+    family_membership_public_select: true,
+    family_membership_private_select: false,
     source_permission_public_select: true,
     source_permission_private_select: false,
     private_capture_select: false,
@@ -939,7 +1131,7 @@ try {
   });
 
   const webMigrations = await web`
-    select id from handleplan_schema_migrations where id = '011_catalog_observations.sql'
+    select id from handleplan_schema_migrations where id = '012_reviewed_family_taxonomy.sql'
   `;
   assert.equal(webMigrations.length, 1, "web readiness must read the migration ledger");
   const webEvidence = await web`
@@ -970,14 +1162,78 @@ try {
     order by reviewed_at desc, id desc
     limit 1
   `;
+  const [webSourceClock] = await web`
+    select public_state_changed_at
+    from data_sources
+    where id = 'kassalapp'
+  `;
+  assert.ok(
+    webSourceClock?.public_state_changed_at instanceof Date,
+    "web reader role must read the database-owned source-state clock",
+  );
+  const webTaxonomy = await web`
+    select
+      version.version_id,
+      version.content_sha256,
+      version.content_json,
+      version.expected_family_count,
+      version.expected_alias_count,
+      family.family_id,
+      alias.alias
+    from family_taxonomy_versions version
+    inner join reviewed_family_definitions family
+      on family.version_id = version.version_id
+    inner join reviewed_family_aliases alias
+      on alias.version_id = family.version_id
+     and alias.family_id = family.family_id
+    where family.family_id = 'family:melk'
+  `;
+  assert.deepEqual(
+    [...webTaxonomy],
+    [{
+      version_id: "handleplan-reviewed-families@1.0.0",
+      content_sha256: "1d917ee4268615ad510a622ea30d69977191cffc143313a7dbecbad37debf520",
+      content_json: [
+        { aliases: ["brød"], id: "family:brod", labelNo: "Brød", slug: "brod", status: "active" },
+        { aliases: [], id: "family:kaffe", labelNo: "Kaffe", slug: "kaffe", status: "active" },
+        { aliases: ["mjølk"], id: "family:melk", labelNo: "Melk", slug: "melk", status: "active" },
+      ],
+      expected_family_count: 3,
+      expected_alias_count: 2,
+      family_id: "family:melk",
+      alias: "mjølk",
+    }],
+    "web role must read only the published reviewed-family definition",
+  );
+  await web`
+    select id, family_id, decision, method, reviewer_attested
+    from reviewed_family_membership_public
+    limit 0
+  `;
 
   await expectDenied(
     () => web`select private_reference_key from source_permissions limit 1`,
     "web role must not read private source references",
   );
   await expectDenied(
+    () => web`select reviewer_id from reviewed_family_membership_decisions limit 1`,
+    "web role must not read private reviewed-family reviewer identities",
+  );
+  await expectDenied(
     () => web`select id from publication_captures limit 1`,
     "web role must not read private publication captures",
+  );
+  await expectDenied(
+    () => web`
+      insert into reviewed_family_membership_decisions (
+        version_id, family_id, product_id, decision, method, confidence,
+        reviewer_id, reviewed_at
+      ) values (
+        'handleplan-reviewed-families@1.0.0', 'family:melk', ${product.id},
+        'approved', 'human_review', 100, 'web-forgery', now()
+      )
+    `,
+    "web role must not forge reviewed-family decisions",
   );
   await expectDenied(
     () => web`select id from extracted_offer_candidates limit 1`,
@@ -1098,6 +1354,22 @@ try {
     "worker role must not read private capture pipelines",
   );
   await expectDenied(
+    () => runtime`select family_id from reviewed_family_membership_public limit 1`,
+    "worker role must not read reviewed-family taxonomy state",
+  );
+  await expectDenied(
+    () => runtime`
+      insert into reviewed_family_membership_decisions (
+        version_id, family_id, product_id, decision, method, confidence,
+        rule_version, reviewed_at
+      ) values (
+        'handleplan-reviewed-families@1.0.0', 'family:melk', ${product.id},
+        'approved', 'deterministic_rule', 100, 'worker-forgery', now()
+      )
+    `,
+    "worker role must not forge reviewed-family decisions",
+  );
+  await expectDenied(
     () => runtime`
       update price_observations set amount_ore = 1 where id = ${observation.id}
     `,
@@ -1162,6 +1434,9 @@ try {
     webWritesDenied: true,
     protectedInsertRead: true,
     catalogObservationInsertRead: true,
+    reviewedFamilyPublicProjection: true,
+    reviewedFamilyPrivateReviewerDenied: true,
+    reviewedFamilyWorkerAccessDenied: true,
     protectedMutationDenied: true,
     triggerDisableDenied: true,
     schemaDdlDenied: true,

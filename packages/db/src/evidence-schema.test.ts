@@ -9,6 +9,7 @@ import {
   dataSources,
   extractedOfferCandidates,
   extractionRuns,
+  familyTaxonomyVersions,
   geographicScopes,
   ingestionRuns,
   offerTargets,
@@ -21,6 +22,9 @@ import {
   publicationCaptures,
   publications,
   reviewActions,
+  reviewedFamilyAliases,
+  reviewedFamilyDefinitions,
+  reviewedFamilyMembershipDecisions,
   sourceHealthSnapshots,
   sourcePermissions,
   sourceProducts,
@@ -44,6 +48,10 @@ describe("v1 evidence schema", () => {
         sourceProducts,
         productFamilies,
         productFamilyMemberships,
+        familyTaxonomyVersions,
+        reviewedFamilyDefinitions,
+        reviewedFamilyAliases,
+        reviewedFamilyMembershipDecisions,
         ingestionRuns,
         sourceRecordOutcomes,
         catalogObservations,
@@ -71,6 +79,10 @@ describe("v1 evidence schema", () => {
       "source_products",
       "product_families",
       "product_family_memberships",
+      "family_taxonomy_versions",
+      "reviewed_family_definitions",
+      "reviewed_family_aliases",
+      "reviewed_family_membership_decisions",
       "ingestion_runs",
       "source_record_outcomes",
       "catalog_observations",
@@ -90,6 +102,49 @@ describe("v1 evidence schema", () => {
       "worker_job_results",
       "alert_events",
     ]);
+  });
+
+  it("maps immutable reviewed-family publications and provenance decisions", () => {
+    const versionConfig = getTableConfig(familyTaxonomyVersions);
+    const definitionConfig = getTableConfig(reviewedFamilyDefinitions);
+    const aliasConfig = getTableConfig(reviewedFamilyAliases);
+    const decisionConfig = getTableConfig(reviewedFamilyMembershipDecisions);
+
+    expect(versionConfig.uniqueConstraints.map(({ name }) => name)).toEqual(
+      expect.arrayContaining([
+        "family_taxonomy_versions_taxonomy_publication_unique",
+        "family_taxonomy_versions_taxonomy_version_unique",
+      ]),
+    );
+    expect(checkNames(familyTaxonomyVersions)).toEqual(
+      expect.arrayContaining([
+        "family_taxonomy_versions_alias_count_range",
+        "family_taxonomy_versions_checksum_shape",
+        "family_taxonomy_versions_contract_version",
+        "family_taxonomy_versions_family_count_range",
+        "family_taxonomy_versions_version_id_binding",
+      ]),
+    );
+    expect(versionConfig.columns.find(({ name }) => name === "content_json")?.notNull).toBe(true);
+    expect(definitionConfig.primaryKeys).toHaveLength(1);
+    expect(definitionConfig.foreignKeys.map(({ reference }) => reference().name)).toContain(
+      "reviewed_family_definitions_version_parent_fk",
+    );
+    expect(aliasConfig.primaryKeys).toHaveLength(1);
+    expect(checkNames(reviewedFamilyAliases)).toContain(
+      "reviewed_family_aliases_alias_shape",
+    );
+    expect(decisionConfig.indexes.map(({ config }) => config.name)).toContain(
+      "reviewed_family_membership_decisions_latest_idx",
+    );
+    expect(checkNames(reviewedFamilyMembershipDecisions)).toEqual(
+      expect.arrayContaining([
+        "reviewed_family_membership_decisions_confidence_range",
+        "reviewed_family_membership_decisions_decision",
+        "reviewed_family_membership_decisions_method",
+        "reviewed_family_membership_decisions_provenance",
+      ]),
+    );
   });
 
   it("keeps worker schedule outcomes append-only, bounded, and source scoped", () => {
@@ -117,6 +172,20 @@ describe("v1 evidence schema", () => {
     expect(checkNames(priceCoverageChecks)).toContain("price_coverage_checks_state");
   });
 
+  it("records a database-owned public-state clock for every mutable eligibility row", () => {
+    for (const table of [
+      dataSources,
+      canonicalProducts,
+      productIdentifiers,
+      geographicScopes,
+    ]) {
+      const config = getTableConfig(table);
+      expect(config.columns.find(({ name }) => name === "public_state_changed_at")?.notNull)
+        .toBe(true);
+      expect(checkNames(table)).toContain(`${config.name}_public_state_clock`);
+    }
+  });
+
   it("gives scheduled runs stable job identities and audited outcome identities", () => {
     const runIndexes = getTableConfig(ingestionRuns).indexes.map(
       ({ config: index }) => index.name,
@@ -124,9 +193,14 @@ describe("v1 evidence schema", () => {
     const outcomeConfig = getTableConfig(sourceRecordOutcomes);
 
     expect(runIndexes).toContain("ingestion_runs_job_id_unique");
+    expect(getTableConfig(ingestionRuns).columns.find(({ name }) => name === "terminalized_at")?.notNull)
+      .toBe(false);
+    expect(checkNames(ingestionRuns)).toContain("ingestion_runs_terminalization_state");
     expect(outcomeConfig.uniqueConstraints.map(({ name }) => name)).toContain(
       "source_record_outcomes_run_kind_record_unique",
     );
+    expect(outcomeConfig.columns.find(({ name }) => name === "created_at")?.notNull)
+      .toBe(true);
     expect(checkNames(sourceRecordOutcomes)).toEqual(
       expect.arrayContaining([
         "source_record_outcomes_chain_supported",

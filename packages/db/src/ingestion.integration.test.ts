@@ -36,6 +36,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
   "PostgresIngestionRepository integration",
   () => {
     let connection: DatabaseConnection;
+    let contender: DatabaseConnection;
     let repository: PostgresIngestionRepository;
     let scopeId: number;
     const fenceCalls: string[] = [];
@@ -69,6 +70,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         throw new Error("DATABASE_URL is required when RUN_DB_INTEGRATION=1");
       }
       connection = createDatabase(process.env.DATABASE_URL);
+      contender = createDatabase(process.env.DATABASE_URL);
       repository = new PostgresIngestionRepository(connection.db, { verifyFence });
 
       const [scope] = await connection.sql`
@@ -81,7 +83,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
     });
 
     afterAll(async () => {
-      await connection?.close();
+      await Promise.all([connection?.close(), contender?.close()]);
     });
 
     it("converges duplicate job starts and rejects a conflicting job identity", async () => {
@@ -172,6 +174,16 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         },
         status: "degraded",
       });
+      const [terminalClock] = await connection.sql`
+        select created_at, completed_at, terminalized_at
+        from ingestion_runs
+        where id = ${handle.id}
+      `;
+      expect(terminalClock?.terminalized_at).toBeInstanceOf(Date);
+      expect(terminalClock?.terminalized_at.getTime())
+        .toBeGreaterThanOrEqual(terminalClock!.created_at.getTime());
+      expect(terminalClock?.terminalized_at.getTime())
+        .toBeGreaterThanOrEqual(terminalClock!.completed_at.getTime());
     });
 
     it("canonicalizes catalog records only by exact valid GTIN", async () => {
@@ -619,6 +631,215 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         where ingestion_run_id = ${handle.id} and source_record_id = ${sourceRecordId}
       `;
       expect(row!.count).toBe(0);
+    });
+
+    it("database-stamps append-only evidence and rejects inserts after terminalization", async () => {
+      const handle = await beginRun("database-running-guard", "catalog");
+      const ean = gtin13(9);
+      const [product] = await connection.sql`
+        insert into canonical_products (
+          display_name, package_amount, package_unit, units_per_pack, status
+        ) values (${`Running guard ${nonce}`}, 1, 'package', 1, 'active')
+        returning id
+      `;
+      const [persisted] = await connection.sql`
+        insert into source_record_outcomes (
+          ingestion_run_id, record_kind, source_record_id, outcome_state,
+          reason, subject_ean, outcome_hash, recorded_at, created_at
+        ) values (
+          ${handle.id}, 'product', ${`guard-legitimate-${nonce}`}, 'accepted',
+          null, ${ean}, ${"d".repeat(64)}, ${now.toISOString()},
+          '2000-01-01T00:00:00Z'
+        )
+        returning created_at
+      `;
+      expect((persisted!.created_at as Date).getTime()).toBeGreaterThan(
+        new Date("2000-01-01T00:00:00Z").getTime(),
+      );
+
+      await repository.finalizeRun(handle, {
+        completedAt: new Date("2026-07-16T12:05:00.000Z"),
+        status: "completed",
+      });
+
+      const lateInsertions = [
+        () => connection.sql`
+          insert into source_record_outcomes (
+            ingestion_run_id, record_kind, source_record_id, outcome_state,
+            reason, subject_ean, outcome_hash, recorded_at, created_at
+          ) values (
+            ${handle.id}, 'product', ${`guard-late-${nonce}`}, 'accepted',
+            null, ${ean}, ${"e".repeat(64)}, ${now.toISOString()},
+            '2000-01-01T00:00:00Z'
+          )
+        `,
+        () => connection.sql`
+          insert into catalog_observations (
+            ingestion_run_id, source_record_id, canonical_product_id, gtin,
+            display_name, package_amount, package_unit, units_per_pack,
+            retrieved_at, raw_record_hash, created_at
+          ) values (
+            ${handle.id}, ${`guard-late-catalog-${nonce}`}, ${product!.id}, ${ean},
+            'Late catalog evidence', 1, 'package', 1, ${now.toISOString()},
+            ${"f".repeat(64)}, '2000-01-01T00:00:00Z'
+          )
+        `,
+        () => connection.sql`
+          insert into price_observations (
+            evidence_key, product_id, chain, amount_ore, observed_at, fetched_at,
+            source_id, source_reference, ingestion_run_id, geographic_scope_id,
+            evidence_level, confidence, claim_eligibility, raw_record_hash,
+            created_at
+          ) values (
+            ${`guard-late-price-${nonce}`}, ${product!.id}, 'extra', 100,
+            ${now.toISOString()}, ${now.toISOString()}, 'kassalapp', 'guard-late',
+            ${handle.id}, ${scopeId}, 'chain', 100, 'ordinary_only',
+            ${"a".repeat(64)}, '2000-01-01T00:00:00Z'
+          )
+        `,
+        () => connection.sql`
+          insert into price_coverage_checks (
+            ingestion_run_id, product_id, chain, geographic_scope_id,
+            state, reason, checked_at, created_at
+          ) values (
+            ${handle.id}, ${product!.id}, 'extra', ${scopeId}, 'priced',
+            'guard_late', ${now.toISOString()}, '2000-01-01T00:00:00Z'
+          )
+        `,
+      ];
+      for (const insertion of lateInsertions) {
+        await expect(insertion()).rejects.toThrow(/running ingestion run/i);
+      }
+      const [lateCounts] = await connection.sql`
+        select
+          (select count(*)::integer from source_record_outcomes
+            where ingestion_run_id = ${handle.id}
+              and source_record_id = ${`guard-late-${nonce}`}) as outcomes,
+          (select count(*)::integer from catalog_observations
+            where ingestion_run_id = ${handle.id}) as catalog,
+          (select count(*)::integer from price_observations
+            where ingestion_run_id = ${handle.id}) as prices,
+          (select count(*)::integer from price_coverage_checks
+            where ingestion_run_id = ${handle.id}) as coverage
+      `;
+      expect(lateCounts).toEqual({ catalog: 0, coverage: 0, outcomes: 0, prices: 0 });
+    });
+
+    it("serializes an evidence append against concurrent finalization", async () => {
+      const handle = await beginRun("database-running-guard-race", "catalog");
+      let reportTerminalUpdate!: () => void;
+      let releaseTerminalUpdate!: () => void;
+      const terminalUpdated = new Promise<void>((resolve) => {
+        reportTerminalUpdate = resolve;
+      });
+      const release = new Promise<void>((resolve) => {
+        releaseTerminalUpdate = resolve;
+      });
+      const finalization = connection.sql.begin(async (transaction) => {
+        await transaction`
+          update ingestion_runs
+          set status = 'completed',
+              completed_at = ${new Date("2026-07-16T12:05:00.000Z").toISOString()},
+              counts = '{}'::jsonb
+          where id = ${handle.id}
+        `;
+        reportTerminalUpdate();
+        await release;
+      });
+      await terminalUpdated;
+
+      try {
+        await expect(contender.sql.begin(async (transaction) => {
+          await transaction`set local lock_timeout = '250ms'`;
+          await transaction`
+            insert into source_record_outcomes (
+              ingestion_run_id, record_kind, source_record_id, outcome_state,
+              reason, outcome_hash, recorded_at, created_at
+            ) values (
+              ${handle.id}, 'product', ${`guard-race-${nonce}`}, 'accepted', null,
+              ${"b".repeat(64)}, ${now.toISOString()}, '2000-01-01T00:00:00Z'
+            )
+          `;
+        })).rejects.toThrow(/lock timeout/i);
+      } finally {
+        releaseTerminalUpdate();
+      }
+      await finalization;
+      await expect(contender.sql`
+        insert into source_record_outcomes (
+          ingestion_run_id, record_kind, source_record_id, outcome_state,
+          reason, outcome_hash, recorded_at, created_at
+        ) values (
+          ${handle.id}, 'product', ${`guard-race-after-${nonce}`}, 'accepted', null,
+          ${"c".repeat(64)}, ${now.toISOString()}, '2000-01-01T00:00:00Z'
+        )
+      `).rejects.toThrow(/running ingestion run/i);
+    });
+
+    it("binds price evidence and coverage to their run provenance", async () => {
+      const [product] = await connection.sql`
+        insert into canonical_products (
+          display_name, package_amount, package_unit, units_per_pack, status
+        ) values (${`Run provenance ${nonce}`}, 1, 'package', 1, 'active')
+        returning id
+      `;
+      const catalogHandle = await beginRun("price-on-catalog-run", "catalog");
+      await expect(connection.sql`
+        insert into price_observations (
+          evidence_key, product_id, chain, amount_ore, observed_at, fetched_at,
+          source_id, source_reference, ingestion_run_id, evidence_level,
+          confidence, claim_eligibility, raw_record_hash
+        ) values (
+          ${`price-on-catalog-${nonce}`}, ${product!.id}, 'extra', 100,
+          ${now.toISOString()}, ${now.toISOString()}, 'kassalapp', 'invalid-run',
+          ${catalogHandle.id}, 'chain', 100, 'ordinary_only', ${"1".repeat(64)}
+        )
+      `).rejects.toThrow(/price ingestion run/i);
+
+      const historicalHandle = await beginRun("coverage-on-history", "historical-prices");
+      await expect(connection.sql`
+        insert into price_coverage_checks (
+          ingestion_run_id, product_id, chain, geographic_scope_id,
+          state, reason, checked_at
+        ) values (
+          ${historicalHandle.id}, ${product!.id}, 'extra', ${scopeId},
+          'priced', 'invalid_history_coverage', ${now.toISOString()}
+        )
+      `).rejects.toThrow(/ordinary-price ingestion run/i);
+
+      const benchmarkHandle = await beginRun("history-on-benchmark", "benchmark-prices");
+      await expect(connection.sql`
+        insert into price_observations (
+          evidence_key, product_id, chain, amount_ore, observed_at, fetched_at,
+          source_id, source_reference, ingestion_run_id, evidence_level,
+          confidence, claim_eligibility, raw_record_hash
+        ) values (
+          ${`history-on-benchmark-${nonce}`}, ${product!.id}, 'extra', 100,
+          ${now.toISOString()}, ${now.toISOString()}, 'kassalapp', 'invalid-claim',
+          ${benchmarkHandle.id}, 'chain', 100, 'historical_eligible',
+          ${"2".repeat(64)}
+        )
+      `).rejects.toThrow(/eligibility must match/i);
+
+      await expect(connection.sql`
+        insert into price_observations (
+          evidence_key, product_id, chain, amount_ore, observed_at, fetched_at,
+          source_id, source_reference, ingestion_run_id, evidence_level,
+          confidence, claim_eligibility, raw_record_hash
+        ) values (
+          ${`wrong-source-on-benchmark-${nonce}`}, ${product!.id}, 'extra', 100,
+          ${now.toISOString()}, ${now.toISOString()}, 'legacy-import', 'invalid-source',
+          ${benchmarkHandle.id}, 'chain', 100, 'ordinary_only',
+          ${"3".repeat(64)}
+        )
+      `).rejects.toThrow(/source must match/i);
+
+      for (const handle of [catalogHandle, historicalHandle, benchmarkHandle]) {
+        await repository.finalizeRun(handle, {
+          completedAt: new Date("2026-07-16T12:05:00.000Z"),
+          status: "cancelled",
+        });
+      }
     });
 
     it("audits coordinate-less stores as unknown and persists only complete locations", async () => {

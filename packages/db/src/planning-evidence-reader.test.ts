@@ -207,6 +207,11 @@ describe("PostgresPlanningEvidenceReader", () => {
     expect(captures).toHaveLength(1);
     const query = captures[0]!.sql.replace(/\s+/g, " ").trim();
     expect(query).toContain("from source_permissions");
+    expect(query).toContain("ds.created_at <=");
+    expect(query).toContain("ds.public_state_changed_at <=");
+    expect(query).toContain("permission.created_at <=");
+    expect(query).toContain("pi.public_state_changed_at <=");
+    expect(query).toContain("cp.public_state_changed_at <=");
     expect(query).toContain("runtime_state = 'approved'");
     expect(query).toContain("permission_reviewed_at is not null");
     expect(query).toContain("permission_reviewed_at <=");
@@ -214,6 +219,10 @@ describe("PostgresPlanningEvidenceReader", () => {
     expect(query).toContain("decision = 'approved'");
     expect(query).toContain("ordinaryPrice");
     expect(query).toContain("status = 'completed'");
+    expect(query).toContain("run.created_at <=");
+    expect(query).toContain("run.terminalized_at <=");
+    expect(query).toContain("po.created_at <=");
+    expect(query).toContain("coverage.created_at <=");
     expect(query).toContain("source_reference is not null");
     expect(query).toContain("raw_record_hash is not null");
     expect(query).toContain("and source.permissions @> '{\"ordinaryPrice\": true}'::jsonb and (");
@@ -222,6 +231,9 @@ describe("PostgresPlanningEvidenceReader", () => {
     expect(query).toContain("po.claim_eligibility = 'historical_eligible'");
     expect(query).toContain("priceHistory");
     expect(query).toContain("geographic_scope_regions");
+    expect(query).toContain("gs.public_state_changed_at <=");
+    expect(query).toContain("gsr.created_at <=");
+    expect(query).toContain("gss.created_at <=");
     expect(query).toContain("coverage.checked_at >=");
     expect(query).toContain("limit 10001");
   });

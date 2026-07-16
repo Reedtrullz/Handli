@@ -3,12 +3,17 @@
 import type { MatchRule, Need, Product } from "@handleplan/domain";
 import { useState } from "react";
 
-import { BASKET_QUANTITY_MAX, BASKET_QUANTITY_MIN } from "../../lib/browser-basket";
+import {
+  BASKET_QUANTITY_MAX,
+  BASKET_QUANTITY_MIN,
+  type BrowserFamilyConfirmation,
+} from "../../lib/browser-basket";
 
 interface BasketRowProps {
   need: Need;
   rule: MatchRule;
   product?: Product;
+  familyConfirmation?: BrowserFamilyConfirmation;
   onQuantityChange: (quantity: number) => void;
   onRemove: () => void;
 }
@@ -17,6 +22,7 @@ export function BasketRow({
   need,
   rule,
   product,
+  familyConfirmation,
   onQuantityChange,
   onRemove,
 }: BasketRowProps) {
@@ -26,10 +32,14 @@ export function BasketRow({
   const matchLabel =
     rule.mode === "exact"
       ? "Eksakt produkt"
-      : rule.mode === "flexible"
-        ? "Samme type, valgfritt merke"
-        : "Valgfritt merke";
-  const explanation = rule.mode === "exact" ? `Låst til ${product?.name ?? need.query}` : rule.explanation;
+      : familyConfirmation === undefined
+        ? "Må godkjennes på nytt"
+        : "Gjennomgått varetype";
+  const explanation = rule.mode === "exact"
+    ? `Låst til ${product?.name ?? need.query}`
+    : familyConfirmation === undefined
+      ? "Eldre fleksibelt valg uten publisert kandidatbekreftelse"
+      : `${familyConfirmation.candidateCount} ${familyConfirmation.candidateCount === 1 ? "godkjent kandidat" : "godkjente kandidater"}${familyConfirmation.allowedBrands === undefined ? ", valgfritt merke" : `: ${familyConfirmation.allowedBrands.join(" eller ")}`}`;
 
   function commitQuantity(): void {
     const quantity = Number(quantityDraft);

@@ -12,6 +12,7 @@
     "./public-catalog-index-reader": "./src/public-catalog-index-reader.ts",
     "./read-model": "./src/price-read-model.ts",
     "./request-budget": "./src/request-budget.ts",
+    "./reviewed-family-reader": "./src/reviewed-family-reader.ts",
     "./schema": "./src/schema.ts",
     "./source-access": "./src/source-access.ts",
     "./worker-lease": "./src/worker-lease.ts",

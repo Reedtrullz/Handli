@@ -5,7 +5,7 @@ import {
 } from "@handleplan/domain";
 
 const GTIN = "7038010000010";
-const BASKET_STORAGE_KEY = "handleplan:basket:v2";
+const BASKET_STORAGE_KEY = "handleplan:basket:v3";
 const CACHE_PREFIX = "handleplan-handlemodus-";
 
 const strictRequest: ExactProductPlanApiRequest = {
@@ -26,6 +26,7 @@ const strictRequest: ExactProductPlanApiRequest = {
 
 const basket = {
   convenienceWeightBasisPoints: 5_000,
+  familyConfirmations: [],
   matchingRules: [{
     exactEan: GTIN,
     explanation: "LOCAL EXPLANATION MUST STAY PRIVATE",
@@ -48,7 +49,7 @@ const basket = {
     productFamily: "local-family",
   }],
   travel: { enabled: false, mode: "car" },
-  version: 2,
+  version: 3,
 };
 
 function strictResponse(now: number) {

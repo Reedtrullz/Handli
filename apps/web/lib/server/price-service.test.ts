@@ -114,6 +114,31 @@ function readerWith(value: PlanningEvidenceSnapshot): PlanningEvidenceReader & {
 }
 
 describe("PriceService", () => {
+  it("reads one canonical product union for flexible server planning", async () => {
+    const second = snapshot();
+    second.products = [
+      { canonicalProductId: "product:42", gtin: GTIN },
+      { canonicalProductId: "product:42", gtin: GTIN_ALIAS },
+    ];
+    const reader = readerWith(second);
+    const result = await new PriceService({ reader }).readProducts(
+      [GTIN_ALIAS, GTIN],
+      NOW,
+    );
+
+    expect(reader.getMany).toHaveBeenCalledTimes(1);
+    expect(reader.getMany).toHaveBeenCalledWith([GTIN, GTIN_ALIAS], NOW, undefined);
+    expect(result.productEvidence.map(({ gtin }) => gtin)).toEqual([GTIN, GTIN_ALIAS]);
+    expect(result.productEvidence.every(({ canonicalProductId }) =>
+      canonicalProductId === "product:42")).toBe(true);
+    expect(result.productEvidence[0]).toMatchObject({
+      comparisonScope: { completeness: "partial" },
+      officialOffers: [],
+      ordinaryPrices: [{ id: "price:current" }],
+    });
+    expect(result.prices.map(({ ean }) => ean)).toEqual([GTIN, GTIN_ALIAS]);
+  });
+
   it("separates one selected current price per chain from its traceable historical baseline", async () => {
     const reader = readerWith(snapshot());
     const signal = new AbortController().signal;
