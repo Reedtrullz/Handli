@@ -12,7 +12,7 @@ const BODYLESS_STATUSES = new Set([101, 103, 204, 205, 304]);
 interface PublicEvidence {
   settle(): Promise<void>;
   stats: {
-    bodyReadErrors: number;
+    bodyReadFailures: Array<{ message: string; status: number; url: string }>;
     bodylessSameOriginResponses: number;
     consoleErrors: number;
     crossOriginBodiesNotInspected: number;
@@ -27,7 +27,7 @@ interface PublicEvidence {
 
 function collectPublicEvidence(page: Page): PublicEvidence {
   const stats = {
-    bodyReadErrors: 0,
+    bodyReadFailures: [],
     bodylessSameOriginResponses: 0,
     consoleErrors: 0,
     crossOriginBodiesNotInspected: 0,
@@ -86,8 +86,12 @@ function collectPublicEvidence(page: Page): PublicEvidence {
       const body = await response.body();
       stats.sameOriginBodiesInspected += 1;
       inspect(Buffer.from(body).toString("latin1"));
-    } catch {
-      stats.bodyReadErrors += 1;
+    } catch (error) {
+      stats.bodyReadFailures.push({
+        message: error instanceof Error ? error.message : String(error),
+        status: response.status(),
+        url: response.url(),
+      });
     }
   }
 
@@ -142,7 +146,7 @@ async function expectCleanPublicEvidence(evidence: PublicEvidence): Promise<void
   await evidence.settle();
   expect(evidence.stats.sameOriginBodiesInspected).toBeGreaterThan(0);
   expect(evidence.stats.surfacesInspected).toBeGreaterThan(0);
-  expect(evidence.stats.bodyReadErrors).toBe(0);
+  expect(evidence.stats.bodyReadFailures).toEqual([]);
   expect(evidence.stats.headerReadFailures).toEqual([]);
   expect(evidence.stats.consoleErrors).toBe(0);
   expect(evidence.stats.pageErrors).toBe(0);
@@ -234,6 +238,9 @@ test("anonymous shopper approves matching and chooses every complete frontier pl
     needs: [{ query: "lettmelk" }, { query: "Evergood Kaffe 500 g" }, { query: "Norsk grovbrød 750 g" }],
     products: expect.arrayContaining([expect.objectContaining({ ean: "7038010000013", productFamily: "lettmelk" })]),
   });
+  // Drain response bodies before a client navigation can cancel an in-flight
+  // development-server response on slower CI runners.
+  await evidence.settle();
   await page.getByRole("link", { name: /Finn beste handleplan/ }).click();
 
   await expect(page).toHaveTitle("Resultat | Handleplan");
@@ -273,6 +280,7 @@ test("anonymous shopper approves matching and chooses every complete frontier pl
   expect(persistedPlanId).toBeTruthy();
   await expect.poll(() => page.evaluate(() => localStorage.getItem("handleplan:basket:v1"))).toContain(`"selectedPlanId":"${persistedPlanId}"`);
 
+  await evidence.settle();
   await page.reload();
   await expect(page.locator(`input[type="radio"][value="${persistedPlanId}"]`)).toBeChecked();
   await expectWcag22AandAA(page);
