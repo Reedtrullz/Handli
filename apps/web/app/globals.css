@@ -367,3 +367,11 @@ a { color: inherit; }
   .opportunity-action-row button { width: 100%; }
   .discovery-rail { grid-template-columns: 1fr; }
 }
+
+@media (max-width: 360px) {
+  .header-inner { gap: 8px; }
+  .wordmark { gap: 6px; min-width: 0; font-size: 18px; white-space: nowrap; }
+  .brand-mark { width: 18px; height: 18px; flex: 0 0 18px; }
+  .site-header nav { flex: 0 0 auto; gap: 10px; }
+  .site-header nav a { font-size: 13px; }
+}

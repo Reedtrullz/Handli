@@ -233,7 +233,23 @@ test("Planlegg reflows without horizontal overflow at 320 pixels", async ({ page
   await page.goto("/planlegg");
 
   await expect(page.getByRole("heading", { name: "Hva skal du handle?" })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const reflow = await page.evaluate(() => ({
+    innerWidth: window.innerWidth,
+    offenders: [...document.querySelectorAll<HTMLElement>("body *")]
+      .map((element) => {
+        const box = element.getBoundingClientRect();
+        return {
+          className: element.className,
+          left: box.left,
+          right: box.right,
+          tagName: element.tagName,
+        };
+      })
+      .filter(({ left, right }) => left < -0.5 || right > window.innerWidth + 0.5)
+      .slice(0, 12),
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(reflow.scrollWidth, JSON.stringify(reflow)).toBeLessThanOrEqual(reflow.innerWidth);
 
   const composer = await page.locator(".need-composer").boundingBox();
   expect(composer).not.toBeNull();
