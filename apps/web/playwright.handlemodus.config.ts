@@ -10,12 +10,23 @@ export default defineConfig({
   timeout: 120_000,
   expect: { timeout: 15_000 },
   projects: [
-    { name: "chromium", use: { browserName: "chromium" } },
+    {
+      name: "chromium",
+      use: {
+        browserName: "chromium",
+        // Browser-context certificate bypass does not cover Chromium's
+        // service-worker process. The certificate is ephemeral and the test
+        // CSP is same-origin-only; this launch flag is scoped to this local
+        // harness so the exact production headers can remain enabled.
+        launchOptions: { args: ["--ignore-certificate-errors"] },
+      },
+    },
     { name: "firefox", use: { browserName: "firefox" } },
     { name: "webkit", use: { browserName: "webkit" } },
   ],
   use: {
-    baseURL: "http://127.0.0.1:3115",
+    baseURL: "https://127.0.0.1:3115",
+    ignoreHTTPSErrors: true,
     locale: "nb-NO",
     screenshot: "off",
     serviceWorkers: "allow",
@@ -25,8 +36,10 @@ export default defineConfig({
   },
   webServer: {
     command: "node tests/handlemodus/start-production-server.mjs",
+    gracefulShutdown: { signal: "SIGTERM", timeout: 5_000 },
+    ignoreHTTPSErrors: true,
     reuseExistingServer: false,
     timeout: 120_000,
-    url: "http://127.0.0.1:3115/planlegg/handle",
+    url: "https://127.0.0.1:3115/planlegg/handle",
   },
 });

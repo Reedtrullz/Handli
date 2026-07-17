@@ -6,6 +6,13 @@ import {
   expectNoHorizontalOverflow,
   expectSemanticHeadingOrder,
 } from "../../test-support/accessibility-evidence";
+import {
+  assertHandlemodusTestApplicationOriginUnavailable,
+  installHandlemodusTestFixtures,
+  readHandlemodusTestRequestBodies,
+  resetHandlemodusTestHarness,
+  setHandlemodusTestNetworkOffline,
+} from "../../test-support/handlemodus-test-network";
 import { strictResultTripFixture } from "../../test-support/strict-result-trip-fixture";
 
 const BASKET_STORAGE_KEY = "handleplan:basket:v4";
@@ -52,29 +59,40 @@ function browserBasket() {
   } as const;
 }
 
-test("Handlemodus remains operable, semantic, and axe-clean online and fully offline", async ({ context, page }) => {
+test.beforeEach(async ({ request }) => {
+  await resetHandlemodusTestHarness(request);
+});
+
+test.afterEach(async ({ request }) => {
+  await resetHandlemodusTestHarness(request);
+});
+
+test("Handlemodus remains operable, semantic, and axe-clean when its application origin is unavailable", async ({ page, request }) => {
   const fixture = freshStrictFixture();
   await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });
   await page.addInitScript(({ key, value }) => {
     localStorage.setItem(key, JSON.stringify(value));
   }, { key: BASKET_STORAGE_KEY, value: browserBasket() });
-  await page.route("**/api/plans", async (route) => {
-    expect(route.request().postDataJSON()).toEqual(fixture.exactRequest);
-    await route.fulfill({
-      body: JSON.stringify(fixture.exactResponse),
-      contentType: "application/json",
-      status: 200,
-    });
-  });
+  await installHandlemodusTestFixtures(request, [{
+    body: JSON.stringify(fixture.exactResponse),
+    path: "/api/plans",
+  }]);
 
   await page.goto("/planlegg/resultat");
   await expect(page.getByRole("button", { name: "Start Handlemodus" })).toBeVisible();
+  const planRequestBodies = await readHandlemodusTestRequestBodies(request, "/api/plans");
+  expect(planRequestBodies).toHaveLength(1);
+  expect(JSON.parse(planRequestBodies[0]!)).toEqual(fixture.exactRequest);
   await page.getByRole("button", { name: "Start Handlemodus" }).click();
   const openTrip = page.getByRole("link", { name: "Åpne Handlemodus" });
   await expect(openTrip).toBeVisible();
-  await openTrip.click();
-
+  // Resize before the service-worker-backed app-router transition. Firefox can
+  // deadlock a viewport mutation against that in-flight transition even though
+  // the resulting page is otherwise healthy.
   await page.setViewportSize({ height: 900, width: 320 });
+  await openTrip.click();
+  await expect(page).toHaveURL(/\/planlegg\/handle$/);
+
   await expect(page.getByRole("heading", { name: "Ta handleplanen med i butikken" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "0 av 1 vare", exact: true })).toBeVisible();
   await expect(page.getByRole("progressbar", { name: "0 av 1 vare fullført", exact: true })).toBeVisible();
@@ -90,8 +108,9 @@ test("Handlemodus remains operable, semantic, and axe-clean online and fully off
   await expect(page.getByRole("heading", { name: "1 av 1 vare", exact: true })).toBeVisible();
   await expect(page.getByRole("progressbar", { name: "1 av 1 vare fullført", exact: true })).toBeVisible();
 
-  await context.setOffline(true);
-  await page.reload();
+  await setHandlemodusTestNetworkOffline(request, true);
+  await assertHandlemodusTestApplicationOriginUnavailable(page);
+  await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.getByRole("heading", { name: "Ta handleplanen med i butikken" })).toBeVisible();
   await expect(checklistItem).toBeChecked();
   await expect(page.getByText("Lagret på enheten")).toBeVisible();

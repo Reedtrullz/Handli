@@ -9,6 +9,13 @@ import {
 } from "@handleplan/domain";
 
 import { reviewedStrictResultTripFixture } from "../../test-support/strict-result-trip-fixture";
+import {
+  assertHandlemodusTestApplicationOriginUnavailable,
+  installHandlemodusTestFixtures,
+  readHandlemodusTestRequestBodies,
+  resetHandlemodusTestHarness,
+  setHandlemodusTestNetworkOffline,
+} from "../../test-support/handlemodus-test-network";
 
 const GTIN = "7038010000010";
 const BASKET_STORAGE_KEY = "handleplan:basket:v4";
@@ -19,6 +26,14 @@ const MARKET_CONTEXT = {
   countryCode: "NO",
   kind: "national",
 } as const;
+
+test.beforeEach(async ({ request }) => {
+  await resetHandlemodusTestHarness(request);
+});
+
+test.afterEach(async ({ request }) => {
+  await resetHandlemodusTestHarness(request);
+});
 
 const strictRequest: ExactProductPlanApiRequest = {
   contractVersion: 1,
@@ -194,98 +209,80 @@ const strictFixtureResponse = exactProductPlanApiResponseSchemaFor(strictRequest
   plans: strictFixturePlans,
 });
 
-test("starts a strict trip and reloads the checklist fully offline", async ({ context, page }) => {
+test("starts a strict trip and reloads the checklist with its application origin unavailable", async ({ page, request }) => {
   const response = strictFixtureResponse;
-  let postedBody = "";
-  let postedSearchBody = "";
-  let postedTravelBody = "";
+  // Selection tokens are deliberately short-lived. Mint this browser fixture
+  // per test instead of inheriting the older observation clock from the
+  // otherwise immutable planning fixture.
+  const locationGeneratedAt = new Date().toISOString();
+  const locationResponse = {
+    candidates: [{
+      label: "Storgata 1, 0155 Oslo",
+      matchQuality: "exact",
+      selectionToken: LOCATION_TOKEN,
+    }],
+    contractVersion: 1,
+    expiresAt: new Date(Date.parse(locationGeneratedAt) + 5 * 60_000).toISOString(),
+    generatedAt: locationGeneratedAt,
+    source: { displayName: "©Kartverket", id: "kartverket-address-api" },
+  };
+  const travelRequest = {
+    contractVersion: 1 as const,
+    locationSelectionToken: LOCATION_TOKEN,
+    planning: strictRequest,
+    travelMode: "car" as const,
+  };
+  const travelRoutes = [{
+    aggregate: {
+      calculatedAt: response.generatedAt,
+      distanceMeters: 4_200,
+      durationSeconds: 720,
+      mode: "car" as const,
+      providerSourceId: "valhalla-openstreetmap-self-hosted",
+      routeFingerprint: "route:offline-e2e",
+    },
+    planId: response.plans[0]!.id,
+    stops: [{
+      branchId: "branch:extra:offline-e2e",
+      chainId: "extra" as const,
+      name: "Extra Sentrum",
+      sequence: 1,
+    }],
+  }];
+  const planDeltaExplanations = deriveExactProductPlanDeltaExplanationsV1({
+    evidence: response.evidence,
+    generatedAt: response.generatedAt,
+    marketContext: response.marketContext,
+    plans: response.plans,
+    travelRoutes,
+  });
+  if (planDeltaExplanations === undefined) {
+    throw new Error("The offline travel fixture is not a canonical frontier");
+  }
+  const travelResponse = travelPlanApiResponseSchemaFor(travelRequest).parse({
+    contractVersion: 1,
+    planning: { ...response, planDeltaExplanations },
+    travel: {
+      contractVersion: 1,
+      kind: "calculated",
+      routes: travelRoutes,
+    },
+  });
   await page.addInitScript(({ key, value }) => {
     localStorage.setItem(key, JSON.stringify(value));
   }, { key: BASKET_STORAGE_KEY, value: basket });
-  await page.route("**/api/plans", async (route) => {
-    postedBody = route.request().postData() ?? "";
-    await route.fulfill({
-      body: JSON.stringify(response),
-      contentType: "application/json",
-      status: 200,
-    });
-  });
-  await page.route("**/api/locations/search", async (route) => {
-    postedSearchBody = route.request().postData() ?? "";
-    // Selection tokens are deliberately short-lived. Mint this intercepted
-    // browser fixture at request time instead of inheriting the older price
-    // observation clock from the otherwise immutable planning fixture.
-    const generatedAt = new Date().toISOString();
-    await route.fulfill({
-      body: JSON.stringify({
-        candidates: [{
-          label: "Storgata 1, 0155 Oslo",
-          matchQuality: "exact",
-          selectionToken: LOCATION_TOKEN,
-        }],
-        contractVersion: 1,
-        expiresAt: new Date(Date.parse(generatedAt) + 5 * 60_000).toISOString(),
-        generatedAt,
-        source: { displayName: "©Kartverket", id: "kartverket-address-api" },
-      }),
-      contentType: "application/json",
-      status: 200,
-    });
-  });
-  await page.route("**/api/plans/travel", async (route) => {
-    postedTravelBody = route.request().postData() ?? "";
-    const travelRequest = {
-      contractVersion: 1 as const,
-      locationSelectionToken: LOCATION_TOKEN,
-      planning: strictRequest,
-      travelMode: "car" as const,
-    };
-    const travelRoutes = [{
-      aggregate: {
-        calculatedAt: response.generatedAt,
-        distanceMeters: 4_200,
-        durationSeconds: 720,
-        mode: "car" as const,
-        providerSourceId: "valhalla-openstreetmap-self-hosted",
-        routeFingerprint: "route:offline-e2e",
-      },
-      planId: response.plans[0]!.id,
-      stops: [{
-        branchId: "branch:extra:offline-e2e",
-        chainId: "extra" as const,
-        name: "Extra Sentrum",
-        sequence: 1,
-      }],
-    }];
-    const planDeltaExplanations = deriveExactProductPlanDeltaExplanationsV1({
-      evidence: response.evidence,
-      generatedAt: response.generatedAt,
-      marketContext: response.marketContext,
-      plans: response.plans,
-      travelRoutes,
-    });
-    if (planDeltaExplanations === undefined) {
-      throw new Error("The offline travel fixture is not a canonical frontier");
-    }
-    const travelResponse = travelPlanApiResponseSchemaFor(travelRequest).parse({
-      contractVersion: 1,
-      planning: { ...response, planDeltaExplanations },
-      travel: {
-        contractVersion: 1,
-        kind: "calculated",
-        routes: travelRoutes,
-      },
-    });
-    await route.fulfill({
-      body: JSON.stringify(travelResponse),
-      contentType: "application/json",
-      status: 200,
-    });
-  });
+  await installHandlemodusTestFixtures(request, [
+    { body: JSON.stringify(response), path: "/api/plans" },
+    { body: JSON.stringify(locationResponse), path: "/api/locations/search" },
+    { body: JSON.stringify(travelResponse), path: "/api/plans/travel" },
+  ]);
 
   await page.goto("/planlegg/resultat");
   await expect(page.getByRole("radio", { name: /Eneste komplette plan/ })).toBeChecked();
   await expect(page.getByRole("button", { name: "Start Handlemodus" })).toBeVisible();
+  const planRequestBodies = await readHandlemodusTestRequestBodies(request, "/api/plans");
+  expect(planRequestBodies).toHaveLength(1);
+  const postedBody = planRequestBodies[0]!;
   expect(JSON.parse(postedBody)).toEqual(strictRequest);
   expect(postedBody).not.toMatch(/LOCAL|query|travel|origin|latitude|longitude/i);
 
@@ -295,6 +292,18 @@ test("starts a strict trip and reloads the checklist fully offline", async ({ co
   await page.getByRole("button", { name: "Finn adresse" }).click();
   await page.getByRole("option", { name: /Storgata 1, 0155 Oslo/ }).click();
   await expect(page.getByText(/Reisetid er beregnet/)).toBeVisible();
+  const searchRequestBodies = await readHandlemodusTestRequestBodies(
+    request,
+    "/api/locations/search",
+  );
+  const travelRequestBodies = await readHandlemodusTestRequestBodies(
+    request,
+    "/api/plans/travel",
+  );
+  expect(searchRequestBodies).toHaveLength(1);
+  expect(travelRequestBodies).toHaveLength(1);
+  const postedSearchBody = searchRequestBodies[0]!;
+  const postedTravelBody = travelRequestBodies[0]!;
   expect(JSON.parse(postedSearchBody)).toEqual({
     contractVersion: 1,
     query: volunteeredAddress,
@@ -370,7 +379,8 @@ test("starts a strict trip and reloads the checklist fully offline", async ({ co
   expect(cacheAudit.privateEntries).toEqual([]);
   expect(cacheAudit.foreignEntries).toEqual([]);
 
-  await context.setOffline(true);
+  await setHandlemodusTestNetworkOffline(request, true);
+  await assertHandlemodusTestApplicationOriginUnavailable(page);
   await openTrip.click();
   await expect(page).toHaveURL(/\/planlegg\/handle$/);
   await expect(page.getByRole("heading", { name: "Ta handleplanen med i butikken" }))
@@ -397,10 +407,9 @@ test("starts a strict trip and reloads the checklist fully offline", async ({ co
 
   await page.getByRole("button", { name: "Fullfør og slett turen" }).click();
   await expect(page.getByRole("heading", { name: "Ingen aktiv handletur" })).toBeVisible();
-  await context.setOffline(false);
 });
 
-test("takes a mixed exact and reviewed-family plan into Handlemodus offline", async ({ context, page }) => {
+test("takes a mixed exact and reviewed-family plan into Handlemodus during an application-origin outage", async ({ page, request }) => {
   const now = Date.now();
   const fixture = reviewedStrictResultTripFixture({
     generatedAt: new Date(now - 60_000).toISOString(),
@@ -470,29 +479,28 @@ test("takes a mixed exact and reviewed-family plan into Handlemodus offline", as
     travel: { enabled: false, mode: "car" },
     version: 4,
   };
-  let postedBody = "";
   await page.addInitScript(({ key, value }) => {
     localStorage.setItem(key, JSON.stringify(value));
   }, { key: BASKET_STORAGE_KEY, value: mixedBasket });
-  await page.route("**/api/plans", async (route) => {
-    postedBody = route.request().postData() ?? "";
-    await route.fulfill({
-      body: JSON.stringify(fixture.reviewedResponse),
-      contentType: "application/json",
-      status: 200,
-    });
-  });
+  await installHandlemodusTestFixtures(request, [{
+    body: JSON.stringify(fixture.reviewedResponse),
+    path: "/api/plans",
+  }]);
 
   await page.goto("/planlegg/resultat");
   await expect(page.getByRole("heading", { name: "Godkjente varebytter" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Start Handlemodus" })).toBeVisible();
+  const planRequestBodies = await readHandlemodusTestRequestBodies(request, "/api/plans");
+  expect(planRequestBodies).toHaveLength(1);
+  const postedBody = planRequestBodies[0]!;
   expect(JSON.parse(postedBody)).toEqual(fixture.reviewedRequest);
   expect(postedBody).not.toMatch(/LOCAL|query|explanation|origin|address|latitude|longitude/i);
 
   await page.getByRole("button", { name: "Start Handlemodus" }).click();
   const openTrip = page.getByRole("link", { name: "Åpne Handlemodus" });
   await expect(openTrip).toBeVisible();
-  await context.setOffline(true);
+  await setHandlemodusTestNetworkOffline(request, true);
+  await assertHandlemodusTestApplicationOriginUnavailable(page);
   await openTrip.click();
   await expect(page).toHaveURL(/\/planlegg\/handle$/);
   await expect(page.getByText("Evergood Kaffe 500 g")).toBeVisible();
@@ -500,5 +508,4 @@ test("takes a mixed exact and reviewed-family plan into Handlemodus offline", as
   await expect(page.getByText(/Godkjent varebytte: Melk/)).toBeVisible();
   await expect(page.getByText(/menneskelig kontroll uten lagret identitet/)).toBeVisible();
   expect(await page.locator("body").innerText()).not.toMatch(/LOCAL .* MUST STAY PRIVATE/);
-  await context.setOffline(false);
 });

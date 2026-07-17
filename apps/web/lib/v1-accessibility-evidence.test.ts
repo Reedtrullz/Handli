@@ -3,6 +3,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+import handlemodusPlaywrightConfig from "../playwright.handlemodus.config";
+import publicPlaywrightConfig from "../../../playwright.config";
+
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 function source(path: string): string {
@@ -11,14 +14,20 @@ function source(path: string): string {
 
 describe("V1 automated accessibility evidence policy", () => {
   it("configures public and offline journeys for all three browser engines without retaining artifacts", () => {
-    for (const path of [
-      "playwright.config.ts",
-      "apps/web/playwright.handlemodus.config.ts",
-    ]) {
+    const configurations = [
+      ["playwright.config.ts", publicPlaywrightConfig],
+      ["apps/web/playwright.handlemodus.config.ts", handlemodusPlaywrightConfig],
+    ] as const;
+    for (const [path, configuration] of configurations) {
       const config = source(path);
-      expect(config).toContain('{ name: "chromium", use: { browserName: "chromium" } }');
-      expect(config).toContain('{ name: "firefox", use: { browserName: "firefox" } }');
-      expect(config).toContain('{ name: "webkit", use: { browserName: "webkit" } }');
+      expect(configuration.projects?.map((project) => ({
+        browserName: project.use?.browserName,
+        name: project.name,
+      }))).toEqual([
+        { browserName: "chromium", name: "chromium" },
+        { browserName: "firefox", name: "firefox" },
+        { browserName: "webkit", name: "webkit" },
+      ]);
       expect(config).toContain('trace: "off"');
       expect(config).toContain('screenshot: "off"');
       expect(config).toContain('video: "off"');
@@ -57,7 +66,7 @@ describe("V1 automated accessibility evidence policy", () => {
     ]) {
       expect(publicJourneys).toContain(marker);
     }
-    expect(offlineJourney).toContain("online and fully offline");
+    expect(offlineJourney).toContain("application origin is unavailable");
     expect(publicJourneys).toContain('page.goto("/review")');
     expect(publicJourneys).not.toMatch(/cf-access-jwt-assertion|REVIEW_ACCESS_AUDIENCE/iu);
     expect(publicJourneys).not.toMatch(/page\.route\([^\n]*review/iu);
