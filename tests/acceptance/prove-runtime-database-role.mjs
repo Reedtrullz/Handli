@@ -829,18 +829,20 @@ try {
       },
       anomalyCodes: ["OCR_REVIEW_REQUIRED"],
     };
+    const reviewCandidateEnvelope = {
+      contractVersion: 1,
+      anomalyCodes: ["OCR_REVIEW_REQUIRED"],
+      candidate: candidatePayload,
+      disposition: "review-required",
+      publicationRoute: "human-review-required",
+    };
     const [reviewCandidate] = await ownershipAdmin`
       insert into extracted_offer_candidates (
         extraction_run_id, candidate_key, normalized_fields, confidence,
         status, anomaly_codes
       ) values (
         ${reviewExtraction.id}, 'runtime-review-boundary-candidate',
-        ${ownershipAdmin.json({
-          contractVersion: 1,
-          anomalyCodes: ["OCR_REVIEW_REQUIRED"],
-          candidate: candidatePayload,
-          disposition: "review-required",
-        })},
+        ${ownershipAdmin.json(reviewCandidateEnvelope)},
         92, 'pending', '["OCR_REVIEW_REQUIRED"]'::jsonb
       )
       returning id

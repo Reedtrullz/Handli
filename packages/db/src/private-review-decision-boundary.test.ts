@@ -214,5 +214,8 @@ describe("private review database decision boundary", () => {
     expect(proof).toContain("review role must not use review sequences directly");
     expect(proof).toContain("forged exact approval must be rejected by the decision boundary");
     expect(proof).toContain("review role must not invoke non-allowlisted functions");
+    expect(proof).toContain("const reviewCandidateEnvelope = {");
+    expect(proof).toContain('publicationRoute: "human-review-required"');
+    expect(proof).toContain("ownershipAdmin.json(reviewCandidateEnvelope)");
   });
 });
