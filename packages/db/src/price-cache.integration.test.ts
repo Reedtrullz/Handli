@@ -125,6 +125,16 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
   let connection: DatabaseConnection;
   let cache: PostgresPriceCache;
 
+  async function evidenceReaderAtDatabaseNow(): Promise<PostgresEvidencePriceReader> {
+    const [clock] = await connection.sql`
+      select clock_timestamp() as snapshot_at
+    `;
+    return new PostgresEvidencePriceReader(
+      connection.db,
+      () => databaseDate(clock?.snapshot_at),
+    );
+  }
+
   beforeAll(async () => {
     if (!process.env.DATABASE_URL) {
       throw new Error("DATABASE_URL is required when RUN_DB_INTEGRATION=1");
@@ -570,7 +580,8 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
         )
       `;
 
-      await expect(reader.getMany([eligibleEan, quarantined.ean])).resolves.toEqual([
+      const approvedReader = await evidenceReaderAtDatabaseNow();
+      await expect(approvedReader.getMany([eligibleEan, quarantined.ean])).resolves.toEqual([
         {
           amountOre: 2490,
           chain: "extra",
@@ -580,7 +591,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
         },
       ]);
       await expect(
-        reader.getMany([
+        approvedReader.getMany([
           failedRunEan,
           runningRunEan,
           futureRunEan,
@@ -643,7 +654,9 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
           () => identifierSnapshotAt,
         ).getMany([mutableIdentifierEan]),
       ).resolves.toEqual([]);
-      await expect(reader.getMany([mutableIdentifierEan])).resolves.toHaveLength(1);
+      await expect(
+        (await evidenceReaderAtDatabaseNow()).getMany([mutableIdentifierEan]),
+      ).resolves.toHaveLength(1);
 
       const [mutableProduct] = await connection.sql`
         select product_id
@@ -668,7 +681,9 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
           () => productSnapshotAt,
         ).getMany([mutableProductEan]),
       ).resolves.toEqual([]);
-      await expect(reader.getMany([mutableProductEan])).resolves.toHaveLength(1);
+      await expect(
+        (await evidenceReaderAtDatabaseNow()).getMany([mutableProductEan]),
+      ).resolves.toHaveLength(1);
 
       await connection.sql`
         update geographic_scopes set status = 'retired'
@@ -688,7 +703,9 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
           () => scopeSnapshotAt,
         ).getMany([mutableScopeEan]),
       ).resolves.toEqual([]);
-      await expect(reader.getMany([mutableScopeEan])).resolves.toHaveLength(1);
+      await expect(
+        (await evidenceReaderAtDatabaseNow()).getMany([mutableScopeEan]),
+      ).resolves.toHaveLength(1);
 
       await connection.sql`
         update data_sources set runtime_state = 'blocked' where id = 'kassalapp'
@@ -707,7 +724,9 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
           () => sourceSnapshotAt,
         ).getMany([eligibleEan]),
       ).resolves.toEqual([]);
-      await expect(reader.getMany([eligibleEan])).resolves.toHaveLength(1);
+      await expect(
+        (await evidenceReaderAtDatabaseNow()).getMany([eligibleEan]),
+      ).resolves.toHaveLength(1);
 
       await connection.sql`
         insert into source_permissions (
@@ -718,7 +737,9 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
           ${`reader-revoked-${integrationNonce}`}
         )
       `;
-      await expect(reader.getMany([eligibleEan])).resolves.toEqual([]);
+      await expect(
+        (await evidenceReaderAtDatabaseNow()).getMany([eligibleEan]),
+      ).resolves.toEqual([]);
     } finally {
       await connection.sql`
         update data_sources
