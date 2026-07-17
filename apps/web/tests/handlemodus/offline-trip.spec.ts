@@ -260,7 +260,6 @@ test("starts a strict trip and reloads the checklist fully offline", async ({ co
     const planDeltaExplanations = deriveExactProductPlanDeltaExplanationsV1({
       evidence: response.evidence,
       generatedAt: response.generatedAt,
-      geographicDirectoryAttestation: response.geographicDirectoryAttestation,
       marketContext: response.marketContext,
       plans: response.plans,
       travelRoutes,
