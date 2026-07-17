@@ -29,7 +29,7 @@ import {
 
 const draftPath = resolve(
   repositoryRoot,
-  "docs/evidence/v1/v1-source-neutral-ci-remediation-2026-07-17/release-candidate.v1.json",
+  "docs/evidence/v1/v1-source-neutral-pg-remediation-2026-07-17/release-candidate.v1.json",
 );
 const draft = JSON.parse(readFileSync(draftPath, "utf8"));
 
@@ -486,7 +486,7 @@ test("the repository draft binds current files while remaining explicitly blocke
     worktreeDirty: true,
   });
   assert.deepEqual(result, {
-    candidateId: "v1-source-neutral-ci-remediation-2026-07-17",
+    candidateId: "v1-source-neutral-pg-remediation-2026-07-17",
     mode: "draft_unverified",
     releaseDecision: "blocked",
   });
@@ -592,7 +592,7 @@ test("even a structurally complete fixture cannot pass as a promotion", () => {
 test("promotion workflow mode rejects the blocked draft before verification", () => {
   assert.throws(
     () => verifyManifestFile(
-      "docs/evidence/v1/v1-source-neutral-ci-remediation-2026-07-17/release-candidate.v1.json",
+      "docs/evidence/v1/v1-source-neutral-pg-remediation-2026-07-17/release-candidate.v1.json",
       repositoryRoot,
       { requirePromotion: true },
     ),
