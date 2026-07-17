@@ -1,0 +1,521 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://handle.reidar.tech/schemas/benchmark-basket-report.v1.schema.json",
+  "title": "Handleplan benchmark basket acceptance report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "contractVersion",
+    "protocolVersion",
+    "kind",
+    "reportId",
+    "generatedAt",
+    "bindings",
+    "candidate",
+    "candidateDocumentDigest",
+    "runnerAttestationDigest",
+    "status",
+    "acceptancePassed",
+    "summary",
+    "issues",
+    "manualReconciliation",
+    "runs"
+  ],
+  "properties": {
+    "$schema": { "const": "./benchmark-basket-report.v1.schema.json" },
+    "contractVersion": { "const": "2.0.0" },
+    "protocolVersion": { "const": "2.0.0" },
+    "kind": { "const": "handleplan-benchmark-basket-report" },
+    "reportId": {
+      "type": "string",
+      "pattern": "^basket-report:sha256:[a-f0-9]{64}$"
+    },
+    "generatedAt": { "$ref": "#/$defs/timestamp" },
+    "bindings": { "$ref": "#/$defs/bindings" },
+    "candidate": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "commitSha", "imageDigest"],
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^candidate:sha256:[a-f0-9]{64}$"
+            },
+            "commitSha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+            "imageDigest": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      ]
+    },
+    "candidateDocumentDigest": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/sha256" }
+      ]
+    },
+    "runnerAttestationDigest": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/sha256" }
+      ]
+    },
+    "status": { "enum": ["accepted", "blocked", "failed", "pending"] },
+    "acceptancePassed": { "type": "boolean" },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expectedRuns", "passedRuns", "protocolPassedRuns", "blockedRuns", "failedRuns", "pendingRuns"],
+      "properties": {
+        "expectedRuns": { "const": 60 },
+        "passedRuns": { "type": "integer", "minimum": 0, "maximum": 60 },
+        "protocolPassedRuns": { "type": "integer", "minimum": 0, "maximum": 60 },
+        "blockedRuns": { "type": "integer", "minimum": 0, "maximum": 60 },
+        "failedRuns": { "type": "integer", "minimum": 0, "maximum": 60 },
+        "pendingRuns": { "type": "integer", "minimum": 0, "maximum": 60 }
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/issue" }
+    },
+    "manualReconciliation": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "regionId": { "const": "no-0301-oslo" } },
+            "required": ["regionId"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "regionId": { "const": "no-4601-bergen" } },
+            "required": ["regionId"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "regionId": { "const": "no-5001-trondheim" } },
+            "required": ["regionId"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["regionId", "required", "accepted", "passed"],
+        "properties": {
+          "regionId": { "$ref": "#/$defs/regionId" },
+          "required": { "const": 5 },
+          "accepted": { "type": "integer", "minimum": 0, "maximum": 20 },
+          "passed": { "type": "boolean" }
+        }
+      }
+    },
+    "runs": {
+      "type": "array",
+      "minItems": 60,
+      "maxItems": 60,
+      "uniqueItems": true,
+      "prefixItems": [
+        { "$ref": "#/$defs/no0301s01" }, { "$ref": "#/$defs/no0301s02" },
+        { "$ref": "#/$defs/no0301s03" }, { "$ref": "#/$defs/no0301s04" },
+        { "$ref": "#/$defs/no0301s05" }, { "$ref": "#/$defs/no0301s06" },
+        { "$ref": "#/$defs/no0301s07" }, { "$ref": "#/$defs/no0301s08" },
+        { "$ref": "#/$defs/no0301s09" }, { "$ref": "#/$defs/no0301s10" },
+        { "$ref": "#/$defs/no0301s11" }, { "$ref": "#/$defs/no0301s12" },
+        { "$ref": "#/$defs/no0301s13" }, { "$ref": "#/$defs/no0301s14" },
+        { "$ref": "#/$defs/no0301s15" }, { "$ref": "#/$defs/no0301s16" },
+        { "$ref": "#/$defs/no0301s17" }, { "$ref": "#/$defs/no0301s18" },
+        { "$ref": "#/$defs/no0301s19" }, { "$ref": "#/$defs/no0301s20" },
+        { "$ref": "#/$defs/no4601s01" }, { "$ref": "#/$defs/no4601s02" },
+        { "$ref": "#/$defs/no4601s03" }, { "$ref": "#/$defs/no4601s04" },
+        { "$ref": "#/$defs/no4601s05" }, { "$ref": "#/$defs/no4601s06" },
+        { "$ref": "#/$defs/no4601s07" }, { "$ref": "#/$defs/no4601s08" },
+        { "$ref": "#/$defs/no4601s09" }, { "$ref": "#/$defs/no4601s10" },
+        { "$ref": "#/$defs/no4601s11" }, { "$ref": "#/$defs/no4601s12" },
+        { "$ref": "#/$defs/no4601s13" }, { "$ref": "#/$defs/no4601s14" },
+        { "$ref": "#/$defs/no4601s15" }, { "$ref": "#/$defs/no4601s16" },
+        { "$ref": "#/$defs/no4601s17" }, { "$ref": "#/$defs/no4601s18" },
+        { "$ref": "#/$defs/no4601s19" }, { "$ref": "#/$defs/no4601s20" },
+        { "$ref": "#/$defs/no5001s01" }, { "$ref": "#/$defs/no5001s02" },
+        { "$ref": "#/$defs/no5001s03" }, { "$ref": "#/$defs/no5001s04" },
+        { "$ref": "#/$defs/no5001s05" }, { "$ref": "#/$defs/no5001s06" },
+        { "$ref": "#/$defs/no5001s07" }, { "$ref": "#/$defs/no5001s08" },
+        { "$ref": "#/$defs/no5001s09" }, { "$ref": "#/$defs/no5001s10" },
+        { "$ref": "#/$defs/no5001s11" }, { "$ref": "#/$defs/no5001s12" },
+        { "$ref": "#/$defs/no5001s13" }, { "$ref": "#/$defs/no5001s14" },
+        { "$ref": "#/$defs/no5001s15" }, { "$ref": "#/$defs/no5001s16" },
+        { "$ref": "#/$defs/no5001s17" }, { "$ref": "#/$defs/no5001s18" },
+        { "$ref": "#/$defs/no5001s19" }, { "$ref": "#/$defs/no5001s20" }
+      ],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "runId",
+          "regionId",
+          "scenarioId",
+          "status",
+          "verifiedFocus",
+          "replayBindingDigest",
+          "issues"
+        ],
+        "properties": {
+          "runId": { "$ref": "#/$defs/identifier" },
+          "regionId": { "$ref": "#/$defs/regionId" },
+          "scenarioId": { "$ref": "#/$defs/identifier" },
+          "status": { "enum": ["passed", "blocked", "failed", "pending"] },
+          "verifiedFocus": {
+            "type": "array",
+            "maxItems": 50,
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/acceptanceFocus" }
+          },
+          "replayBindingDigest": {
+            "oneOf": [
+              { "type": "null" },
+              { "$ref": "#/$defs/sha256" }
+            ]
+          },
+          "issues": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/issueCode" }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "accepted" } }
+      },
+      "then": {
+        "properties": {
+          "acceptancePassed": { "const": true },
+          "candidate": { "type": "object" },
+          "candidateDocumentDigest": { "$ref": "#/$defs/sha256" },
+          "runnerAttestationDigest": { "$ref": "#/$defs/sha256" },
+          "summary": {
+            "type": "object",
+            "properties": {
+              "passedRuns": { "const": 60 },
+              "protocolPassedRuns": { "const": 60 },
+              "blockedRuns": { "const": 0 },
+              "failedRuns": { "const": 0 },
+              "pendingRuns": { "const": 0 }
+            }
+          },
+          "issues": { "type": "array", "maxItems": 0 },
+          "manualReconciliation": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "accepted": { "type": "integer", "minimum": 5 },
+                "passed": { "const": true }
+              }
+            }
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "status": { "const": "passed" },
+                "verifiedFocus": { "type": "array", "minItems": 1 },
+                "replayBindingDigest": { "$ref": "#/$defs/sha256" },
+                "issues": { "type": "array", "maxItems": 0 }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "acceptancePassed": { "const": false }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "acceptancePassed": { "const": true } }
+      },
+      "then": {
+        "properties": { "status": { "const": "accepted" } }
+      }
+    }
+  ],
+  "$defs": {
+    "acceptanceFocus": {
+      "enum": [
+        "category_coverage",
+        "complete_plan",
+        "complete_quantities",
+        "constraint_enforcement",
+        "coverage_unknowns",
+        "cross_chain_coverage",
+        "deposit_disclosure",
+        "dietary_constraint",
+        "flexible_matching",
+        "fresh_and_shelf_stable",
+        "fresh_vs_frozen_substitution",
+        "frontier_endpoints",
+        "frozen_constraint",
+        "generic_family_matching",
+        "historical_vs_official",
+        "ineligible_evidence",
+        "known_not_carried_evidence",
+        "large_required_quantity",
+        "maximum_three_stores",
+        "member_eligibility",
+        "mixed_units",
+        "multi_store_frontier",
+        "multibuy_remainder",
+        "no_silent_substitution",
+        "non_food_categories",
+        "nondominated_frontier",
+        "offer_conditions",
+        "offer_expiry",
+        "ordinary_price_coverage",
+        "package_count",
+        "package_rounding",
+        "package_size_tradeoff",
+        "package_surplus",
+        "performance",
+        "piece_and_volume_units",
+        "piece_and_weight_units",
+        "quantity_fulfilment",
+        "review_required_matches",
+        "reviewed_families",
+        "savings_context",
+        "savings_endpoint",
+        "single_store_plan",
+        "substitution_explanation",
+        "substitution_safety",
+        "unit_price",
+        "variable_weight_disclosure",
+        "weight_normalization",
+        "weight_units",
+        "whole_packages"
+      ]
+    },
+    "region0301": {
+      "type": "object",
+      "properties": {
+        "runId": { "type": "string", "pattern": "^no-0301-oslo-" },
+        "regionId": { "const": "no-0301-oslo" }
+      }
+    },
+    "region4601": {
+      "type": "object",
+      "properties": {
+        "runId": { "type": "string", "pattern": "^no-4601-bergen-" },
+        "regionId": { "const": "no-4601-bergen" }
+      }
+    },
+    "region5001": {
+      "type": "object",
+      "properties": {
+        "runId": { "type": "string", "pattern": "^no-5001-trondheim-" },
+        "regionId": { "const": "no-5001-trondheim" }
+      }
+    },
+    "scenario01": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity01" }, { "$ref": "#/$defs/passedFocus01" }] },
+    "scenario02": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity02" }, { "$ref": "#/$defs/passedFocus02" }] },
+    "scenario03": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity03" }, { "$ref": "#/$defs/passedFocus03" }] },
+    "scenario04": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity04" }, { "$ref": "#/$defs/passedFocus04" }] },
+    "scenario05": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity05" }, { "$ref": "#/$defs/passedFocus05" }] },
+    "scenario06": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity06" }, { "$ref": "#/$defs/passedFocus06" }] },
+    "scenario07": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity07" }, { "$ref": "#/$defs/passedFocus07" }] },
+    "scenario08": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity08" }, { "$ref": "#/$defs/passedFocus08" }] },
+    "scenario09": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity09" }, { "$ref": "#/$defs/passedFocus09" }] },
+    "scenario10": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity10" }, { "$ref": "#/$defs/passedFocus10" }] },
+    "scenario11": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity11" }, { "$ref": "#/$defs/passedFocus11" }] },
+    "scenario12": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity12" }, { "$ref": "#/$defs/passedFocus12" }] },
+    "scenario13": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity13" }, { "$ref": "#/$defs/passedFocus13" }] },
+    "scenario14": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity14" }, { "$ref": "#/$defs/passedFocus14" }] },
+    "scenario15": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity15" }, { "$ref": "#/$defs/passedFocus15" }] },
+    "scenario16": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity16" }, { "$ref": "#/$defs/passedFocus16" }] },
+    "scenario17": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity17" }, { "$ref": "#/$defs/passedFocus17" }] },
+    "scenario18": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity18" }, { "$ref": "#/$defs/passedFocus18" }] },
+    "scenario19": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity19" }, { "$ref": "#/$defs/passedFocus19" }] },
+    "scenario20": { "allOf": [{ "$ref": "#/$defs/scenarioIdentity20" }, { "$ref": "#/$defs/passedFocus20" }] },
+    "scenarioIdentity01": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s01$" }, "scenarioId": { "const": "s01-everyday-basics" } } },
+    "scenarioIdentity02": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s02$" }, "scenarioId": { "const": "s02-breakfast" } } },
+    "scenarioIdentity03": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s03$" }, "scenarioId": { "const": "s03-pasta-dinner" } } },
+    "scenarioIdentity04": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s04$" }, "scenarioId": { "const": "s04-taco-night" } } },
+    "scenarioIdentity05": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s05$" }, "scenarioId": { "const": "s05-fish-dinner" } } },
+    "scenarioIdentity06": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s06$" }, "scenarioId": { "const": "s06-vegetarian-curry" } } },
+    "scenarioIdentity07": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s07$" }, "scenarioId": { "const": "s07-packed-lunches" } } },
+    "scenarioIdentity08": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s08$" }, "scenarioId": { "const": "s08-household-cleaning" } } },
+    "scenarioIdentity09": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s09$" }, "scenarioId": { "const": "s09-personal-care" } } },
+    "scenarioIdentity10": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s10$" }, "scenarioId": { "const": "s10-baking" } } },
+    "scenarioIdentity11": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s11$" }, "scenarioId": { "const": "s11-protein-restock" } } },
+    "scenarioIdentity12": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s12$" }, "scenarioId": { "const": "s12-fresh-produce" } } },
+    "scenarioIdentity13": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s13$" }, "scenarioId": { "const": "s13-pantry-restock" } } },
+    "scenarioIdentity14": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s14$" }, "scenarioId": { "const": "s14-freezer-restock" } } },
+    "scenarioIdentity15": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s15$" }, "scenarioId": { "const": "s15-dairy-free" } } },
+    "scenarioIdentity16": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s16$" }, "scenarioId": { "const": "s16-gluten-free" } } },
+    "scenarioIdentity17": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s17$" }, "scenarioId": { "const": "s17-picnic-snacks" } } },
+    "scenarioIdentity18": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s18$" }, "scenarioId": { "const": "s18-weekend-dinner" } } },
+    "scenarioIdentity19": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s19$" }, "scenarioId": { "const": "s19-compact-essentials" } } },
+    "scenarioIdentity20": { "type": "object", "properties": { "runId": { "type": "string", "pattern": "-s20$" }, "scenarioId": { "const": "s20-large-weekly" } } },
+    "passedFocus01": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["complete_plan", "ordinary_price_coverage", "whole_packages"] } } } },
+    "passedFocus02": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["cross_chain_coverage", "flexible_matching", "mixed_units"] } } } },
+    "passedFocus03": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["complete_plan", "package_surplus", "substitution_explanation"] } } } },
+    "passedFocus04": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["multibuy_remainder", "offer_conditions", "package_count"] } } } },
+    "passedFocus05": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["coverage_unknowns", "fresh_vs_frozen_substitution", "weight_units"] } } } },
+    "passedFocus06": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["dietary_constraint", "generic_family_matching", "package_surplus"] } } } },
+    "passedFocus07": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["complete_plan", "quantity_fulfilment", "reviewed_families"] } } } },
+    "passedFocus08": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["non_food_categories", "offer_conditions", "piece_and_volume_units"] } } } },
+    "passedFocus09": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["category_coverage", "member_eligibility", "package_rounding"] } } } },
+    "passedFocus10": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["large_required_quantity", "ordinary_price_coverage", "whole_packages"] } } } },
+    "passedFocus11": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["fresh_and_shelf_stable", "large_required_quantity", "substitution_safety"] } } } },
+    "passedFocus12": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["known_not_carried_evidence", "variable_weight_disclosure", "weight_normalization"] } } } },
+    "passedFocus13": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["multi_store_frontier", "package_size_tradeoff", "unit_price"] } } } },
+    "passedFocus14": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["frozen_constraint", "offer_expiry", "piece_and_weight_units"] } } } },
+    "passedFocus15": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["constraint_enforcement", "coverage_unknowns", "no_silent_substitution"] } } } },
+    "passedFocus16": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["constraint_enforcement", "ineligible_evidence", "review_required_matches"] } } } },
+    "passedFocus17": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["deposit_disclosure", "multibuy_remainder", "package_count"] } } } },
+    "passedFocus18": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["historical_vs_official", "savings_context", "substitution_explanation"] } } } },
+    "passedFocus19": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["frontier_endpoints", "savings_endpoint", "single_store_plan"] } } } },
+    "passedFocus20": { "if": { "$ref": "#/$defs/isPassed" }, "then": { "type": "object", "properties": { "verifiedFocus": { "const": ["complete_quantities", "maximum_three_stores", "nondominated_frontier", "performance"] } } } },
+    "isPassed": {
+      "type": "object",
+      "properties": { "status": { "const": "passed" } },
+      "required": ["status"]
+    },
+    "no0301s01": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario01" }] },
+    "no0301s02": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario02" }] },
+    "no0301s03": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario03" }] },
+    "no0301s04": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario04" }] },
+    "no0301s05": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario05" }] },
+    "no0301s06": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario06" }] },
+    "no0301s07": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario07" }] },
+    "no0301s08": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario08" }] },
+    "no0301s09": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario09" }] },
+    "no0301s10": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario10" }] },
+    "no0301s11": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario11" }] },
+    "no0301s12": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario12" }] },
+    "no0301s13": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario13" }] },
+    "no0301s14": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario14" }] },
+    "no0301s15": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario15" }] },
+    "no0301s16": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario16" }] },
+    "no0301s17": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario17" }] },
+    "no0301s18": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario18" }] },
+    "no0301s19": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario19" }] },
+    "no0301s20": { "allOf": [{ "$ref": "#/$defs/region0301" }, { "$ref": "#/$defs/scenario20" }] },
+    "no4601s01": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario01" }] },
+    "no4601s02": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario02" }] },
+    "no4601s03": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario03" }] },
+    "no4601s04": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario04" }] },
+    "no4601s05": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario05" }] },
+    "no4601s06": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario06" }] },
+    "no4601s07": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario07" }] },
+    "no4601s08": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario08" }] },
+    "no4601s09": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario09" }] },
+    "no4601s10": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario10" }] },
+    "no4601s11": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario11" }] },
+    "no4601s12": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario12" }] },
+    "no4601s13": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario13" }] },
+    "no4601s14": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario14" }] },
+    "no4601s15": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario15" }] },
+    "no4601s16": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario16" }] },
+    "no4601s17": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario17" }] },
+    "no4601s18": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario18" }] },
+    "no4601s19": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario19" }] },
+    "no4601s20": { "allOf": [{ "$ref": "#/$defs/region4601" }, { "$ref": "#/$defs/scenario20" }] },
+    "no5001s01": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario01" }] },
+    "no5001s02": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario02" }] },
+    "no5001s03": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario03" }] },
+    "no5001s04": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario04" }] },
+    "no5001s05": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario05" }] },
+    "no5001s06": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario06" }] },
+    "no5001s07": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario07" }] },
+    "no5001s08": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario08" }] },
+    "no5001s09": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario09" }] },
+    "no5001s10": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario10" }] },
+    "no5001s11": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario11" }] },
+    "no5001s12": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario12" }] },
+    "no5001s13": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario13" }] },
+    "no5001s14": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario14" }] },
+    "no5001s15": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario15" }] },
+    "no5001s16": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario16" }] },
+    "no5001s17": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario17" }] },
+    "no5001s18": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario18" }] },
+    "no5001s19": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario19" }] },
+    "no5001s20": { "allOf": [{ "$ref": "#/$defs/region5001" }, { "$ref": "#/$defs/scenario20" }] },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "regionId": {
+      "type": "string",
+      "pattern": "^no-[0-9]{4}-[a-z0-9-]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "corpusVersion",
+        "corpusDigest",
+        "sourceRegistryVersion",
+        "sourceRegistryDigest",
+        "launchCoverageVersion",
+        "launchCoverageDigest"
+      ],
+      "properties": {
+        "corpusVersion": { "const": "1.0.0" },
+        "corpusDigest": { "$ref": "#/$defs/sha256" },
+        "sourceRegistryVersion": { "const": "1.0.0" },
+        "sourceRegistryDigest": { "$ref": "#/$defs/sha256" },
+        "launchCoverageVersion": { "const": "1.0.0" },
+        "launchCoverageDigest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "issueCode": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity"],
+      "properties": {
+        "code": { "$ref": "#/$defs/issueCode" },
+        "severity": { "enum": ["blocked", "failed", "pending"] },
+        "regionId": { "$ref": "#/$defs/regionId" },
+        "runId": { "$ref": "#/$defs/identifier" }
+      }
+    }
+  }
+}

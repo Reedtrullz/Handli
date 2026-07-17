@@ -127,7 +127,8 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
 
   async function evidenceReaderAtDatabaseNow(): Promise<PostgresEvidencePriceReader> {
     const [clock] = await connection.sql`
-      select clock_timestamp() as snapshot_at
+      select date_trunc('milliseconds', clock_timestamp()) + interval '1 millisecond'
+        as snapshot_at
     `;
     return new PostgresEvidencePriceReader(
       connection.db,
@@ -567,7 +568,9 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
           ${`reader-without-ordinary-price-${integrationNonce}`}
         )
       `;
-      await expect(reader.getMany([eligibleEan])).resolves.toEqual([]);
+      await expect(
+        (await evidenceReaderAtDatabaseNow()).getMany([eligibleEan]),
+      ).resolves.toEqual([]);
 
       const approvedAt = new Date(Date.now() - 100).toISOString();
       await connection.sql`

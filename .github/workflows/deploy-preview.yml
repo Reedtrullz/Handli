@@ -4,9 +4,9 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
-  workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -16,25 +16,112 @@ concurrency:
 jobs:
   deploy:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'main')
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-24.04
     # The worker readback allows one bounded 55-minute cycle, with margin for
-    # image build/pull, migrations, verification, and a possible rollback.
+    # image transfer/load, migrations, verification, and a possible rollback.
     timeout-minutes: 120
     environment:
       name: preview
       url: https://handle.reidar.tech
     env:
-      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      CI_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+      CI_RUN_ID: ${{ github.event.workflow_run.id }}
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
 
     steps:
       - name: Check out the exact verified revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ env.DEPLOY_SHA }}
+
+      - name: Download image bundle from the exact successful CI run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: handleplan-ci-image-${{ env.DEPLOY_SHA }}-attempt-${{ env.CI_RUN_ATTEMPT }}
+          path: deployment-artifact
+          repository: ${{ github.repository }}
+          run-id: ${{ env.CI_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Verify the CI image bundle before VPS transfer
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CI_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+          git diff --quiet
+          git diff --cached --quiet
+
+          artifact_dir=deployment-artifact
+          manifest="$artifact_dir/handleplan-image-bundle.v1"
+          image_archive="$artifact_dir/handleplan-image.docker.tar"
+          source_archive="$artifact_dir/handleplan-source.tar"
+          provenance="$artifact_dir/handleplan.provenance.json"
+          sbom="$artifact_dir/handleplan.spdx.json"
+          test "$(find "$artifact_dir" -mindepth 1 -maxdepth 1 -printf x | wc -c)" -eq 5
+          for artifact in "$manifest" "$image_archive" "$source_archive" "$provenance" "$sbom"; do
+            test -f "$artifact"
+            test ! -L "$artifact"
+          done
+          test "$(wc -l < "$manifest" | tr -d '[:space:]')" -eq 10
+          test "$(sed -n '1p' "$manifest")" = 'format=handleplan-ci-image-bundle-v1'
+          test "$(sed -n '2p' "$manifest")" = "revision=$DEPLOY_SHA"
+          test "$(sed -n '3p' "$manifest")" = "image_reference=handleplan:$DEPLOY_SHA"
+          manifest_image_id=$(sed -n '4p' "$manifest")
+          manifest_image_archive_sha256=$(sed -n '5p' "$manifest")
+          manifest_source_archive_sha256=$(sed -n '6p' "$manifest")
+          manifest_provenance_sha256=$(sed -n '7p' "$manifest")
+          manifest_sbom_sha256=$(sed -n '8p' "$manifest")
+          [[ "$manifest_image_id" == image_id=* ]]
+          [[ "$manifest_image_archive_sha256" == image_archive_sha256=* ]]
+          [[ "$manifest_source_archive_sha256" == source_archive_sha256=* ]]
+          [[ "$manifest_provenance_sha256" == provenance_sha256=* ]]
+          [[ "$manifest_sbom_sha256" == sbom_sha256=* ]]
+          expected_image_id=${manifest_image_id#image_id=}
+          image_archive_sha256=${manifest_image_archive_sha256#image_archive_sha256=}
+          source_archive_sha256=${manifest_source_archive_sha256#source_archive_sha256=}
+          provenance_sha256=${manifest_provenance_sha256#provenance_sha256=}
+          sbom_sha256=${manifest_sbom_sha256#sbom_sha256=}
+          test "$(sed -n '9p' "$manifest")" = "ci_run_id=$CI_RUN_ID"
+          test "$(sed -n '10p' "$manifest")" = "ci_run_attempt=$CI_RUN_ATTEMPT"
+          [[ "$expected_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          for digest in "$image_archive_sha256" "$source_archive_sha256" "$provenance_sha256" "$sbom_sha256"; do
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+          done
+          test "$(sha256sum "$image_archive" | awk '{print $1}')" = "$image_archive_sha256"
+          test "$(sha256sum "$source_archive" | awk '{print $1}')" = "$source_archive_sha256"
+          test "$(sha256sum "$provenance" | awk '{print $1}')" = "$provenance_sha256"
+          test "$(sha256sum "$sbom" | awk '{print $1}')" = "$sbom_sha256"
+          test "$(wc -c < "$image_archive" | tr -d '[:space:]')" -gt 0
+          test "$(wc -c < "$image_archive" | tr -d '[:space:]')" -le 2147483648
+          test "$(wc -c < "$source_archive" | tr -d '[:space:]')" -gt 0
+          test "$(wc -c < "$source_archive" | tr -d '[:space:]')" -le 134217728
+          runner_source_archive="$RUNNER_TEMP/handleplan-source-$DEPLOY_SHA.tar"
+          git archive --format=tar --output="$runner_source_archive" "$DEPLOY_SHA"
+          test "$(sha256sum "$runner_source_archive" | awk '{print $1}')" = "$source_archive_sha256"
+          rm -f "$runner_source_archive"
+          tar -tf "$image_archive" >/dev/null
+          tar -tf "$source_archive" >/dev/null
+          jq -e --arg revision "$DEPLOY_SHA" --arg archive "$image_archive_sha256" '
+            ._type == "https://in-toto.io/Statement/v1" and
+            .predicateType == "https://slsa.dev/provenance/v1" and
+            .predicate.buildDefinition.externalParameters.commitSha == $revision and
+            .subject == [{name: "handleplan-image.docker.tar", digest: {sha256: $archive}}]
+          ' "$provenance" >/dev/null
+
+          docker image load --input "$image_archive" >/dev/null
+          test "$(docker image inspect --format '{{.Id}}' "handleplan:$DEPLOY_SHA")" = "$expected_image_id"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "handleplan:$DEPLOY_SHA")" = "$DEPLOY_SHA"
+          bundle_manifest_sha256=$(sha256sum "$manifest" | awk '{print $1}')
+          [[ "$bundle_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]
+          printf 'EXPECTED_IMAGE_ID=%s\n' "$expected_image_id" >> "$GITHUB_ENV"
+          printf 'EXPECTED_BUNDLE_MANIFEST_SHA256=%s\n' "$bundle_manifest_sha256" >> "$GITHUB_ENV"
 
       - name: Configure pinned VPS access
         shell: bash
@@ -52,25 +139,39 @@ jobs:
           chmod 600 ~/.ssh/known_hosts
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes deploy@198.23.137.16 true
 
-      - name: Build and deploy the verified commit on the VPS
+      - name: Transfer and deploy the exact CI image on the VPS
         shell: bash
         env:
           REMOTE_BUNDLE_ROOT: /opt/apps/handleplan/deploy-bundles
         run: |
           set -euo pipefail
           [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CI_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$EXPECTED_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_BUNDLE_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
           test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
           git diff --quiet
           git diff --cached --quiet
-          remote_bundle="$REMOTE_BUNDLE_ROOT/$DEPLOY_SHA"
+          remote_bundle="$REMOTE_BUNDLE_ROOT/$DEPLOY_SHA/$CI_RUN_ID-$CI_RUN_ATTEMPT/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            deploy@198.23.137.16 "install -d -m 700 '$remote_bundle'"
+            deploy@198.23.137.16 \
+            "test ! -e '$remote_bundle' && install -d -m 700 '$remote_bundle' '$remote_bundle/image' && test ! -L '$remote_bundle' && test ! -L '$remote_bundle/image'"
           scp -q -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
             deploy/deploy-on-vps.sh deploy/deployment-state.sh \
             "deploy@198.23.137.16:$remote_bundle/"
+          scp -q -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deployment-artifact/handleplan-image-bundle.v1 \
+            deployment-artifact/handleplan-image.docker.tar \
+            deployment-artifact/handleplan-source.tar \
+            deployment-artifact/handleplan.provenance.json \
+            deployment-artifact/handleplan.spdx.json \
+            "deploy@198.23.137.16:$remote_bundle/image/"
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
             deploy@198.23.137.16 \
-            "chmod 700 '$remote_bundle/deploy-on-vps.sh' && chmod 600 '$remote_bundle/deployment-state.sh' && '$remote_bundle/deploy-on-vps.sh' '$DEPLOY_SHA'"
+            "chmod 700 '$remote_bundle/deploy-on-vps.sh' && chmod 600 '$remote_bundle/deployment-state.sh' '$remote_bundle/image/'* && '$remote_bundle/deploy-on-vps.sh' '$DEPLOY_SHA' '$CI_RUN_ID' '$CI_RUN_ATTEMPT' '$EXPECTED_BUNDLE_MANIFEST_SHA256'"
 
       - name: Verify container and exact local health
         shell: bash
@@ -78,4 +179,4 @@ jobs:
           set -euo pipefail
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
             deploy@198.23.137.16 \
-            "test \"\$(cat /opt/apps/handleplan/state/current-deployment)\" = 'v1 $DEPLOY_SHA current' && test \"\$(cat /opt/apps/handleplan/state/current-revision)\" = '$DEPLOY_SHA' && curl --fail --silent --show-error http://127.0.0.1:3004/api/health | grep -F '\"commit\":\"$DEPLOY_SHA\"'"
+            "test \"\$(cat /opt/apps/handleplan/state/current-deployment)\" = 'v1 $DEPLOY_SHA current' && test \"\$(cat /opt/apps/handleplan/state/current-revision)\" = '$DEPLOY_SHA' && test \"\$(cat /opt/apps/handleplan/state/current-image-id)\" = '$EXPECTED_IMAGE_ID' && test \"\$(cat /opt/apps/handleplan/state/deployment-high-water)\" = '$DEPLOY_SHA' && test \"\$(cat /opt/apps/handleplan/state/verified-images/$DEPLOY_SHA)\" = 'v1 $DEPLOY_SHA $EXPECTED_IMAGE_ID' && test \"\$(docker image inspect --format '{{.Id}}' 'handleplan:$DEPLOY_SHA')\" = '$EXPECTED_IMAGE_ID' && curl --fail --silent --show-error http://127.0.0.1:3004/api/health | grep -F '\"commit\":\"$DEPLOY_SHA\"'"

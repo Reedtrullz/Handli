@@ -54,16 +54,45 @@
       "required": ["value", "unit"],
       "properties": {
         "value": { "type": "integer", "minimum": 1 },
-        "unit": { "enum": ["g", "ml", "piece"] }
+        "unit": { "enum": ["g", "ml", "piece", "package"] }
       }
+    },
+    "identity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "canonicalProductId"],
+          "properties": {
+            "kind": { "const": "exact-product" },
+            "canonicalProductId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+(?:[._:-][a-z0-9]+)*$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "familyId"],
+          "properties": {
+            "kind": { "const": "reviewed-family" },
+            "familyId": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+(?:[._:-][a-z0-9]+)*$"
+            }
+          }
+        }
+      ]
     },
     "item": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["needId", "query", "requiredAmount", "matchMode", "constraints"],
+      "required": ["needId", "query", "identity", "requiredAmount", "matchMode", "constraints"],
       "properties": {
         "needId": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
         "query": { "type": "string", "minLength": 2 },
+        "identity": { "$ref": "#/$defs/identity" },
         "requiredAmount": { "$ref": "#/$defs/amount" },
         "matchMode": { "enum": ["flexible", "constrained"] },
         "constraints": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }

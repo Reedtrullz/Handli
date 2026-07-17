@@ -61,6 +61,7 @@ describe("Kassalapp v1 source contracts", () => {
       expect.objectContaining({
         state: "accepted",
         record: expect.objectContaining({
+          categoryPath: [{ depth: 1, name: "Meieri", sourceCategoryId: "10" }],
           chainCodes: ["BUNNPRIS"],
           ean: "7038010000010",
           packageMeasure: { amount: 1000, unit: "ml" },
@@ -120,6 +121,63 @@ describe("Kassalapp v1 source contracts", () => {
     };
     expect(normalizeProductSourceResponse(missing, { now: NOW, retrievedAt: RETRIEVED_AT }))
       .toMatchObject({ state: "accepted", record: { packageMeasureState: "unknown-unit" } });
+  });
+
+  it("preserves unknown versus explicitly empty product category paths", () => {
+    const unknown = structuredClone(productResourceFixture);
+    unknown.data.category = null as unknown as typeof unknown.data.category;
+    const empty = structuredClone(productResourceFixture);
+    empty.data.category = [];
+
+    const unknownOutcome = normalizeProductSourceResponse(unknown, {
+      now: NOW,
+      retrievedAt: RETRIEVED_AT,
+    });
+    const emptyOutcome = normalizeProductSourceResponse(empty, {
+      now: NOW,
+      retrievedAt: RETRIEVED_AT,
+    });
+
+    expect(unknownOutcome).toMatchObject({ state: "accepted" });
+    expect(unknownOutcome.state === "accepted" && unknownOutcome.record).not.toHaveProperty(
+      "categoryPath",
+    );
+    expect(emptyOutcome).toMatchObject({
+      state: "accepted",
+      record: { categoryPath: [] },
+    });
+  });
+
+  it("deduplicates and sorts embedded category paths but quarantines conflicting identities", () => {
+    const canonical = structuredClone(productResourceFixture);
+    canonical.data.category = [
+      { depth: 2, id: 20, name: "Melk" },
+      { depth: 1, id: 10, name: "Meieri" },
+      { depth: 1, id: 10, name: "Meieri" },
+    ];
+    expect(normalizeProductSourceResponse(canonical, {
+      now: NOW,
+      retrievedAt: RETRIEVED_AT,
+    })).toMatchObject({
+      state: "accepted",
+      record: {
+        categoryPath: [
+          { depth: 1, name: "Meieri", sourceCategoryId: "10" },
+          { depth: 2, name: "Melk", sourceCategoryId: "20" },
+        ],
+      },
+    });
+
+    const conflict = structuredClone(canonical);
+    conflict.data.category![2]!.name = "Konflikt";
+    expect(normalizeProductSourceResponse(conflict, {
+      now: NOW,
+      retrievedAt: RETRIEVED_AT,
+    })).toMatchObject({
+      reason: "DUPLICATE_IDENTITY",
+      sourceRecordId: "117",
+      state: "quarantined",
+    });
   });
 
   it("normalizes a bounded product discovery page without public Product DTO loss", () => {
@@ -396,6 +454,7 @@ describe("Kassalapp v1 source contracts", () => {
             chainId: "bunnpris",
             latitude: 59.9271,
             longitude: 10.7342,
+            postalCode: "0452",
             sourceRecordId: "501",
           }),
         }),

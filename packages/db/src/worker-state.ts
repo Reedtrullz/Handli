@@ -1,16 +1,21 @@
 import { createHash } from "node:crypto";
 
-import { eq } from "drizzle-orm";
+import { and, desc, eq, isNull, lte } from "drizzle-orm";
 
 import type { HandleplanDatabase } from "./client";
-import { workerJobResults } from "./schema";
+import { sourceHealthSnapshots, workerJobResults } from "./schema";
 import type { IngestionFenceVerifier } from "./ingestion";
+import { deriveWorkerSourceHealthSnapshot } from "./source-health-writer";
 
 export const WORKER_JOB_STATE_KINDS = [
   "catalog-refresh",
   "benchmark-price-refresh",
   "physical-store-sync",
   "historical-observation-collection",
+  "official-offer-discovery",
+  "official-offer-fetch",
+  "official-offer-ingestion",
+  "official-offer-lifecycle-reconcile",
 ] as const;
 
 export const WORKER_JOB_STATE_STATUSES = [
@@ -222,6 +227,15 @@ function canonicalDatabaseTimestamp(input: unknown): string | undefined {
   return date.toISOString();
 }
 
+function canonicalNullableDatabaseDate(input: unknown, name: string): Date | null {
+  if (input === null || input === undefined) return null;
+  const value = input instanceof Date ? new Date(input) : new Date(String(input));
+  if (!Number.isFinite(value.getTime())) {
+    throw new TypeError(`PostgreSQL returned an invalid ${name}`);
+  }
+  return value;
+}
+
 export class PostgresWorkerJobStateRepository {
   private readonly verifyFence: IngestionFenceVerifier;
 
@@ -313,6 +327,67 @@ export class PostgresWorkerJobStateRepository {
           throw new WorkerJobStateConflictError(value.jobId);
         }
         result = { created: false };
+      }
+      if (signal?.aborted) throw cancelledError();
+
+      if (
+        value.status !== "cancelled"
+        // Phase-level discovery/fetch results are independently observable for
+        // lag, but neither phase alone proves the combined source-health
+        // progression asserted by official-offer-ingestion.
+        && value.jobKind !== "official-offer-discovery"
+        && value.jobKind !== "official-offer-fetch"
+        && value.jobKind !== "official-offer-lifecycle-reconcile"
+      ) {
+        const [previousHealth] = await transaction
+          .select({
+            lastCaptureSuccessAt: sourceHealthSnapshots.lastCaptureSuccessAt,
+            lastDiscoverySuccessAt: sourceHealthSnapshots.lastDiscoverySuccessAt,
+            lastPublishSuccessAt: sourceHealthSnapshots.lastPublishSuccessAt,
+            newestEligibleEvidenceAt: sourceHealthSnapshots.newestEligibleEvidenceAt,
+          })
+          .from(sourceHealthSnapshots)
+          .where(and(
+            eq(sourceHealthSnapshots.sourceId, value.sourceId),
+            isNull(sourceHealthSnapshots.geographicScopeId),
+            lte(sourceHealthSnapshots.recordedAt, value.completedAt),
+          ))
+          .orderBy(desc(sourceHealthSnapshots.recordedAt), desc(sourceHealthSnapshots.id))
+          .limit(1);
+        if (signal?.aborted) throw cancelledError();
+
+        const snapshot = deriveWorkerSourceHealthSnapshot({
+          completedAt: value.completedAt,
+          counts: value.counts,
+          jobId: value.jobId,
+          jobKind: value.jobKind,
+          sourceId: value.sourceId,
+          status: value.status,
+        }, previousHealth === undefined ? undefined : {
+          lastCaptureSuccessAt: canonicalNullableDatabaseDate(
+            previousHealth.lastCaptureSuccessAt,
+            "last capture success clock",
+          ),
+          lastDiscoverySuccessAt: canonicalNullableDatabaseDate(
+            previousHealth.lastDiscoverySuccessAt,
+            "last discovery success clock",
+          ),
+          lastPublishSuccessAt: canonicalNullableDatabaseDate(
+            previousHealth.lastPublishSuccessAt,
+            "last publish success clock",
+          ),
+          newestEligibleEvidenceAt: canonicalNullableDatabaseDate(
+            previousHealth.newestEligibleEvidenceAt,
+            "newest eligible evidence clock",
+          ),
+        });
+        if (snapshot === undefined) {
+          throw new Error("Non-cancelled worker result did not produce source health");
+        }
+        await transaction
+          .insert(sourceHealthSnapshots)
+          .values(snapshot)
+          .onConflictDoNothing();
       }
       if (signal?.aborted) throw cancelledError();
       await this.verifyFence(transaction, {

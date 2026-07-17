@@ -347,3 +347,31 @@ export function projectRepresentativesV2(
     .sort(compareNumber)
     .map((index) => ordered[index]!);
 }
+
+/**
+ * Canonical public plan projection for either the price-only or fully
+ * travel-backed frontier. Invalid or partial travel evidence never silently
+ * falls back to price-only in this strict helper.
+ */
+export function canonicalProjectedPlanResultsV2(
+  plans: readonly PlanResultV2[],
+  maximum: number,
+  travelEvidence?: readonly PlanTravelEvidence[],
+): PlanResultV2[] | undefined {
+  const attached = attachOptionalTravelEvidenceV2(plans, travelEvidence);
+  if (
+    attached.length !== plans.length
+    || (travelEvidence !== undefined && attached.some((candidate) => !hasTravel(candidate)))
+  ) {
+    return undefined;
+  }
+  const projected = projectRepresentativesV2(paretoFrontierV2(attached), maximum);
+  const stripped: PlanResultV2[] = [];
+  for (const candidate of projected) {
+    const { travel: _travel, ...plan } = candidate;
+    const parsed = planResultV2Schema.safeParse(plan);
+    if (!parsed.success) return undefined;
+    stripped.push(parsed.data);
+  }
+  return stripped;
+}

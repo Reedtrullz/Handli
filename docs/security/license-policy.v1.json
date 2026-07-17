@@ -1,0 +1,76 @@
+{
+  "contractVersion": 1,
+  "approvedLicenseExpressions": [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BlueOak-1.0.0",
+    "CC-BY-4.0",
+    "CC0-1.0",
+    "ISC",
+    "LGPL-3.0-or-later",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Python-2.0",
+    "Unlicense"
+  ],
+  "platformPackageRules": [
+    {
+      "names": ["@esbuild/darwin-arm64", "@esbuild/linux-x64"],
+      "versions": ["0.18.20", "0.25.12", "0.28.1"],
+      "approvedLicenseExpressions": ["MIT"]
+    },
+    {
+      "names": [
+        "@img/sharp-libvips-darwin-arm64",
+        "@img/sharp-libvips-linux-x64",
+        "@img/sharp-libvips-linuxmusl-x64"
+      ],
+      "versions": ["1.2.4"],
+      "approvedLicenseExpressions": ["LGPL-3.0-or-later"]
+    },
+    {
+      "names": [
+        "@img/sharp-darwin-arm64",
+        "@img/sharp-linux-x64",
+        "@img/sharp-linuxmusl-x64"
+      ],
+      "versions": ["0.34.5"],
+      "approvedLicenseExpressions": ["Apache-2.0"]
+    },
+    {
+      "names": [
+        "@next/swc-darwin-arm64",
+        "@next/swc-linux-x64-gnu",
+        "@next/swc-linux-x64-musl"
+      ],
+      "versions": ["16.2.10"],
+      "approvedLicenseExpressions": ["MIT"]
+    },
+    {
+      "names": [
+        "@rollup/rollup-darwin-arm64",
+        "@rollup/rollup-linux-x64-gnu",
+        "@rollup/rollup-linux-x64-musl"
+      ],
+      "versions": ["4.62.2"],
+      "approvedLicenseExpressions": ["MIT"]
+    },
+    {
+      "names": [
+        "@unrs/resolver-binding-darwin-arm64",
+        "@unrs/resolver-binding-linux-x64-gnu",
+        "@unrs/resolver-binding-linux-x64-musl"
+      ],
+      "versions": ["1.12.2"],
+      "approvedLicenseExpressions": ["MIT"]
+    },
+    {
+      "names": ["fsevents"],
+      "versions": ["2.3.2", "2.3.3"],
+      "approvedLicenseExpressions": ["MIT"]
+    }
+  ]
+}

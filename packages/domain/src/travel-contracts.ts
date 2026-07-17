@@ -54,6 +54,8 @@ export type LocationSearchRequest = z.infer<typeof locationSearchRequestSchema>;
 
 export const publicLocationCandidateSchema = z
   .object({
+    label: z.string().trim().min(2).max(160)
+      .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value), "Address labels cannot contain controls"),
     matchQuality: z.enum(["exact", "approximate"]),
     selectionToken: z.string().regex(/^location-choice:[A-Za-z0-9_-]{43}$/),
   })
@@ -82,6 +84,13 @@ export const locationSearchResponseSchema = z
         path: ["candidates"],
       });
     }
+    if (!hasUniqueStrings(candidates.map(({ label }) => label))) {
+      context.addIssue({
+        code: "custom",
+        message: "Location choice labels must be unique",
+        path: ["candidates"],
+      });
+    }
     const lifetimeMs = Date.parse(expiresAt) - Date.parse(generatedAt);
     if (lifetimeMs <= 0 || lifetimeMs > 5 * 60 * 1_000) {
       context.addIssue({
@@ -92,6 +101,34 @@ export const locationSearchResponseSchema = z
     }
   });
 export type LocationSearchResponse = z.infer<typeof locationSearchResponseSchema>;
+
+export const currentLocationRequestSchema = z
+  .object({
+    contractVersion: contractVersionSchema,
+    coordinate: travelCoordinateSchema,
+  })
+  .strict();
+export type CurrentLocationRequest = z.infer<typeof currentLocationRequestSchema>;
+
+export const currentLocationResponseSchema = z
+  .object({
+    contractVersion: contractVersionSchema,
+    expiresAt: canonicalTimestampSchema,
+    generatedAt: canonicalTimestampSchema,
+    selectionToken: z.string().regex(/^location-choice:[A-Za-z0-9_-]{43}$/),
+  })
+  .strict()
+  .superRefine(({ expiresAt, generatedAt }, context) => {
+    const lifetimeMs = Date.parse(expiresAt) - Date.parse(generatedAt);
+    if (lifetimeMs <= 0 || lifetimeMs > 5 * 60 * 1_000) {
+      context.addIssue({
+        code: "custom",
+        message: "Current-location tokens must expire within five minutes",
+        path: ["expiresAt"],
+      });
+    }
+  });
+export type CurrentLocationResponse = z.infer<typeof currentLocationResponseSchema>;
 
 export const routeMatrixCellSchema = z
   .object({
@@ -132,6 +169,7 @@ export const travelRouteAggregateSchema = z
     calculatedAt: canonicalTimestampSchema,
     distanceMeters: nonNegativeSafeIntegerSchema,
     durationSeconds: nonNegativeSafeIntegerSchema,
+    mode: travelModeSchema,
     providerSourceId: sourceIdSchema,
     routeFingerprint: identifierSchema,
   })

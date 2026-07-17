@@ -16,13 +16,19 @@ eller personvernkrav i en offentlig GitHub-sak.
 
 Handleplan er laget for anonym bruk uten konto i selve appen.
 
-- **På enheten:** handleliste og bekvemmelighetsvalg lagres i nettleserens
-  lokale lagring. En startet handletur og avkrysninger lagres i IndexedDB.
+- **På enheten:** handleliste, bekvemmelighetsvalg og hvilke medlemsprogrammer
+  brukeren selv har slått på, lagres i nettleserens lokale lagring. En startet
+  handletur og avkrysninger lagres i IndexedDB.
   Service worker-bufferen inneholder appskall og statiske filer, ikke API-svar.
   Du kan fjerne dette ved å tømme nettstedsdata i nettleseren.
 - **Ved planlegging og søk:** produktidentifikatorer, mengder, søketekst og
   nødvendige valg sendes til Handleplan-serveren og behandles for å svare.
-  Appen skal ikke lagre handlekurven eller søket varig på serveren, men full
+  Valgte medlemsprogram-ID-er sendes med planforespørselen og behandles
+  kortvarig for å avgjøre hvilke verifiserte medlemstilbud som kan brukes.
+  Denne funksjonen bruker ingen Handleplan-konto eller innlogging hos
+  medlemsprogramleverandøren, og den sender ikke medlemsinnlogging eller
+  innloggingsopplysninger til en slik leverandør. Appen skal ikke lagre
+  handlekurven, søket eller medlemsvalget varig på serveren, men full
   ende-til-ende dokumentasjon med sentineltester er ikke ferdig.
 - **Beskyttet alfa:** Cloudflare Access kan behandle innloggingsidentitet,
   informasjonskapsler, IP-adresse, tidspunkt, URL og enhets-/nettlesermetadata.
@@ -44,18 +50,23 @@ Handleplan er laget for anonym bruk uten konto i selve appen.
 
 ## Frivillig ruteberegning
 
-Ruteberegning er ikke aktivert. Hvis den innføres, skal den være frivillig og
-først starte etter et tydelig valg. Et startpunkt, en adresse, koordinater,
+Ruteberegning er ikke aktivert. Den tekniske grensen er valgt: Kartverkets
+adresse-API for oppslag og en selvbetjent Valhalla-tjeneste med OpenStreetMap-data
+for rutematriser. Hvis funksjonen aktiveres, skal den være frivillig og først
+starte etter et tydelig valg. Et startpunkt, en adresse, koordinater,
 posisjonsnavn eller startnær rutegeometri skal aldri skrives til lokal lagring,
 URL, informasjonskapsel, app-/proxylogg, analyse, varig buffer, database,
 monitorering eller sikkerhetskopi. Bare nødvendige koordinater skal behandles
 kortvarig i minnet og sendes til den valgte geokoder/rutetjenesten. Det
-offentlige svaret skal bare inneholde valgte butikkstopp og samlet tid/avstand.
+private adresseoppslaget kan returnere inntil fem korte adressetekster i et
+`private, no-store`-svar slik at brukeren kan velge riktig treff; koordinater og
+leverandør-ID-er erstattes av fem-minutters ugjennomsiktige nøkler. Selve
+ruteplansvaret skal bare inneholde valgte butikkstopp og samlet tid/avstand.
 
-Geokoder og rutetjeneste, databehandlerrolle, behandlingsgrunnlag,
-oppbevaring, produksjonskvote og avtalevilkår er ikke valgt og godkjent.
-Funksjonen må forbli av til dette og automatiske ikke-lagringstester er
-godkjent. Hvis ruting feiler, skal appen gå tilbake til en sammenhengende
+Det gjenstår å godkjenne produksjonskonfigurasjon, databehandlerrolle,
+behandlingsgrunnlag, oppbevaring, kapasitet, oppdatering, gjenoppretting,
+attribusjon og ende-til-ende ikke-lagringsbevis. Funksjonen må forbli av til
+dette er godkjent. Hvis ruting feiler, skal appen gå tilbake til en sammenhengende
 prisbasert plan uten å lagre startpunktet.
 
 ## Formål, grunnlag, deling og oppbevaring
@@ -66,8 +77,9 @@ grunnlag for Cloudflare, eventuell ruting, sikkerhetslogging og den endelige
 offentlige tjenesten er ikke juridisk vurdert og kan derfor ikke oppgis som
 avklart.
 
-Lokale appdata beholdes til brukeren tømmer nettstedsdata. Appserveren skal
-ikke ha en varig brukerprofil. Oppbevaring hos Cloudflare, i framtidig
+Lokale appdata, inkludert medlemsprogramvalgene, beholdes til brukeren endrer
+valgene eller tømmer nettstedsdata. Appserveren skal ikke ha en varig
+brukerprofil eller koble medlemsvalget til en medlemskonto. Oppbevaring hos Cloudflare, i framtidig
 monitorering og i sikkerhetskopier er ikke ferdig definert. Pris-/kildedata
 beholdes bare etter kildetillatelsen og produktets revisjonskrav. Ingen
 persondata skal selges eller deles for målrettet reklame.

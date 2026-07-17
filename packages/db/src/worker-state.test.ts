@@ -32,6 +32,7 @@ function fakeDatabase(options: {
   existing?: Record<string, unknown>;
   inserted?: boolean;
   latest?: string;
+  previousHealth?: Record<string, unknown>;
 } = {}) {
   const insertedValues: unknown[] = [];
   const transaction = {
@@ -45,10 +46,23 @@ function fakeDatabase(options: {
         };
       },
     })),
-    select: vi.fn(() => ({
-      from: () => ({
-        where: () => ({ limit: async () => options.existing === undefined ? [] : [options.existing] }),
-      }),
+    select: vi.fn((selection: Record<string, unknown>) => ({
+      from: () => {
+        const rows = "resultHash" in selection
+          ? options.existing === undefined ? [] : [options.existing]
+          : "lastCaptureSuccessAt" in selection
+            ? options.previousHealth === undefined ? [] : [options.previousHealth]
+            : [];
+        const whereResult = {
+          then: (resolve: (value: unknown[]) => unknown) => Promise.resolve(rows).then(resolve),
+          limit: async () => rows,
+          orderBy: () => ({ limit: async () => rows }),
+        };
+        return {
+          innerJoin: () => ({ where: () => whereResult }),
+          where: () => whereResult,
+        };
+      },
     })),
   };
   const query = Object.assign(
@@ -122,12 +136,26 @@ describe("worker job state", () => {
         phase: "before-commit",
       },
     ]);
-    expect(insertedValues).toHaveLength(1);
-    expect(JSON.stringify(insertedValues[0])).not.toContain("private-fence-token");
+    expect(insertedValues).toHaveLength(2);
+    expect(JSON.stringify(insertedValues)).not.toContain("private-fence-token");
     expect(insertedValues[0]).toEqual(expect.objectContaining({
       jobId: result.jobId,
       resultHash: hashWorkerJobResult(result),
     }));
+    expect(insertedValues[1]).toEqual({
+      details: {},
+      geographicScopeId: null,
+      lastCaptureSuccessAt: result.completedAt,
+      lastDiscoverySuccessAt: null,
+      lastPublishSuccessAt: null,
+      newestEligibleEvidenceAt: null,
+      oldestReviewAgeSeconds: null,
+      recordedAt: result.completedAt,
+      reviewQueueCount: 0,
+      sourceId: result.sourceId,
+      status: "healthy",
+      workerJobId: result.jobId,
+    });
   });
 
   it("accepts an exact idempotent replay and rejects a conflicting job identity", async () => {
@@ -163,6 +191,23 @@ describe("worker job state", () => {
     await expect(conflictingRepository.record(result, "fence-1")).rejects.toBeInstanceOf(
       WorkerJobStateConflictError,
     );
+  });
+
+  it("records lifecycle reconciliation without inventing an ingestion health snapshot", async () => {
+    const { db, insertedValues } = fakeDatabase();
+    const repository = new PostgresWorkerJobStateRepository(db, {
+      verifyFence: async () => undefined,
+    });
+    await expect(repository.record({
+      ...result,
+      jobId: "synthetic:official-offer-lifecycle-reconcile:2026-07-16T12:00:00.000Z",
+      jobKind: "official-offer-lifecycle-reconcile",
+      sourceId: "synthetic",
+    }, "fence-1")).resolves.toEqual({ created: true });
+    expect(insertedValues).toHaveLength(1);
+    expect(insertedValues[0]).toEqual(expect.objectContaining({
+      jobKind: "official-offer-lifecycle-reconcile",
+    }));
   });
 
   it("reads the latest scheduled slot with an abortable bounded query", async () => {

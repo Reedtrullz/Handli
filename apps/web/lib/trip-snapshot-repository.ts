@@ -1,8 +1,9 @@
 "use client";
 
 import {
-  tripSnapshotV1Schema,
-  type TripSnapshotV1,
+  NATIONAL_MARKET_CONTEXT_V1,
+  tripSnapshotSchema,
+  type TripSnapshot,
 } from "@handleplan/domain";
 import { z } from "zod";
 
@@ -14,7 +15,7 @@ const ACTIVE_KEY = "active";
 const storedTripV1Schema = z
   .object({
     repositoryVersion: z.literal(1),
-    snapshot: tripSnapshotV1Schema,
+    snapshot: tripSnapshotSchema,
     completedItemIds: z.array(z.string().min(1).max(300)).max(50),
   })
   .strict()
@@ -35,10 +36,25 @@ const storedTripV1Schema = z
 
 type StoredTripV1 = z.infer<typeof storedTripV1Schema>;
 
+const legacyMarketlessStoredTripV2EnvelopeSchema = z
+  .object({
+    repositoryVersion: z.literal(1),
+    snapshot: z.object({ contractVersion: z.literal(2) }).passthrough(),
+    completedItemIds: z.array(z.string().min(1).max(300)).max(50),
+  })
+  .strict();
+
+interface ParsedStoredTrip {
+  migrated: boolean;
+  record: StoredTripV1;
+}
+
 export interface ActiveTripV1 {
-  snapshot: TripSnapshotV1;
+  snapshot: TripSnapshot;
   completedItemIds: readonly string[];
 }
+
+export type ActiveTrip = ActiveTripV1;
 
 export type TripSnapshotRepositoryErrorCode =
   | "ACTIVE_TRIP_EXISTS"
@@ -66,7 +82,7 @@ export class TripSnapshotRepositoryError extends Error {
 
 export interface TripSnapshotRepository {
   getActive(): Promise<ActiveTripV1 | undefined>;
-  start(snapshot: TripSnapshotV1): Promise<ActiveTripV1>;
+  start(snapshot: TripSnapshot): Promise<ActiveTripV1>;
   setCompleted(snapshotId: string, checklistItemId: string, completed: boolean): Promise<ActiveTripV1>;
   finish(snapshotId: string): Promise<void>;
   delete(snapshotId: string): Promise<boolean>;
@@ -102,10 +118,30 @@ function toPublicState(record: StoredTripV1): ActiveTripV1 {
   });
 }
 
-function parseStored(value: unknown): StoredTripV1 {
+function parseStoredResult(value: unknown): ParsedStoredTrip {
   const parsed = storedTripV1Schema.safeParse(value);
-  if (!parsed.success) throw new TripSnapshotRepositoryError("CORRUPT");
-  return parsed.data;
+  if (parsed.success) return { migrated: false, record: parsed.data };
+
+  const legacy = legacyMarketlessStoredTripV2EnvelopeSchema.safeParse(value);
+  if (
+    !legacy.success
+    || Object.prototype.hasOwnProperty.call(legacy.data.snapshot, "marketContext")
+  ) {
+    throw new TripSnapshotRepositoryError("CORRUPT");
+  }
+  const migrated = storedTripV1Schema.safeParse({
+    ...legacy.data,
+    snapshot: {
+      ...legacy.data.snapshot,
+      marketContext: NATIONAL_MARKET_CONTEXT_V1,
+    },
+  });
+  if (!migrated.success) throw new TripSnapshotRepositoryError("CORRUPT");
+  return { migrated: true, record: migrated.data };
+}
+
+function parseStored(value: unknown): StoredTripV1 {
+  return parseStoredResult(value).record;
 }
 
 export class IndexedDbTripSnapshotRepository implements TripSnapshotRepository {
@@ -156,12 +192,18 @@ export class IndexedDbTripSnapshotRepository implements TripSnapshotRepository {
   async getActive(): Promise<ActiveTripV1 | undefined> {
     try {
       const database = await this.database();
-      const transaction = database.transaction(STORE_NAME, "readonly");
+      const transaction = database.transaction(STORE_NAME, "readwrite");
       const done = transactionDone(transaction);
-      const value = await requestResult(transaction.objectStore(STORE_NAME).get(ACTIVE_KEY));
+      const store = transaction.objectStore(STORE_NAME);
+      const value = await requestResult(store.get(ACTIVE_KEY));
+      if (value === undefined) {
+        await done;
+        return undefined;
+      }
+      const parsed = parseStoredResult(value);
+      if (parsed.migrated) await requestResult(store.put(parsed.record, ACTIVE_KEY));
       await done;
-      if (value === undefined) return undefined;
-      return toPublicState(parseStored(value));
+      return toPublicState(parsed.record);
     } catch (error) {
       if (error instanceof TripSnapshotRepositoryError && error.code === "CORRUPT") {
         await this.removeCorruptRecord();
@@ -172,8 +214,8 @@ export class IndexedDbTripSnapshotRepository implements TripSnapshotRepository {
     }
   }
 
-  async start(snapshot: TripSnapshotV1): Promise<ActiveTripV1> {
-    const parsed = tripSnapshotV1Schema.safeParse(snapshot);
+  async start(snapshot: TripSnapshot): Promise<ActiveTripV1> {
+    const parsed = tripSnapshotSchema.safeParse(snapshot);
     if (!parsed.success) throw new TripSnapshotRepositoryError("INVALID");
     try {
       const database = await this.database();

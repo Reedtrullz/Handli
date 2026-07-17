@@ -1,6 +1,8 @@
 import {
   canonicalReviewedFamilyAllowedBrandsSchema,
+  enabledMembershipProgramIdsSchema,
   exactProductPlanApiRequestSchema,
+  marketContextV1Schema,
   matchProducts,
   matchRuleSchema,
   reviewedFamilyCandidateConfirmationSchema,
@@ -8,6 +10,7 @@ import {
   reviewedFamilyPlanApiRequestV2Schema,
   type ExactProductPlanApiRequest,
   type MatchRule,
+  type MarketContextV1,
   type Need,
   type Product,
   type ReviewedFamilyDescriptor,
@@ -15,11 +18,25 @@ import {
 } from "@handleplan/domain";
 import { z } from "zod";
 
+import {
+  BASKET_MEASURE_QUANTITY_MAX,
+  BASKET_QUANTITY_MIN,
+  isValidBasketQuantity,
+  type BasketCanonicalQuantityUnit,
+} from "./basket-quantity";
+import { isAllowedLaunchMarketContext } from "./launch-markets";
+
+export {
+  BASKET_COUNT_QUANTITY_MAX,
+  BASKET_MEASURE_QUANTITY_MAX,
+  BASKET_QUANTITY_MAX,
+  BASKET_QUANTITY_MIN,
+} from "./basket-quantity";
+
 export const LEGACY_BASKET_STORAGE_KEY = "handleplan:basket:v1";
 export const LEGACY_BASKET_V2_STORAGE_KEY = "handleplan:basket:v2";
-export const BASKET_STORAGE_KEY = "handleplan:basket:v3";
-export const BASKET_QUANTITY_MIN = 1;
-export const BASKET_QUANTITY_MAX = 999;
+export const LEGACY_BASKET_V3_STORAGE_KEY = "handleplan:basket:v3";
+export const BASKET_STORAGE_KEY = "handleplan:basket:v4";
 export const BASKET_NEEDS_MAX = 50;
 export const SELECTED_PLAN_ID_MAX = 200;
 export const BASKET_STORAGE_MAX_CODE_UNITS = 256 * 1024;
@@ -29,12 +46,16 @@ const browserNeedSchema = z
   .object({
     id: z.string().trim().min(1).max(200),
     query: z.string().trim().min(1).max(500),
-    quantity: z.number().int().min(BASKET_QUANTITY_MIN).max(BASKET_QUANTITY_MAX).safe(),
-    quantityUnit: z.enum(["each", "g", "ml"]),
+    quantity: z.number().int().min(BASKET_QUANTITY_MIN).max(BASKET_MEASURE_QUANTITY_MAX).safe(),
+    quantityUnit: z.enum(["each", "g", "ml", "piece", "package"]),
     matchRuleId: z.string().trim().min(1).max(200),
     required: z.boolean(),
   })
-  .strict();
+  .strict()
+  .refine(({ quantity, quantityUnit }) => isValidBasketQuantity(quantity, quantityUnit), {
+    message: "Quantity is outside the safe bound for its unit",
+    path: ["quantity"],
+  });
 
 const browserProductSchema = z
   .object({
@@ -221,7 +242,7 @@ const legacyBrowserBasketV2Schema = z
   .strict()
   .superRefine(validateBasketRelationships);
 
-export const browserBasketSchema = z
+const legacyBrowserBasketV3Schema = z
   .object({
     version: z.literal(3),
     ...basketContentsShape,
@@ -234,18 +255,61 @@ export const browserBasketSchema = z
     validateFamilyConfirmations(basket, context);
   });
 
+export const browserBasketSchema = z
+  .object({
+    version: z.literal(4),
+    ...basketContentsShape,
+    convenienceWeightBasisPoints: z.number().int().min(0).max(10_000),
+    enabledMembershipProgramIds: enabledMembershipProgramIdsSchema,
+    familyConfirmations: z.array(browserFamilyConfirmationSchema).max(BASKET_NEEDS_MAX),
+    marketContext: marketContextV1Schema.nullable(),
+  })
+  .strict()
+  .superRefine((basket, context) => {
+    validateBasketRelationships(basket, context, false);
+    validateFamilyConfirmations(basket, context);
+    if (
+      basket.marketContext !== null
+      && !isAllowedLaunchMarketContext(basket.marketContext)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Basket market must be present in the launch manifest",
+        path: ["marketContext"],
+      });
+    }
+  });
+
+const storedBrowserBasketV4Schema = z
+  .object({
+    version: z.literal(4),
+    ...basketContentsShape,
+    convenienceWeightBasisPoints: z.number().int().min(0).max(10_000),
+    enabledMembershipProgramIds: enabledMembershipProgramIdsSchema.optional(),
+    familyConfirmations: z.array(browserFamilyConfirmationSchema).max(BASKET_NEEDS_MAX),
+    marketContext: z.unknown(),
+  })
+  .strict()
+  .superRefine((basket, context) => {
+    validateBasketRelationships(basket, context, false);
+    validateFamilyConfirmations(basket, context);
+  });
+
 export interface BrowserBasket {
-  version: 3;
+  version: 4;
   needs: Need[];
   matchingRules: MatchRule[];
   products: Product[];
   convenienceWeightBasisPoints: number;
+  enabledMembershipProgramIds: string[];
   familyConfirmations: BrowserFamilyConfirmation[];
+  marketContext: MarketContextV1 | null;
   travel: { enabled: boolean; mode: "car" | "bike" };
 }
 
 export type StrictPlanRequestReadiness =
   | { state: "empty" }
+  | { state: "requires-market-selection" }
   | { state: "requires-reviewed-approval" }
   | {
       state: "ready";
@@ -261,6 +325,7 @@ export function strictPlanRequestReadiness(
   basket: BrowserBasket,
 ): StrictPlanRequestReadiness {
   if (basket.needs.length === 0) return { state: "empty" };
+  if (basket.marketContext === null) return { state: "requires-market-selection" };
 
   const rulesById = new Map(basket.matchingRules.map((rule) => [rule.id, rule]));
   const confirmationsByRuleId = new Map(
@@ -324,11 +389,15 @@ export function strictPlanRequestReadiness(
   const parsed = hasReviewedFamily
     ? reviewedFamilyPlanApiRequestV2Schema.safeParse({
         contractVersion: 2,
+        enabledMembershipProgramIds: basket.enabledMembershipProgramIds,
+        marketContext: basket.marketContext,
         maxStores: 3,
         needs: mixedNeeds,
       })
     : exactProductPlanApiRequestSchema.safeParse({
         contractVersion: 1,
+        enabledMembershipProgramIds: basket.enabledMembershipProgramIds,
+        marketContext: basket.marketContext,
         maxStores: 3,
         needs: exactNeeds,
       });
@@ -337,24 +406,39 @@ export function strictPlanRequestReadiness(
     : { state: "requires-reviewed-approval" };
 }
 
-export const emptyBasketV3: BrowserBasket = {
-  version: 3,
+export const emptyBasketV4: BrowserBasket = {
+  version: 4,
   needs: [],
   matchingRules: [],
   products: [],
   convenienceWeightBasisPoints: DEFAULT_CONVENIENCE_WEIGHT_BASIS_POINTS,
+  enabledMembershipProgramIds: [],
   familyConfirmations: [],
+  marketContext: {
+    contractVersion: 1,
+    countryCode: "NO",
+    kind: "national",
+  },
   travel: { enabled: false, mode: "car" },
 };
 
+/** @deprecated Kept as a source-compatible name while V3 callers migrate. */
+export const emptyBasketV3 = emptyBasketV4;
+
 function freshEmptyBasket(): BrowserBasket {
   return {
-    version: 3,
+    version: 4,
     needs: [],
     matchingRules: [],
     products: [],
     convenienceWeightBasisPoints: DEFAULT_CONVENIENCE_WEIGHT_BASIS_POINTS,
+    enabledMembershipProgramIds: [],
     familyConfirmations: [],
+    marketContext: {
+      contractVersion: 1,
+      countryCode: "NO",
+      kind: "national",
+    },
     travel: { enabled: false, mode: "car" },
   };
 }
@@ -377,8 +461,40 @@ export function loadBasket(storage: Storage | undefined = defaultStorage()): Bro
         storage.removeItem(BASKET_STORAGE_KEY);
         return freshEmptyBasket();
       }
-      const parsed = browserBasketSchema.safeParse(JSON.parse(stored));
-      return parsed.success ? parsed.data : freshEmptyBasket();
+      const parsed = storedBrowserBasketV4Schema.safeParse(JSON.parse(stored));
+      if (!parsed.success) return freshEmptyBasket();
+      const parsedMarket = marketContextV1Schema.safeParse(parsed.data.marketContext);
+      const candidate = browserBasketSchema.safeParse({
+        ...parsed.data,
+        enabledMembershipProgramIds: parsed.data.enabledMembershipProgramIds ?? [],
+        marketContext: parsedMarket.success
+          && isAllowedLaunchMarketContext(parsedMarket.data)
+          ? parsedMarket.data
+          : null,
+      });
+      return candidate.success ? candidate.data : freshEmptyBasket();
+    }
+
+    const legacyV3Stored = storage.getItem(LEGACY_BASKET_V3_STORAGE_KEY);
+    if (legacyV3Stored) {
+      if (legacyV3Stored.length > BASKET_STORAGE_MAX_CODE_UNITS) {
+        storage.removeItem(LEGACY_BASKET_V3_STORAGE_KEY);
+        return freshEmptyBasket();
+      }
+      const legacyV3 = legacyBrowserBasketV3Schema.safeParse(JSON.parse(legacyV3Stored));
+      if (!legacyV3.success) return freshEmptyBasket();
+      const migrated: BrowserBasket = {
+        ...legacyV3.data,
+        version: 4,
+        enabledMembershipProgramIds: [],
+        marketContext: {
+          contractVersion: 1,
+          countryCode: "NO",
+          kind: "national",
+        },
+      };
+      saveBasket(migrated, storage);
+      return migrated;
     }
 
     const legacyV2Stored = storage.getItem(LEGACY_BASKET_V2_STORAGE_KEY);
@@ -390,12 +506,18 @@ export function loadBasket(storage: Storage | undefined = defaultStorage()): Bro
       const legacyV2 = legacyBrowserBasketV2Schema.safeParse(JSON.parse(legacyV2Stored));
       if (!legacyV2.success) return freshEmptyBasket();
       const migrated: BrowserBasket = {
-        version: 3,
+        version: 4,
         needs: legacyV2.data.needs,
         matchingRules: legacyV2.data.matchingRules,
         products: legacyV2.data.products,
         convenienceWeightBasisPoints: legacyV2.data.convenienceWeightBasisPoints,
+        enabledMembershipProgramIds: [],
         familyConfirmations: [],
+        marketContext: {
+          contractVersion: 1,
+          countryCode: "NO",
+          kind: "national",
+        },
         travel: legacyV2.data.travel,
       };
       saveBasket(migrated, storage);
@@ -411,12 +533,18 @@ export function loadBasket(storage: Storage | undefined = defaultStorage()): Bro
     const legacy = legacyBrowserBasketV1Schema.safeParse(JSON.parse(legacyStored));
     if (!legacy.success) return freshEmptyBasket();
     const migrated: BrowserBasket = {
-      version: 3,
+      version: 4,
       needs: legacy.data.needs,
       matchingRules: legacy.data.matchingRules,
       products: legacy.data.products,
       convenienceWeightBasisPoints: DEFAULT_CONVENIENCE_WEIGHT_BASIS_POINTS,
+      enabledMembershipProgramIds: [],
       familyConfirmations: [],
+      marketContext: {
+        contractVersion: 1,
+        countryCode: "NO",
+        kind: "national",
+      },
       travel: legacy.data.travel,
     };
     saveBasket(migrated, storage);
@@ -439,9 +567,35 @@ export function saveBasket(
     storage.setItem(BASKET_STORAGE_KEY, serialized);
     storage.removeItem(LEGACY_BASKET_STORAGE_KEY);
     storage.removeItem(LEGACY_BASKET_V2_STORAGE_KEY);
+    storage.removeItem(LEGACY_BASKET_V3_STORAGE_KEY);
   } catch {
     // Private mode, blocked storage, quota errors, and invalid state stay non-fatal.
   }
+}
+
+/**
+ * Replaces the local membership preference only after canonical contract
+ * validation. The browser may persist opaque program IDs, but they can affect
+ * pricing only when a verified official offer in the server snapshot requires
+ * the same ID.
+ */
+export function setBasketEnabledMembershipProgramIds(
+  basket: BrowserBasket,
+  programIds: readonly string[],
+): BrowserBasket {
+  const parsed = enabledMembershipProgramIdsSchema.safeParse(programIds);
+  if (!parsed.success) return basket;
+  if (
+    parsed.data.length === basket.enabledMembershipProgramIds.length
+    && parsed.data.every((programId, index) =>
+      basket.enabledMembershipProgramIds[index] === programId)
+  ) {
+    return basket;
+  }
+  return browserBasketSchema.parse({
+    ...basket,
+    enabledMembershipProgramIds: parsed.data,
+  });
 }
 
 export function addExactProductToBasket(
@@ -456,6 +610,10 @@ export function addExactProductToBasket(
     return basket;
   }
   const safeProduct = browserProductSchema.parse(product);
+  const existingProduct = basket.products.find(({ ean }) => ean === safeProduct.ean);
+  const storedProduct = existingProduct === undefined
+    ? safeProduct
+    : browserProductSchema.parse({ ...existingProduct, ...safeProduct });
   const needId = createId();
   const ruleId = createId();
   return {
@@ -465,7 +623,7 @@ export function addExactProductToBasket(
       matchRuleId: ruleId,
       query: safeProduct.name,
       quantity: 1,
-      quantityUnit: "each",
+      quantityUnit: "package",
       required: true,
     }],
     matchingRules: [...basket.matchingRules, {
@@ -475,8 +633,72 @@ export function addExactProductToBasket(
       mode: "exact",
       userApproved: true,
     }],
-    products: [...new Map([...basket.products, safeProduct].map((candidate) => [candidate.ean, candidate])).values()],
+    products: [...new Map([...basket.products, storedProduct].map((candidate) => [candidate.ean, candidate])).values()],
   };
+}
+
+/**
+ * Applies an explicitly confirmed Oppdag replace/lock choice to one existing
+ * need. The need identity, quantity, unit and required flag stay untouched;
+ * only its approved matching rule becomes an exact GTIN selection. A reviewed
+ * family confirmation is removed because it no longer describes that need.
+ *
+ * Returning the original basket is deliberate fail-closed behavior for a
+ * missing target, an already-identical exact choice, or malformed product.
+ */
+export function setBasketNeedToExactProduct(
+  basket: BrowserBasket,
+  needId: string,
+  product: Product,
+): BrowserBasket {
+  const need = basket.needs.find(({ id }) => id === needId);
+  if (need === undefined) return basket;
+  const rule = basket.matchingRules.find(({ id }) => id === need.matchRuleId);
+  if (
+    rule === undefined
+    || (rule.mode === "exact" && rule.exactEan === product.ean)
+  ) {
+    return basket;
+  }
+
+  const parsedProduct = browserProductSchema.safeParse(product);
+  if (!parsedProduct.success) return basket;
+  const existingProduct = basket.products.find(
+    ({ ean }) => ean === parsedProduct.data.ean,
+  );
+  const storedProduct = existingProduct === undefined
+    ? parsedProduct.data
+    : browserProductSchema.parse({ ...existingProduct, ...parsedProduct.data });
+  const exactRule: MatchRule = {
+    exactEan: parsedProduct.data.ean,
+    explanation: "Eksakt produkt valgt i Oppdag",
+    id: rule.id,
+    mode: "exact",
+    userApproved: true,
+  };
+  const candidateProducts = [...new Map(
+    [...basket.products, storedProduct].map((entry) => [entry.ean, entry]),
+  ).values()];
+  const matchingRules = basket.matchingRules.map((existing) =>
+    existing.id === rule.id ? exactRule : existing
+  );
+  const rulesById = new Map(matchingRules.map((existing) => [existing.id, existing]));
+  const referencedEans = new Set(basket.needs.flatMap((existingNeed) => {
+    const existingRule = rulesById.get(existingNeed.matchRuleId);
+    return existingRule === undefined
+      ? []
+      : matchProducts(existingNeed, existingRule, candidateProducts).map(({ ean }) => ean);
+  }));
+  const candidate = {
+    ...basket,
+    familyConfirmations: basket.familyConfirmations.filter(
+      ({ matchRuleId }) => matchRuleId !== rule.id,
+    ),
+    matchingRules,
+    products: candidateProducts.filter(({ ean }) => referencedEans.has(ean)),
+  };
+  const parsedBasket = browserBasketSchema.safeParse(candidate);
+  return parsedBasket.success ? parsedBasket.data : basket;
 }
 
 export interface AddReviewedFamilyInput {
@@ -485,6 +707,8 @@ export interface AddReviewedFamilyInput {
   confirmation: BrowserFamilyConfirmation["confirmation"];
   family: ReviewedFamilyDescriptor;
   quantity: number;
+  /** Omitted only by legacy/local callers; Planlegg always supplies an explicit unit. */
+  quantityUnit?: "each" | BasketCanonicalQuantityUnit;
 }
 
 export function addReviewedFamilyToBasket(
@@ -506,8 +730,11 @@ export function addReviewedFamilyToBasket(
     : canonicalReviewedFamilyAllowedBrandsSchema.parse(input.allowedBrands);
   const confirmation = reviewedFamilyCandidateConfirmationSchema.parse(input.confirmation);
   const candidateCount = z.number().int().min(1).max(50).safe().parse(input.candidateCount);
-  const quantity = z.number().int().min(BASKET_QUANTITY_MIN).max(BASKET_QUANTITY_MAX)
-    .safe().parse(input.quantity);
+  const quantityUnit = input.quantityUnit ?? "each";
+  if (!isValidBasketQuantity(input.quantity, quantityUnit)) {
+    throw new Error("Reviewed-family quantity is outside the safe unit bound");
+  }
+  const quantity = input.quantity;
   const needId = createId();
   const ruleId = createId();
   const rule: MatchRule = allowedBrands === undefined
@@ -541,7 +768,7 @@ export function addReviewedFamilyToBasket(
       id: needId,
       matchRuleId: ruleId,
       quantity,
-      quantityUnit: "each",
+      quantityUnit,
       query: family.labelNo,
       required: true,
     }],

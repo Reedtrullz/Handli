@@ -1,9 +1,11 @@
 "use client";
 
 import {
-  type ExactProductPlanApiEvidenceEnvelope,
-  type ExactProductPlanApiProductSummary,
+  type ExactProductPlanApiRequest,
+  type ExactProductPlanApiResponse,
   type PlanResultV2,
+  type ReviewedFamilyPlanApiRequestV2,
+  type ReviewedFamilyPlanApiResponseV2,
 } from "@handleplan/domain";
 import { useMemo, useState } from "react";
 
@@ -11,7 +13,9 @@ import {
   createLocalTripId,
   createStrictResultTripSnapshot,
   StrictResultTripError,
+  type StrictTravelPlanBinding,
 } from "../../lib/strict-result-trip";
+import { ensureHandleModeOfflineReady } from "../../lib/handle-mode-offline-readiness";
 import {
   createBrowserTripSnapshotRepository,
   TripSnapshotRepositoryError,
@@ -27,29 +31,44 @@ type StartState =
   | "existing"
   | "expired"
   | "invalid"
+  | "offline-error"
   | "storage-error";
 
-export interface StartTripButtonProps {
-  caveats: readonly string[];
-  evidence: ExactProductPlanApiEvidenceEnvelope;
-  generatedAt: string;
+interface StartTripButtonCommonProps {
   plan: PlanResultV2;
-  products: readonly ExactProductPlanApiProductSummary[];
   repository?: TripSnapshotRepository;
+  travelBinding?: StrictTravelPlanBinding;
+  ensureOfflineReady?: () => Promise<void>;
   now?: () => Date;
   createId?: () => string;
 }
 
-export function StartTripButton({
-  caveats,
-  createId = createLocalTripId,
-  evidence,
-  generatedAt,
-  now = () => new Date(),
-  plan,
-  products,
-  repository,
-}: StartTripButtonProps) {
+export type StartTripButtonProps = StartTripButtonCommonProps & (
+  | {
+      kind?: "exact-product";
+      exactRequest: ExactProductPlanApiRequest;
+      exactResponse: ExactProductPlanApiResponse;
+      reviewedRequest?: never;
+      reviewedResponse?: never;
+    }
+  | {
+      kind: "reviewed-family";
+      reviewedRequest: ReviewedFamilyPlanApiRequestV2;
+      reviewedResponse: ReviewedFamilyPlanApiResponseV2;
+      exactRequest?: never;
+      exactResponse?: never;
+    }
+);
+
+export function StartTripButton(props: StartTripButtonProps) {
+  const {
+    createId = createLocalTripId,
+    ensureOfflineReady = ensureHandleModeOfflineReady,
+    now = () => new Date(),
+    plan,
+    repository,
+    travelBinding,
+  } = props;
   const tripRepository = useMemo(
     () => repository ?? createBrowserTripSnapshotRepository(),
     [repository],
@@ -58,16 +77,43 @@ export function StartTripButton({
 
   async function start(): Promise<void> {
     setState("busy");
+    let snapshot: ReturnType<typeof createStrictResultTripSnapshot>;
     try {
-      const snapshot = createStrictResultTripSnapshot({
-        caveats,
-        evidence,
-        generatedAt,
+      const common = {
         now: now(),
         plan,
-        products,
+        travelBinding,
         tripId: createId(),
-      });
+      };
+      snapshot = props.kind === "reviewed-family"
+        ? createStrictResultTripSnapshot({
+            ...common,
+            kind: "reviewed-family",
+            reviewedRequest: props.reviewedRequest,
+            reviewedResponse: props.reviewedResponse,
+          })
+        : createStrictResultTripSnapshot({
+            ...common,
+            exactRequest: props.exactRequest,
+            exactResponse: props.exactResponse,
+          });
+    } catch (error) {
+      if (error instanceof StrictResultTripError) {
+        setState(error.code === "EXPIRED_EVIDENCE" ? "expired" : "invalid");
+      } else {
+        setState("invalid");
+      }
+      return;
+    }
+
+    try {
+      await ensureOfflineReady();
+    } catch {
+      setState("offline-error");
+      return;
+    }
+
+    try {
       await tripRepository.start(snapshot);
       setState("success");
     } catch (error) {
@@ -76,8 +122,6 @@ export function StartTripButton({
         && error.code === "ACTIVE_TRIP_EXISTS"
       ) {
         setState("existing");
-      } else if (error instanceof StrictResultTripError) {
-        setState(error.code === "EXPIRED_EVIDENCE" ? "expired" : "invalid");
       } else {
         setState("storage-error");
       }
@@ -123,6 +167,13 @@ export function StartTripButton({
             : "Prisgrunnlaget kunne ikke bekreftes."}</strong>
           <span>Beregn en ny plan før du starter Handlemodus.</span>
           <a href="/planlegg">Gå til Planlegg</a>
+        </div>
+      )}
+
+      {state === "offline-error" && (
+        <div className={styles.error} role="alert">
+          <strong>Handlemodus er ikke klart for bruk uten nett.</strong>
+          <span>Vent litt og prøv igjen, eller last siden på nytt mens du er tilkoblet.</span>
         </div>
       )}
 

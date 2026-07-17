@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it, vi } from "vitest";
 
 import type { CatalogEligibilityRow } from "./catalog-reader";
@@ -16,7 +18,7 @@ interface CapturedQuery {
   sql: string;
 }
 
-type TestQuery = Promise<CatalogEligibilityRow[]> & { cancel: ReturnType<typeof vi.fn> };
+type TestQuery = Promise<unknown[]> & { cancel: ReturnType<typeof vi.fn> };
 
 function row(overrides: Partial<CatalogEligibilityRow> = {}): CatalogEligibilityRow {
   return {
@@ -48,10 +50,39 @@ function row(overrides: Partial<CatalogEligibilityRow> = {}): CatalogEligibility
   };
 }
 
-function resolvedQuery(rows: CatalogEligibilityRow[]): TestQuery {
+function discoveryRow(overrides: Record<string, unknown> = {}) {
+  const eligibility = row(overrides as Partial<CatalogEligibilityRow>);
+  return {
+    ...eligibility,
+    category_path: null,
+    sort_name: eligibility.display_name.toLocaleLowerCase("nb-NO"),
+    sort_rank: 0,
+    ...overrides,
+  };
+}
+
+function resolvedQuery(rows: unknown[]): TestQuery {
   const query = Promise.resolve(rows) as TestQuery;
   query.cancel = vi.fn();
   return query;
+}
+
+function publicCategoryId(sourceId: string, sourceCategoryId: string): string {
+  const digest = createHash("sha256")
+    .update(Buffer.byteLength(sourceId, "utf8").toString())
+    .update(":")
+    .update(sourceId)
+    .update(sourceCategoryId)
+    .digest("hex");
+  return `category:${digest}`;
+}
+
+function categoryEntry(
+  sourceCategoryId = "10",
+  depth = 1,
+  name = "Meieri",
+) {
+  return { depth, name, sourceCategoryId };
 }
 
 function databaseWith(
@@ -142,6 +173,161 @@ describe("PostgresPublicCatalogIndexReader", () => {
     expect(captures[0]!.sql).toContain("escape '\\'");
   });
 
+  it("preserves unknown and known-empty category paths for discovery", async () => {
+    const unknownDatabase = databaseWith(() => resolvedQuery([discoveryRow()]));
+    const emptyDatabase = databaseWith(() => resolvedQuery([discoveryRow({
+      category_path: [],
+    })]));
+
+    await expect(new PostgresPublicCatalogIndexReader(unknownDatabase.db)
+      .readDiscoveryPage({ limit: 10 }, AT))
+      .resolves.toMatchObject({ entries: [{ categoryPath: null, product: { gtin: GTIN_MILK } }] });
+    await expect(new PostgresPublicCatalogIndexReader(emptyDatabase.db)
+      .readDiscoveryPage({ limit: 10 }, AT))
+      .resolves.toMatchObject({ entries: [{ categoryPath: [], product: { gtin: GTIN_MILK } }] });
+  });
+
+  it("returns source-scoped opaque category IDs and filters only after latest selection", async () => {
+    const categoryId = publicCategoryId("kassalapp", "20");
+    const categoryPath = [
+      categoryEntry("10", 1, "Meieri"),
+      categoryEntry("20", 2, "Melk"),
+    ];
+    const { captures, db } = databaseWith(() => resolvedQuery([discoveryRow({
+      category_path: categoryPath,
+    })]));
+
+    const result = await new PostgresPublicCatalogIndexReader(db).readDiscoveryPage({
+      categoryId,
+      limit: 10,
+    }, AT);
+
+    expect(result.entries[0]!.categoryPath).toEqual([
+      {
+        depth: 1,
+        id: publicCategoryId("kassalapp", "10"),
+        name: "Meieri",
+        sourceId: "kassalapp",
+      },
+      {
+        depth: 2,
+        id: categoryId,
+        name: "Melk",
+        sourceId: "kassalapp",
+      },
+    ]);
+    expect(JSON.stringify(result.entries[0]!.categoryPath)).not.toContain("sourceCategoryId");
+    expect(captures[0]!.parameters).toContain(categoryId.slice("category:".length));
+    expect(captures[0]!.parameters).not.toContain("20");
+    expect(captures[0]!.sql).toContain("encode(sha256(convert_to(");
+    expect(captures[0]!.sql.indexOf("where selection_rank = 1"))
+      .toBeLessThan(captures[0]!.sql.indexOf("jsonb_array_elements(latest.category_path)"));
+  });
+
+  it("retains category paths in discovery search without changing summary search", async () => {
+    const { captures, db } = databaseWith(() => resolvedQuery([discoveryRow({
+      category_path: [categoryEntry()],
+    })]));
+
+    const result = await new PostgresPublicCatalogIndexReader(db)
+      .readDiscoveryPage({ limit: 20, query: " TINE " }, AT);
+
+    expect(result.entries).toMatchObject([{
+      categoryPath: [{ name: "Meieri", sourceId: "kassalapp" }],
+      product: { displayName: "TINE Lettmelk" },
+    }]);
+    expect(captures[0]!.parameters).toContain("%TINE%");
+    expect(captures[0]!.sql).toContain("'gtin:' || observation.gtin");
+  });
+
+  it("fails closed when a filtered row does not contain the requested public category", async () => {
+    const { db } = databaseWith(() => resolvedQuery([discoveryRow({
+      category_path: [categoryEntry("10")],
+    })]));
+
+    await expect(new PostgresPublicCatalogIndexReader(db).readDiscoveryPage({
+      categoryId: publicCategoryId("kassalapp", "20"),
+      limit: 10,
+    }, AT)).rejects.toEqual(readerError("UNAVAILABLE"));
+  });
+
+  it.each([
+    ["non-array", {}],
+    ["unknown field", [{ ...categoryEntry(), unexpected: true }]],
+    ["non-canonical source ID", [categoryEntry("01")]],
+    ["numeric source ID", [{ ...categoryEntry(), sourceCategoryId: 10 }]],
+    ["invalid depth", [categoryEntry("10", 101)]],
+    ["untrimmed name", [categoryEntry("10", 1, " Meieri")]],
+    ["duplicate ID", [categoryEntry("10", 1), categoryEntry("10", 2, "Melk")]],
+    ["non-canonical order", [categoryEntry("20", 1), categoryEntry("10", 1, "Melk")]],
+    ["overlong path", Array.from({ length: 101 }, (_, index) =>
+      categoryEntry(String(index), index, `Category ${index}`))],
+  ] as const)("fails closed on a %s category path", async (_label, categoryPath) => {
+    const { db } = databaseWith(() => resolvedQuery([discoveryRow({
+      category_path: categoryPath,
+    })]));
+
+    await expect(new PostgresPublicCatalogIndexReader(db).readDiscoveryPage({ limit: 10 }, AT))
+      .rejects.toEqual(readerError("UNAVAILABLE"));
+  });
+
+  it("returns a bounded facet directory with source-scoped IDs and truncation", async () => {
+    const facetRows = [
+      {
+        catalog_source_id: "source-a",
+        category_variants: [categoryEntry("10")],
+        product_count: 4,
+      },
+      {
+        catalog_source_id: "source-b",
+        category_variants: [categoryEntry("10")],
+        product_count: 2,
+      },
+    ];
+    const { captures, db } = databaseWith(() => resolvedQuery(facetRows));
+
+    const reader = new PostgresPublicCatalogIndexReader(db);
+    const result = await reader.categoryFacets(1, AT);
+    const complete = await reader.categoryFacets(2, AT);
+
+    expect(result).toEqual({
+      facets: [{
+        depth: 1,
+        id: publicCategoryId("source-a", "10"),
+        name: "Meieri",
+        productCount: 4,
+        sourceId: "source-a",
+      }],
+      hasMore: true,
+    });
+    expect(complete.facets.map(({ id }) => id)).toEqual([
+      publicCategoryId("source-a", "10"),
+      publicCategoryId("source-b", "10"),
+    ]);
+    expect(complete.hasMore).toBe(false);
+    expect(complete.facets[0]!.id).not.toBe(complete.facets[1]!.id);
+    expect(JSON.stringify(result)).not.toContain("sourceCategoryId");
+    expect(captures[0]!.parameters.at(-1)).toBe(2);
+    expect(captures[0]!.sql).toContain("count(distinct canonical_product_id)");
+    expect(captures[0]!.sql.indexOf("where selection_rank = 1"))
+      .toBeLessThan(captures[0]!.sql.indexOf("jsonb_array_elements(latest.category_path)"));
+    expect(captures[0]!.sql).toContain("where latest.category_path is not null");
+  });
+
+  it("fails closed on conflicting category facet metadata", async () => {
+    const { db } = databaseWith(() => resolvedQuery([{
+      catalog_source_id: "kassalapp",
+      category_variants: [
+        categoryEntry("10", 1, "Meieri"),
+        categoryEntry("10", 1, "Konflikt"),
+      ],
+      product_count: 2,
+    }]));
+
+    await expect(new PostgresPublicCatalogIndexReader(db).categoryFacets(10, AT))
+      .rejects.toEqual(readerError("UNAVAILABLE"));
+  });
+
   it.each([
     ["revoked permission", { permission_decision: "revoked" }],
     ["expired permission", { permission_valid_until: AT }],
@@ -177,12 +363,20 @@ describe("PostgresPublicCatalogIndexReader", () => {
     await expect(reader.search("m", 20, AT)).rejects.toEqual(readerError("INVALID_REQUEST"));
     await expect(reader.search("m".repeat(121), 20, AT)).rejects.toEqual(readerError("INVALID_REQUEST"));
     await expect(reader.search("melk", 21, AT)).rejects.toEqual(readerError("INVALID_REQUEST"));
+    await expect(reader.readDiscoveryPage({ limit: 51 }, AT))
+      .rejects.toEqual(readerError("INVALID_REQUEST"));
+    await expect(reader.readDiscoveryPage({ categoryId: "category:" + "A".repeat(64), limit: 10 }, AT))
+      .rejects.toEqual(readerError("INVALID_REQUEST"));
+    await expect(reader.readDiscoveryPage({ limit: 20, query: "m" }, AT))
+      .rejects.toEqual(readerError("INVALID_REQUEST"));
+    await expect(reader.categoryFacets(101, AT))
+      .rejects.toEqual(readerError("INVALID_REQUEST"));
     expect(captures).toEqual([]);
   });
 
   it("cancels the active query and exposes only a sanitized cancellation", async () => {
     let reject!: (error: Error) => void;
-    const query = new Promise<CatalogEligibilityRow[]>((_resolve, nextReject) => {
+    const query = new Promise<unknown[]>((_resolve, nextReject) => {
       reject = nextReject;
     }) as TestQuery;
     query.cancel = vi.fn(() => reject(new Error("driver details")));

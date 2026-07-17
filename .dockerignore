@@ -1,10 +1,12 @@
 .git
 .github
+.artifacts
 .next
 .superdesign
 .superpowers
 .worktrees
 coverage
+**/dist
 docs/evidence
 node_modules
 playwright-report

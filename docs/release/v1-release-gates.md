@@ -2,7 +2,7 @@
 
 **Decision:** public launch is blocked until every gate below is `passed`
 
-**Last assessed:** 2026-07-16
+**Last assessed:** 2026-07-17
 
 **Audited implementation baseline:** `a890b05fa07e5fa2fc806b0640a62cf37f8b234e`
 
@@ -26,9 +26,9 @@ Status meanings:
 | G5 Three-chain evidence | blocked | The manifest declares Bunnpris, REMA 1000, and Extra as the intended v1 chains | Current successful rights-cleared ingestion and eligible evidence for all three chains in every declared launch region. |
 | G6 Travel privacy | not-started | Privacy rules in the [product-truth contract](../contracts/v1-product-truth.md) | Opt-in route flow plus automated sentinel tests proving origin/address/coordinates are absent from storage, URLs, caches, responses, evidence, and application telemetry. |
 | G7 Offline shopping | partial | Immutable IndexedDB trip snapshot, API-cache exclusion tests, and the [production-build offline Chromium journey](../evidence/v1/evidence-planner-worker-2026-07-16.md) | Production PWA trip completed offline on iOS and Android physical devices, including install, reload, checklist progress, eviction/staleness behavior, and accessible touch use. |
-| G8 Accessibility | partial | Phase 1 responsive/browser evidence under `docs/evidence/phase1/` | Candidate-release Chromium/Firefox/WebKit, axe, reflow/zoom/forced-colours/reduced-motion evidence, plus accepted VoiceOver, keyboard-only, and mobile-device reports. |
-| G9 Security, privacy, and legal | partial | Protected Cloudflare Access preview, server-only credential boundary, source registry, [Norwegian privacy notice](../privacy/personvern.md), [data-flow/threat model](../security/data-flow-threat-model.md), [security policy](../../SECURITY.md), code license/third-party boundary, and tested response-header baseline | Accepted operator/data-controller and processor facts, legal/privacy/security review, actual edge/VPS logging and retention evidence, rights/marks/imagery review, distributed abuse controls, origin and telemetry sentinel tests, dependency/licence/secret scans, and tested confidential privacy/security contacts. |
-| G10 Operations | partial | Eleven forward migrations, fenced worker/health deployment, safe-degraded rollback assets, the [fresh 162-test PostgreSQL milestone](../evidence/v1/evidence-planner-worker-2026-07-16.md), and the [001-to-008 foundation proof](../evidence/v1/foundation-2026-07-16.md) | Candidate CI and VPS proof, encrypted off-host backup and isolated clean-host recovery including private blobs, external alerts, immutable promoted image/SBOM/provenance, and bad-image/post-start rollback drills. |
+| G8 Accessibility | partial | Phase 1 responsive/browser evidence under `docs/evidence/phase1/` and the [local V1-18 automated accessibility delta](../evidence/v1/v1-18-accessibility-automated-2026-07-17.md) | Candidate-release Chromium/Firefox/WebKit execution, native-zoom evidence, plus accepted VoiceOver, keyboard-only, and mobile-device reports. |
+| G9 Security, privacy, and legal | partial | Protected Cloudflare Access preview, server-only credential boundary, source registry, [Norwegian privacy notice](../privacy/personvern.md), [data-flow/threat model](../security/data-flow-threat-model.md), [security policy](../../SECURITY.md), code license/third-party boundary, tested response-header baseline, allowlist-only readiness telemetry with application sentinel tests, and [repository dependency/license/secret gates](../security/supply-chain.md) | Accepted operator/data-controller and processor facts, legal/privacy/security review, actual edge/VPS/provider/monitoring logging and retention evidence, rights/marks/imagery review, distributed abuse controls, route-origin and all-boundary telemetry sentinel proof, container/history scans, and tested confidential privacy/security contacts. |
+| G10 Operations | partial | Forward migrations, fenced worker/health deployment, safe-degraded rollback assets, the [fresh 162-test PostgreSQL milestone](../evidence/v1/evidence-planner-worker-2026-07-16.md), the [001-to-008 foundation proof](../evidence/v1/foundation-2026-07-16.md), CI source steps for SPDX plus an unsigned image build statement, and the explicitly blocked [candidate-manifest contract](../runbooks/release-candidate-manifest.md) | Candidate-current CI and VPS proof, encrypted off-host backup and isolated clean-host recovery including private blobs, external alerts, retained signed provenance/SBOM, immutable promoted image, container scan, and bad-image/post-start rollback drills. |
 | G11 Real baskets | partial | [versioned benchmark baskets](../data/benchmark-baskets.v1.json) | Every declared region passes the complete corpus; at least five baskets per region are manually reconciled to rights-cleared source, conditions, validity, and geography. |
 | G12 Public-good governance | partial | [`AGPL-3.0-or-later`](../../LICENSE) with [third-party exclusions](../../LICENSES/README.md), [public-good governance](../governance/public-good-governance.md), [contributor process](../../CONTRIBUTING.md), product-truth contract, and public `/om` correction/ranking disclosure | Truthful current funding/conflict ledger and owner, named maintainer/correction/appeal roles, operator/data-controller identity, confidential contacts, contributor/legal compatibility review, and accepted candidate-release replay evidence. |
 
@@ -44,7 +44,17 @@ Evidence for a candidate release must be stored without overwriting older runs a
 6. reviewer and review time for manual, legal, rights, and device evidence; and
 7. links to raw reports, logs with sensitive data removed, screenshots, or restore artifacts.
 
-The candidate release manifest should link these artifacts under `docs/evidence/v1/<candidate>/`. Chat summaries, an owner-accessible preview, or an unversioned dashboard are not sufficient evidence.
+The candidate release manifest must satisfy the strict
+[v1 schema](./v1-candidate-manifest.schema.json) and the semantic verifier
+documented in the [candidate-manifest runbook](../runbooks/release-candidate-manifest.md).
+It links checksummed repository evidence under `docs/evidence/v1/<candidate>/`.
+Chat summaries, an owner-accessible preview, or an unversioned dashboard are
+not sufficient evidence. The current
+[source-neutral draft](../evidence/v1/v1-17-source-neutral-draft-2026-07-17/release-candidate.v1.json)
+is explicitly blocked and is neither a release nor deployment evidence.
+The verifier intentionally rejects every promotion candidate today. Its current
+contract is a fail-closed draft ledger, not a release authorization mechanism;
+the remaining evidence-architecture work is recorded in the runbook.
 
 ## Launch decision and emergency behaviour
 

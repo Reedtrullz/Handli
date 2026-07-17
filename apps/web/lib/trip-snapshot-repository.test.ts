@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { tripSnapshotFixture } from "../test-support/trip-snapshot-fixture";
+import {
+  legacyTripSnapshotFixture,
+  tripSnapshotFixture,
+} from "../test-support/trip-snapshot-fixture";
 import {
   IndexedDbTripSnapshotRepository,
   TripSnapshotRepositoryError,
@@ -133,6 +136,7 @@ describe("IndexedDbTripSnapshotRepository", () => {
 
     const started = await repository.start(snapshot);
     expect(started.completedItemIds).toEqual([]);
+    expect(started.snapshot.contractVersion).toBe(2);
     expect(Object.isFrozen(started.snapshot)).toBe(true);
     await expect(repository.start(snapshot)).rejects.toEqual(expectCode("ACTIVE_TRIP_EXISTS"));
 
@@ -145,6 +149,50 @@ describe("IndexedDbTripSnapshotRepository", () => {
     const reopened = await repository.setCompleted(snapshot.id, itemId, false);
     expect(reopened.completedItemIds).toEqual([]);
     expect(reopened.snapshot.plan).toEqual(snapshot.plan);
+  });
+
+  it("continues to read an active legacy V1 snapshot without rewriting it", async () => {
+    const factory = new FakeIndexedDbFactory();
+    const repository = new IndexedDbTripSnapshotRepository(factory as unknown as IDBFactory);
+    await repository.getActive();
+    const legacy = legacyTripSnapshotFixture();
+    factory.database.records.set("active", {
+      completedItemIds: [],
+      repositoryVersion: 1,
+      snapshot: legacy,
+    });
+
+    const active = await repository.getActive();
+    expect(active?.snapshot).toEqual(legacy);
+    expect(active?.snapshot.contractVersion).toBe(1);
+  });
+
+  it("migrates only a valid pre-market V2 trip to national scope and preserves completion", async () => {
+    const factory = new FakeIndexedDbFactory();
+    const repository = new IndexedDbTripSnapshotRepository(factory as unknown as IDBFactory);
+    await repository.getActive();
+    const snapshot = tripSnapshotFixture();
+    const { marketContext: _marketContext, ...legacySnapshot } = snapshot;
+    void _marketContext;
+    const completedItemIds = [snapshot.checklistItems[0]!.id];
+    factory.database.records.set("active", {
+      completedItemIds,
+      repositoryVersion: 1,
+      snapshot: legacySnapshot,
+    });
+
+    const active = await repository.getActive();
+    expect(active).toEqual({ completedItemIds, snapshot });
+    expect(factory.database.records.get("active")).toMatchObject({
+      completedItemIds,
+      snapshot: {
+        marketContext: {
+          contractVersion: 1,
+          countryCode: "NO",
+          kind: "national",
+        },
+      },
+    });
   });
 
   it("requires a complete checklist to finish and then deletes without history", async () => {

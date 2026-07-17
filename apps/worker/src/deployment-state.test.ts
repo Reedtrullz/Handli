@@ -12,6 +12,9 @@ const helper = fileURLToPath(
 const createdDirectories: string[] = [];
 const LEGACY_REVISION = "1111111111111111111111111111111111111111";
 const CURRENT_REVISION = "2222222222222222222222222222222222222222";
+const ROLLBACK_REVISION = "3333333333333333333333333333333333333333";
+const CURRENT_IMAGE_ID = `sha256:${"a".repeat(64)}`;
+const ROLLBACK_IMAGE_ID = `sha256:${"b".repeat(64)}`;
 
 async function stateDirectory(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "handleplan-deployment-state-"));
@@ -72,6 +75,91 @@ describe("durable deployment compatibility state", () => {
     );
     expect(loaded.status).toBe(0);
     expect(loaded.stdout).toBe(`${CURRENT_REVISION}|current`);
+  });
+
+  it("records immutable image bindings while preserving a monotonic high-water revision", async () => {
+    const directory = await stateDirectory();
+    const current = runStateScript(
+      directory,
+      'record_immutable_deployment_state "$2" "$3" current "$4" "$3"',
+      CURRENT_REVISION,
+      CURRENT_IMAGE_ID,
+    );
+    expect(current.status, current.stderr).toBe(0);
+    expect(await readFile(join(directory, "current-deployment"), "utf8")).toBe(
+      `v1 ${CURRENT_REVISION} current\n`,
+    );
+    expect(await readFile(join(directory, "current-image-id"), "utf8")).toBe(
+      `${CURRENT_IMAGE_ID}\n`,
+    );
+    expect(await readFile(join(directory, "deployment-high-water"), "utf8")).toBe(
+      `${CURRENT_REVISION}\n`,
+    );
+
+    const rollback = runStateScript(
+      directory,
+      'record_immutable_deployment_state "$2" "$3" current "$4" "$5"',
+      ROLLBACK_REVISION,
+      ROLLBACK_IMAGE_ID,
+      CURRENT_REVISION,
+    );
+    expect(rollback.status, rollback.stderr).toBe(0);
+    const loaded = runStateScript(
+      directory,
+      'load_deployment_state "$2"; printf "%s|%s|%s|%s" "$previous_revision" "$previous_compatibility_mode" "$previous_image_id" "$deployment_high_water_revision"',
+    );
+    expect(loaded.status, loaded.stderr).toBe(0);
+    expect(loaded.stdout).toBe(
+      `${ROLLBACK_REVISION}|current|${ROLLBACK_IMAGE_ID}|${CURRENT_REVISION}`,
+    );
+    const verified = runStateScript(
+      directory,
+      'load_verified_deployment_image "$2" "$3"',
+      CURRENT_REVISION,
+    );
+    expect(verified.status, verified.stderr).toBe(0);
+    expect(verified.stdout).toBe(`${CURRENT_IMAGE_ID}\n`);
+  });
+
+  it("fails closed on partial or conflicting immutable state", async () => {
+    const directory = await stateDirectory();
+    await writeFile(
+      join(directory, "current-deployment"),
+      `v1 ${CURRENT_REVISION} current\n`,
+    );
+    await writeFile(join(directory, "current-revision"), `${CURRENT_REVISION}\n`);
+    await writeFile(join(directory, "current-image-id"), `${CURRENT_IMAGE_ID}\n`);
+    const partial = runStateScript(directory, 'load_deployment_state "$2"');
+    expect(partial.status).not.toBe(0);
+    expect(partial.stderr).toContain("Invalid deployment state");
+
+    await writeFile(join(directory, "deployment-high-water"), `${CURRENT_REVISION}\n`);
+    const missingBinding = runStateScript(directory, 'load_deployment_state "$2"');
+    expect(missingBinding.status).not.toBe(0);
+    expect(missingBinding.stderr).toContain("Invalid deployment state");
+  });
+
+  it("never replaces an immutable revision-to-image binding", async () => {
+    const directory = await stateDirectory();
+    const first = runStateScript(
+      directory,
+      'record_verified_deployment_image "$2" "$3" "$4"',
+      CURRENT_REVISION,
+      CURRENT_IMAGE_ID,
+    );
+    expect(first.status, first.stderr).toBe(0);
+    const conflict = runStateScript(
+      directory,
+      'record_verified_deployment_image "$2" "$3" "$4"',
+      CURRENT_REVISION,
+      ROLLBACK_IMAGE_ID,
+    );
+    expect(conflict.status).not.toBe(0);
+    expect(conflict.stderr).toContain("Invalid deployment state");
+    expect(await readFile(
+      join(directory, "verified-images", CURRENT_REVISION),
+      "utf8",
+    )).toBe(`v1 ${CURRENT_REVISION} ${CURRENT_IMAGE_ID}\n`);
   });
 
   it.each([

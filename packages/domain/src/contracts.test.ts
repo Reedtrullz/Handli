@@ -65,6 +65,13 @@ describe("domain schemas", () => {
     expect(needSchema.safeParse({ ...validNeed, quantity: 0 }).success).toBe(false);
   });
 
+  it.each(["piece", "package", "g", "ml"] as const)(
+    "admits the explicit %s quantity unit used by strict planning",
+    (quantityUnit) => {
+      expect(needSchema.safeParse({ ...validNeed, quantityUnit }).success).toBe(true);
+    },
+  );
+
   it("rejects a request allowing more than three stores", () => {
     expect(planRequestSchema.safeParse({ ...validRequest, maxStores: 4 }).success).toBe(false);
   });

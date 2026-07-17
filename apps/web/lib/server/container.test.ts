@@ -2,17 +2,28 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import { PostgresActiveCatalogReader } from "@handleplan/db/catalog-reader";
+import { PostgresBranchDirectory } from "@handleplan/db/branch-directory";
 import { PostgresPlanningEvidenceReader } from "@handleplan/db/planning-evidence-reader";
+import { PostgresPublicOfficialOfferReader } from "@handleplan/db/public-official-offer-reader";
 import { PostgresPublicCatalogIndexReader } from "@handleplan/db/public-catalog-index-reader";
 import { PostgresReviewedFamilyReader } from "@handleplan/db/reviewed-family-reader";
+import { PostgresPublicSourceStatusReader } from "@handleplan/db/source-status-reader";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
 import { createServerContainer, FAKE_EVALUATION_TIME } from "./container";
+import { DiscoveryImpactService } from "./discovery-impact-service";
 import { readServerEnv } from "./env";
 import { FamilyCandidateService } from "./family-candidate-service";
 import { PriceService } from "./price-service";
+import { SourceStatusService } from "./source-status-service";
+
+const MARKET_CONTEXT = {
+  contractVersion: 1,
+  countryCode: "NO",
+  kind: "national",
+} as const;
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -50,7 +61,7 @@ describe("fake server container", () => {
 
   it("serves deterministic persisted-style discovery without an upstream gateway", async () => {
     const container = createServerContainer({ mode: "fake" });
-    const result = await container.discoveryService.search("lettmelk");
+    const result = await container.discoveryService.search("lettmelk", MARKET_CONTEXT);
 
     expect(result.generatedAt).toBe(FAKE_EVALUATION_TIME);
     expect(result.priceDataSource).toBe("cache");
@@ -65,10 +76,22 @@ describe("fake server container", () => {
     });
   });
 
+  it("keeps fake source status empty instead of implying a live public source", async () => {
+    const result = await createServerContainer({ mode: "fake" }).sourceStatusService.read();
+
+    expect(result).toMatchObject({
+      entries: [],
+      generatedAt: FAKE_EVALUATION_TIME,
+      overall: "no-approved-sources",
+    });
+  });
+
   it("rehydrates exact GTIN requests from the server-owned active catalog", async () => {
     const container = createServerContainer({ mode: "fake" });
     const result = await container.planService.calculateExact({
       contractVersion: 1,
+      enabledMembershipProgramIds: [],
+      marketContext: MARKET_CONTEXT,
       maxStores: 1,
       needs: [{
         id: "need:milk",
@@ -142,6 +165,8 @@ describe("fake server container", () => {
 
     const result = await container.planService.calculateReviewed({
       contractVersion: 2,
+      enabledMembershipProgramIds: [],
+      marketContext: MARKET_CONTEXT,
       maxStores: 2,
       needs: [
         {
@@ -189,6 +214,8 @@ describe("fake server container", () => {
     const container = createServerContainer({ mode: "fake" });
     const result = await container.planService.calculateExact({
       contractVersion: 1,
+      enabledMembershipProgramIds: [],
+      marketContext: MARKET_CONTEXT,
       maxStores: 3,
       needs: [{
         id: "need:stale",
@@ -232,9 +259,16 @@ describe("real server container", () => {
     const discoveryDependencies = (container.discoveryService as unknown as {
       dependencies: { catalog: unknown; priceService: unknown };
     }).dependencies;
+    const impactDependencies = (container.discoveryImpactService as unknown as {
+      dependencies: { resolver: unknown };
+    }).dependencies;
 
     expect(container.publicCatalogIndex).toBeInstanceOf(PostgresPublicCatalogIndexReader);
+    expect(container.branchDirectory).toBeInstanceOf(PostgresBranchDirectory);
     expect(container.familyCandidateService).toBeInstanceOf(FamilyCandidateService);
+    expect(container.discoveryImpactService).toBeInstanceOf(DiscoveryImpactService);
+    expect(container.sourceStatusService).toBeInstanceOf(SourceStatusService);
+    expect(impactDependencies.resolver).toBe(container.planService);
     expect("calculate" in container.planService).toBe(false);
     expect(planDependencies.catalog).toBeInstanceOf(PostgresActiveCatalogReader);
     expect(planDependencies.familyCandidateService).toBe(container.familyCandidateService);
@@ -242,12 +276,19 @@ describe("real server container", () => {
     expect(discoveryDependencies.catalog).toBe(container.publicCatalogIndex);
     expect(discoveryDependencies.priceService).toBe(planDependencies.priceService);
     const priceDependencies = (planDependencies.priceService as unknown as {
-      dependencies: { reader: unknown };
+      dependencies: { officialOfferReader: unknown; reader: unknown };
     }).dependencies;
     expect(priceDependencies.reader).toBeInstanceOf(PostgresPlanningEvidenceReader);
+    expect(priceDependencies.officialOfferReader).toBeInstanceOf(
+      PostgresPublicOfficialOfferReader,
+    );
     const candidateDependencies = (container.familyCandidateService as unknown as {
       dependencies: { reader: unknown };
     }).dependencies;
     expect(candidateDependencies.reader).toBeInstanceOf(PostgresReviewedFamilyReader);
+    const sourceStatusDependencies = (container.sourceStatusService as unknown as {
+      reader: unknown;
+    });
+    expect(sourceStatusDependencies.reader).toBeInstanceOf(PostgresPublicSourceStatusReader);
   });
 });

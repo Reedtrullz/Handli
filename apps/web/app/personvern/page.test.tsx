@@ -16,16 +16,24 @@ describe("Norwegian privacy notice", () => {
     expect(screen.getByRole("heading", { name: "Personvern i Handleplan" })).toBeVisible();
     expect(screen.getByText(/handlelisten.*lokale lagring/i)).toBeVisible();
     expect(screen.getByText(/søketekst.*sendes til serveren/i)).toBeVisible();
+    expect(screen.getByText(/medlemsprogrammene du selv slår på.*lokale lagring/i)).toBeVisible();
+    expect(screen.getByText(/medlemsprogram-ID-er.*planforespørselen.*kortvarig/i)).toBeVisible();
+    expect(screen.getByText(/ingen Handleplan-konto.*innlogging hos.*medlemsprogramleverandøren/i))
+      .toBeVisible();
+    expect(screen.getByText(/ikke.*lagre medlemsvalget på serveren/i)).toBeVisible();
     expect(screen.getByText(/aldri lagres.*logger.*sikkerhetskopi/i)).toBeVisible();
     expect(screen.getByText(/kassalapp-kall.*bakgrunnsjobber/i)).toBeVisible();
   });
 
-  it("does not invent a controller, provider, legal basis, or contact", () => {
+  it("does not invent a controller, provider activation, legal basis, or contact", () => {
     render(<PrivacyPage />);
 
     expect(screen.getByText(/juridisk operatør og behandlingsansvarlig.*ikke.*fastsatt/i))
       .toBeVisible();
-    expect(screen.getByText(/geokoder.*rutetjeneste.*ikke valgt og godkjent/i)).toBeVisible();
+    expect(screen.getByText(/produksjonskonfigurasjon.*ikke-lagringsbevis.*ikke godkjent/i))
+      .toBeVisible();
+    expect(screen.getByText(/kartverkets adresse-api.*valhalla.*valgt.*tekniske grenser/i))
+      .toBeVisible();
     expect(screen.getByText(/offentlig lansering er blokkert/i)).toBeVisible();
     expect(screen.queryByRole("link", { name: /send personvernkrav/i })).not.toBeInTheDocument();
   });

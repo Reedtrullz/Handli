@@ -24,10 +24,10 @@
       "tags": ["small_basket", "package_rounding", "staples"],
       "acceptanceFocus": ["whole_packages", "ordinary_price_coverage", "complete_plan"],
       "items": [
-        { "needId": "milk", "query": "lettmelk", "requiredAmount": { "value": 2000, "unit": "ml" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "bread", "query": "grovbrød", "requiredAmount": { "value": 2, "unit": "piece" }, "matchMode": "constrained", "constraints": ["wholegrain"] },
-        { "needId": "eggs", "query": "egg", "requiredAmount": { "value": 12, "unit": "piece" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "butter", "query": "smør", "requiredAmount": { "value": 500, "unit": "g" }, "matchMode": "flexible", "constraints": [] }
+        {"needId":"milk","query":"lettmelk","identity":{"kind":"exact-product","canonicalProductId":"product:benchmark:lettmelk-1l"},"requiredAmount":{"value":2,"unit":"package"},"matchMode":"constrained","constraints":[]},
+        {"needId":"bread","query":"grovbrød","identity":{"kind":"reviewed-family","familyId":"family:benchmark:bread"},"requiredAmount":{"value":2,"unit":"piece"},"matchMode":"constrained","constraints":["wholegrain"]},
+        {"needId":"eggs","query":"egg","identity":{"kind":"reviewed-family","familyId":"family:benchmark:eggs"},"requiredAmount":{"value":12,"unit":"piece"},"matchMode":"flexible","constraints":[]},
+        {"needId":"butter","query":"smør","identity":{"kind":"reviewed-family","familyId":"family:benchmark:butter"},"requiredAmount":{"value":500,"unit":"g"},"matchMode":"flexible","constraints":[]}
       ]
     },
     {
@@ -36,10 +36,10 @@
       "tags": ["medium_basket", "staples", "fresh_produce"],
       "acceptanceFocus": ["mixed_units", "flexible_matching", "cross_chain_coverage"],
       "items": [
-        { "needId": "oats", "query": "havregryn", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "yogurt", "query": "naturell yoghurt", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "bananas", "query": "bananer", "requiredAmount": { "value": 1500, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "coffee", "query": "filterkaffe", "requiredAmount": { "value": 500, "unit": "g" }, "matchMode": "flexible", "constraints": [] }
+        {"needId":"oats","query":"havregryn","identity":{"kind":"reviewed-family","familyId":"family:benchmark:oats"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"yogurt","query":"naturell yoghurt","identity":{"kind":"reviewed-family","familyId":"family:benchmark:yogurt"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"bananas","query":"bananer","identity":{"kind":"reviewed-family","familyId":"family:benchmark:bananas"},"requiredAmount":{"value":1500,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"coffee","query":"filterkaffe","identity":{"kind":"reviewed-family","familyId":"family:benchmark:coffee"},"requiredAmount":{"value":500,"unit":"g"},"matchMode":"flexible","constraints":[]}
       ]
     },
     {
@@ -48,11 +48,11 @@
       "tags": ["meal", "medium_basket", "quantity_fulfilment"],
       "acceptanceFocus": ["package_surplus", "substitution_explanation", "complete_plan"],
       "items": [
-        { "needId": "pasta", "query": "tørr pasta", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "minced-beef", "query": "kjøttdeig storfe", "requiredAmount": { "value": 800, "unit": "g" }, "matchMode": "constrained", "constraints": ["beef"] },
-        { "needId": "tomatoes", "query": "hakkede tomater", "requiredAmount": { "value": 800, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "onion", "query": "gul løk", "requiredAmount": { "value": 500, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "cheese", "query": "fast gulost", "requiredAmount": { "value": 300, "unit": "g" }, "matchMode": "flexible", "constraints": [] }
+        {"needId":"pasta","query":"tørr pasta","identity":{"kind":"reviewed-family","familyId":"family:benchmark:pasta"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"minced-beef","query":"kjøttdeig storfe","identity":{"kind":"reviewed-family","familyId":"family:benchmark:minced-beef"},"requiredAmount":{"value":800,"unit":"g"},"matchMode":"constrained","constraints":["beef"]},
+        {"needId":"tomatoes","query":"hakkede tomater","identity":{"kind":"reviewed-family","familyId":"family:benchmark:tomatoes"},"requiredAmount":{"value":800,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"onion","query":"gul løk","identity":{"kind":"reviewed-family","familyId":"family:benchmark:onion"},"requiredAmount":{"value":500,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"cheese","query":"fast gulost","identity":{"kind":"reviewed-family","familyId":"family:benchmark:cheese"},"requiredAmount":{"value":300,"unit":"g"},"matchMode":"flexible","constraints":[]}
       ]
     },
     {
@@ -61,12 +61,12 @@
       "tags": ["meal", "multibuy_candidate", "many_packages"],
       "acceptanceFocus": ["multibuy_remainder", "package_count", "offer_conditions"],
       "items": [
-        { "needId": "tortillas", "query": "tortillalefser", "requiredAmount": { "value": 16, "unit": "piece" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "minced-meat", "query": "kjøttdeig", "requiredAmount": { "value": 800, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "beans", "query": "svarte bønner", "requiredAmount": { "value": 400, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "salsa", "query": "tacosaus salsa", "requiredAmount": { "value": 500, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "cheese", "query": "revet ost", "requiredAmount": { "value": 300, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "lettuce", "query": "isbergsalat", "requiredAmount": { "value": 1, "unit": "piece" }, "matchMode": "flexible", "constraints": [] }
+        {"needId":"tortillas","query":"tortillalefser","identity":{"kind":"reviewed-family","familyId":"family:benchmark:tortillas"},"requiredAmount":{"value":16,"unit":"piece"},"matchMode":"flexible","constraints":[]},
+        {"needId":"minced-meat","query":"kjøttdeig","identity":{"kind":"reviewed-family","familyId":"family:benchmark:minced-meat"},"requiredAmount":{"value":800,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"beans","query":"svarte bønner","identity":{"kind":"reviewed-family","familyId":"family:benchmark:beans"},"requiredAmount":{"value":400,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"salsa","query":"tacosaus salsa","identity":{"kind":"reviewed-family","familyId":"family:benchmark:salsa"},"requiredAmount":{"value":500,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"cheese","query":"revet ost","identity":{"kind":"reviewed-family","familyId":"family:benchmark:cheese"},"requiredAmount":{"value":300,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"lettuce","query":"isbergsalat","identity":{"kind":"reviewed-family","familyId":"family:benchmark:lettuce"},"requiredAmount":{"value":1,"unit":"piece"},"matchMode":"flexible","constraints":[]}
       ]
     },
     {
@@ -75,10 +75,10 @@
       "tags": ["meal", "fresh_produce", "weight_based"],
       "acceptanceFocus": ["weight_units", "fresh_vs_frozen_substitution", "coverage_unknowns"],
       "items": [
-        { "needId": "fish", "query": "hvit fiskefilet", "requiredAmount": { "value": 800, "unit": "g" }, "matchMode": "constrained", "constraints": ["boneless"] },
-        { "needId": "potatoes", "query": "poteter", "requiredAmount": { "value": 2000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "carrots", "query": "gulrøtter", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "broccoli", "query": "brokkoli", "requiredAmount": { "value": 500, "unit": "g" }, "matchMode": "flexible", "constraints": [] }
+        {"needId":"fish","query":"hvit fiskefilet","identity":{"kind":"reviewed-family","familyId":"family:benchmark:fish"},"requiredAmount":{"value":800,"unit":"g"},"matchMode":"constrained","constraints":["boneless"]},
+        {"needId":"potatoes","query":"poteter","identity":{"kind":"reviewed-family","familyId":"family:benchmark:potatoes"},"requiredAmount":{"value":2000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"carrots","query":"gulrøtter","identity":{"kind":"reviewed-family","familyId":"family:benchmark:carrots"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"broccoli","query":"brokkoli","identity":{"kind":"reviewed-family","familyId":"family:benchmark:broccoli"},"requiredAmount":{"value":500,"unit":"g"},"matchMode":"flexible","constraints":[]}
       ]
     },
     {
@@ -87,11 +87,11 @@
       "tags": ["meal", "vegetarian", "pantry"],
       "acceptanceFocus": ["dietary_constraint", "package_surplus", "generic_family_matching"],
       "items": [
-        { "needId": "chickpeas", "query": "kikerter", "requiredAmount": { "value": 800, "unit": "g" }, "matchMode": "constrained", "constraints": ["vegetarian"] },
-        { "needId": "coconut-milk", "query": "kokosmelk", "requiredAmount": { "value": 800, "unit": "ml" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "rice", "query": "ris", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "onion", "query": "gul løk", "requiredAmount": { "value": 500, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "spinach", "query": "frossen spinat", "requiredAmount": { "value": 500, "unit": "g" }, "matchMode": "constrained", "constraints": ["frozen"] }
+        {"needId":"chickpeas","query":"kikerter","identity":{"kind":"reviewed-family","familyId":"family:benchmark:chickpeas"},"requiredAmount":{"value":800,"unit":"g"},"matchMode":"constrained","constraints":["vegetarian"]},
+        {"needId":"coconut-milk","query":"kokosmelk","identity":{"kind":"reviewed-family","familyId":"family:benchmark:coconut-milk"},"requiredAmount":{"value":800,"unit":"ml"},"matchMode":"flexible","constraints":[]},
+        {"needId":"rice","query":"ris","identity":{"kind":"reviewed-family","familyId":"family:benchmark:rice"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"onion","query":"gul løk","identity":{"kind":"reviewed-family","familyId":"family:benchmark:onion"},"requiredAmount":{"value":500,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"spinach","query":"frossen spinat","identity":{"kind":"reviewed-family","familyId":"family:benchmark:spinach"},"requiredAmount":{"value":500,"unit":"g"},"matchMode":"constrained","constraints":["frozen"]}
       ]
     },
     {
@@ -100,11 +100,11 @@
       "tags": ["medium_basket", "fresh_produce", "package_rounding"],
       "acceptanceFocus": ["quantity_fulfilment", "reviewed_families", "complete_plan"],
       "items": [
-        { "needId": "bread", "query": "grovbrød", "requiredAmount": { "value": 2, "unit": "piece" }, "matchMode": "constrained", "constraints": ["wholegrain"] },
-        { "needId": "cheese", "query": "skivet gulost", "requiredAmount": { "value": 500, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "ham", "query": "kokt skinke pålegg", "requiredAmount": { "value": 400, "unit": "g" }, "matchMode": "constrained", "constraints": ["pork"] },
-        { "needId": "cucumber", "query": "agurk", "requiredAmount": { "value": 2, "unit": "piece" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "apples", "query": "epler", "requiredAmount": { "value": 1500, "unit": "g" }, "matchMode": "flexible", "constraints": [] }
+        {"needId":"bread","query":"grovbrød","identity":{"kind":"reviewed-family","familyId":"family:benchmark:bread"},"requiredAmount":{"value":2,"unit":"piece"},"matchMode":"constrained","constraints":["wholegrain"]},
+        {"needId":"cheese","query":"skivet gulost","identity":{"kind":"reviewed-family","familyId":"family:benchmark:cheese"},"requiredAmount":{"value":500,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"ham","query":"kokt skinke pålegg","identity":{"kind":"reviewed-family","familyId":"family:benchmark:ham"},"requiredAmount":{"value":400,"unit":"g"},"matchMode":"constrained","constraints":["pork"]},
+        {"needId":"cucumber","query":"agurk","identity":{"kind":"reviewed-family","familyId":"family:benchmark:cucumber"},"requiredAmount":{"value":2,"unit":"piece"},"matchMode":"flexible","constraints":[]},
+        {"needId":"apples","query":"epler","identity":{"kind":"reviewed-family","familyId":"family:benchmark:apples"},"requiredAmount":{"value":1500,"unit":"g"},"matchMode":"flexible","constraints":[]}
       ]
     },
     {
@@ -113,10 +113,10 @@
       "tags": ["non_food", "large_packages", "multibuy_candidate"],
       "acceptanceFocus": ["non_food_categories", "piece_and_volume_units", "offer_conditions"],
       "items": [
-        { "needId": "dish-soap", "query": "oppvaskmiddel", "requiredAmount": { "value": 1000, "unit": "ml" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "laundry", "query": "flytende vaskemiddel kulørt", "requiredAmount": { "value": 2000, "unit": "ml" }, "matchMode": "constrained", "constraints": ["color_laundry"] },
-        { "needId": "bin-bags", "query": "avfallsposer", "requiredAmount": { "value": 40, "unit": "piece" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "paper-towels", "query": "tørkerull", "requiredAmount": { "value": 8, "unit": "piece" }, "matchMode": "flexible", "constraints": [] }
+        {"needId":"dish-soap","query":"oppvaskmiddel","identity":{"kind":"exact-product","canonicalProductId":"product:benchmark:oppvaskmiddel-500ml"},"requiredAmount":{"value":2,"unit":"package"},"matchMode":"constrained","constraints":[]},
+        {"needId":"laundry","query":"flytende vaskemiddel kulørt","identity":{"kind":"reviewed-family","familyId":"family:benchmark:laundry"},"requiredAmount":{"value":2000,"unit":"ml"},"matchMode":"constrained","constraints":["color_laundry"]},
+        {"needId":"bin-bags","query":"avfallsposer","identity":{"kind":"reviewed-family","familyId":"family:benchmark:bin-bags"},"requiredAmount":{"value":40,"unit":"piece"},"matchMode":"flexible","constraints":[]},
+        {"needId":"paper-towels","query":"tørkerull","identity":{"kind":"reviewed-family","familyId":"family:benchmark:paper-towels"},"requiredAmount":{"value":8,"unit":"piece"},"matchMode":"flexible","constraints":[]}
       ]
     },
     {
@@ -125,10 +125,10 @@
       "tags": ["non_food", "small_packages", "member_offer_candidate"],
       "acceptanceFocus": ["member_eligibility", "category_coverage", "package_rounding"],
       "items": [
-        { "needId": "toothpaste", "query": "tannkrem", "requiredAmount": { "value": 150, "unit": "ml" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "shampoo", "query": "sjampo", "requiredAmount": { "value": 500, "unit": "ml" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "hand-soap", "query": "håndsåpe", "requiredAmount": { "value": 500, "unit": "ml" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "toilet-paper", "query": "toalettpapir", "requiredAmount": { "value": 16, "unit": "piece" }, "matchMode": "flexible", "constraints": [] }
+        {"needId":"toothpaste","query":"tannkrem","identity":{"kind":"exact-product","canonicalProductId":"product:benchmark:tannkrem-75ml"},"requiredAmount":{"value":2,"unit":"package"},"matchMode":"constrained","constraints":[]},
+        {"needId":"shampoo","query":"sjampo","identity":{"kind":"reviewed-family","familyId":"family:benchmark:shampoo"},"requiredAmount":{"value":500,"unit":"ml"},"matchMode":"flexible","constraints":[]},
+        {"needId":"hand-soap","query":"håndsåpe","identity":{"kind":"reviewed-family","familyId":"family:benchmark:hand-soap"},"requiredAmount":{"value":500,"unit":"ml"},"matchMode":"flexible","constraints":[]},
+        {"needId":"toilet-paper","query":"toalettpapir","identity":{"kind":"reviewed-family","familyId":"family:benchmark:toilet-paper"},"requiredAmount":{"value":16,"unit":"piece"},"matchMode":"flexible","constraints":[]}
       ]
     },
     {
@@ -137,11 +137,11 @@
       "tags": ["pantry", "package_rounding", "staples"],
       "acceptanceFocus": ["large_required_quantity", "whole_packages", "ordinary_price_coverage"],
       "items": [
-        { "needId": "flour", "query": "hvetemel", "requiredAmount": { "value": 2000, "unit": "g" }, "matchMode": "constrained", "constraints": ["wheat"] },
-        { "needId": "sugar", "query": "sukker", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "butter", "query": "smør", "requiredAmount": { "value": 500, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "eggs", "query": "egg", "requiredAmount": { "value": 12, "unit": "piece" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "baking-powder", "query": "bakepulver", "requiredAmount": { "value": 200, "unit": "g" }, "matchMode": "flexible", "constraints": [] }
+        {"needId":"flour","query":"hvetemel","identity":{"kind":"reviewed-family","familyId":"family:benchmark:flour"},"requiredAmount":{"value":2000,"unit":"g"},"matchMode":"constrained","constraints":["wheat"]},
+        {"needId":"sugar","query":"sukker","identity":{"kind":"reviewed-family","familyId":"family:benchmark:sugar"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"butter","query":"smør","identity":{"kind":"reviewed-family","familyId":"family:benchmark:butter"},"requiredAmount":{"value":500,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"eggs","query":"egg","identity":{"kind":"reviewed-family","familyId":"family:benchmark:eggs"},"requiredAmount":{"value":12,"unit":"piece"},"matchMode":"flexible","constraints":[]},
+        {"needId":"baking-powder","query":"bakepulver","identity":{"kind":"reviewed-family","familyId":"family:benchmark:baking-powder"},"requiredAmount":{"value":200,"unit":"g"},"matchMode":"flexible","constraints":[]}
       ]
     },
     {
@@ -150,10 +150,10 @@
       "tags": ["mixed_storage", "package_rounding", "higher_value"],
       "acceptanceFocus": ["fresh_and_shelf_stable", "large_required_quantity", "substitution_safety"],
       "items": [
-        { "needId": "chicken", "query": "kyllingfilet", "requiredAmount": { "value": 1200, "unit": "g" }, "matchMode": "constrained", "constraints": ["boneless"] },
-        { "needId": "eggs", "query": "egg", "requiredAmount": { "value": 18, "unit": "piece" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "lentils", "query": "røde linser", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "tuna", "query": "tunfisk på boks", "requiredAmount": { "value": 600, "unit": "g" }, "matchMode": "constrained", "constraints": ["canned"] }
+        {"needId":"chicken","query":"kyllingfilet","identity":{"kind":"reviewed-family","familyId":"family:benchmark:chicken"},"requiredAmount":{"value":1200,"unit":"g"},"matchMode":"constrained","constraints":["boneless"]},
+        {"needId":"eggs","query":"egg","identity":{"kind":"reviewed-family","familyId":"family:benchmark:eggs"},"requiredAmount":{"value":18,"unit":"piece"},"matchMode":"flexible","constraints":[]},
+        {"needId":"lentils","query":"røde linser","identity":{"kind":"reviewed-family","familyId":"family:benchmark:lentils"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"tuna","query":"tunfisk på boks","identity":{"kind":"reviewed-family","familyId":"family:benchmark:tuna"},"requiredAmount":{"value":600,"unit":"g"},"matchMode":"constrained","constraints":["canned"]}
       ]
     },
     {
@@ -162,11 +162,11 @@
       "tags": ["fresh_produce", "weight_based", "variable_package"],
       "acceptanceFocus": ["weight_normalization", "variable_weight_disclosure", "known_not_carried_evidence"],
       "items": [
-        { "needId": "apples", "query": "epler", "requiredAmount": { "value": 2000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "bananas", "query": "bananer", "requiredAmount": { "value": 1500, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "oranges", "query": "appelsiner", "requiredAmount": { "value": 2000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "tomatoes", "query": "tomater", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "cucumber", "query": "agurk", "requiredAmount": { "value": 2, "unit": "piece" }, "matchMode": "flexible", "constraints": [] }
+        {"needId":"apples","query":"epler","identity":{"kind":"reviewed-family","familyId":"family:benchmark:apples"},"requiredAmount":{"value":2000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"bananas","query":"bananer","identity":{"kind":"reviewed-family","familyId":"family:benchmark:bananas"},"requiredAmount":{"value":1500,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"oranges","query":"appelsiner","identity":{"kind":"reviewed-family","familyId":"family:benchmark:oranges"},"requiredAmount":{"value":2000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"tomatoes","query":"tomater","identity":{"kind":"reviewed-family","familyId":"family:benchmark:tomatoes"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"cucumber","query":"agurk","identity":{"kind":"reviewed-family","familyId":"family:benchmark:cucumber"},"requiredAmount":{"value":2,"unit":"piece"},"matchMode":"flexible","constraints":[]}
       ]
     },
     {
@@ -175,11 +175,11 @@
       "tags": ["large_basket", "shelf_stable", "large_packages"],
       "acceptanceFocus": ["package_size_tradeoff", "unit_price", "multi_store_frontier"],
       "items": [
-        { "needId": "rice", "query": "ris", "requiredAmount": { "value": 2000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "pasta", "query": "tørr pasta", "requiredAmount": { "value": 2000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "oats", "query": "havregryn", "requiredAmount": { "value": 1500, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "flour", "query": "hvetemel", "requiredAmount": { "value": 2000, "unit": "g" }, "matchMode": "constrained", "constraints": ["wheat"] },
-        { "needId": "oil", "query": "nøytral matolje", "requiredAmount": { "value": 1000, "unit": "ml" }, "matchMode": "constrained", "constraints": ["neutral_flavor"] }
+        {"needId":"rice","query":"ris","identity":{"kind":"reviewed-family","familyId":"family:benchmark:rice"},"requiredAmount":{"value":2000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"pasta","query":"tørr pasta","identity":{"kind":"reviewed-family","familyId":"family:benchmark:pasta"},"requiredAmount":{"value":2000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"oats","query":"havregryn","identity":{"kind":"reviewed-family","familyId":"family:benchmark:oats"},"requiredAmount":{"value":1500,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"flour","query":"hvetemel","identity":{"kind":"reviewed-family","familyId":"family:benchmark:flour"},"requiredAmount":{"value":2000,"unit":"g"},"matchMode":"constrained","constraints":["wheat"]},
+        {"needId":"oil","query":"nøytral matolje","identity":{"kind":"reviewed-family","familyId":"family:benchmark:oil"},"requiredAmount":{"value":1000,"unit":"ml"},"matchMode":"constrained","constraints":["neutral_flavor"]}
       ]
     },
     {
@@ -188,10 +188,10 @@
       "tags": ["frozen", "large_packages", "multibuy_candidate"],
       "acceptanceFocus": ["frozen_constraint", "piece_and_weight_units", "offer_expiry"],
       "items": [
-        { "needId": "vegetables", "query": "frosne blandede grønnsaker", "requiredAmount": { "value": 1500, "unit": "g" }, "matchMode": "constrained", "constraints": ["frozen"] },
-        { "needId": "fish", "query": "frossen hvit fiskefilet", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "constrained", "constraints": ["frozen", "boneless"] },
-        { "needId": "pizza", "query": "frossenpizza", "requiredAmount": { "value": 3, "unit": "piece" }, "matchMode": "constrained", "constraints": ["frozen"] },
-        { "needId": "berries", "query": "frosne bær", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "constrained", "constraints": ["frozen"] }
+        {"needId":"vegetables","query":"frosne blandede grønnsaker","identity":{"kind":"reviewed-family","familyId":"family:benchmark:vegetables"},"requiredAmount":{"value":1500,"unit":"g"},"matchMode":"constrained","constraints":["frozen"]},
+        {"needId":"fish","query":"frossen hvit fiskefilet","identity":{"kind":"reviewed-family","familyId":"family:benchmark:fish"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"constrained","constraints":["frozen","boneless"]},
+        {"needId":"pizza","query":"frossenpizza","identity":{"kind":"reviewed-family","familyId":"family:benchmark:pizza"},"requiredAmount":{"value":3,"unit":"piece"},"matchMode":"constrained","constraints":["frozen"]},
+        {"needId":"berries","query":"frosne bær","identity":{"kind":"reviewed-family","familyId":"family:benchmark:berries"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"constrained","constraints":["frozen"]}
       ]
     },
     {
@@ -200,10 +200,10 @@
       "tags": ["dietary_constraint", "plant_based", "constrained_matching"],
       "acceptanceFocus": ["constraint_enforcement", "no_silent_substitution", "coverage_unknowns"],
       "items": [
-        { "needId": "oat-drink", "query": "havredrikk", "requiredAmount": { "value": 3000, "unit": "ml" }, "matchMode": "constrained", "constraints": ["plant_based", "dairy_free"] },
-        { "needId": "plant-yogurt", "query": "plantebasert yoghurt", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "constrained", "constraints": ["plant_based", "dairy_free"] },
-        { "needId": "spread", "query": "melkefri margarin", "requiredAmount": { "value": 500, "unit": "g" }, "matchMode": "constrained", "constraints": ["dairy_free"] },
-        { "needId": "cereal", "query": "frokostblanding", "requiredAmount": { "value": 750, "unit": "g" }, "matchMode": "flexible", "constraints": [] }
+        {"needId":"oat-drink","query":"havredrikk","identity":{"kind":"reviewed-family","familyId":"family:benchmark:oat-drink"},"requiredAmount":{"value":3000,"unit":"ml"},"matchMode":"constrained","constraints":["plant_based","dairy_free"]},
+        {"needId":"plant-yogurt","query":"plantebasert yoghurt","identity":{"kind":"reviewed-family","familyId":"family:benchmark:plant-yogurt"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"constrained","constraints":["plant_based","dairy_free"]},
+        {"needId":"spread","query":"melkefri margarin","identity":{"kind":"reviewed-family","familyId":"family:benchmark:spread"},"requiredAmount":{"value":500,"unit":"g"},"matchMode":"constrained","constraints":["dairy_free"]},
+        {"needId":"cereal","query":"frokostblanding","identity":{"kind":"reviewed-family","familyId":"family:benchmark:cereal"},"requiredAmount":{"value":750,"unit":"g"},"matchMode":"flexible","constraints":[]}
       ]
     },
     {
@@ -212,11 +212,11 @@
       "tags": ["dietary_constraint", "gluten_free", "constrained_matching"],
       "acceptanceFocus": ["constraint_enforcement", "review_required_matches", "ineligible_evidence"],
       "items": [
-        { "needId": "bread", "query": "glutenfritt brød", "requiredAmount": { "value": 2, "unit": "piece" }, "matchMode": "constrained", "constraints": ["gluten_free"] },
-        { "needId": "pasta", "query": "glutenfri pasta", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "constrained", "constraints": ["gluten_free"] },
-        { "needId": "rice-cakes", "query": "riskaker", "requiredAmount": { "value": 300, "unit": "g" }, "matchMode": "constrained", "constraints": ["gluten_free"] },
-        { "needId": "oats", "query": "glutenfrie havregryn", "requiredAmount": { "value": 750, "unit": "g" }, "matchMode": "constrained", "constraints": ["gluten_free"] },
-        { "needId": "tomato-sauce", "query": "tomatsaus", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "constrained", "constraints": ["gluten_free"] }
+        {"needId":"bread","query":"glutenfritt brød","identity":{"kind":"reviewed-family","familyId":"family:benchmark:bread"},"requiredAmount":{"value":2,"unit":"piece"},"matchMode":"constrained","constraints":["gluten_free"]},
+        {"needId":"pasta","query":"glutenfri pasta","identity":{"kind":"reviewed-family","familyId":"family:benchmark:pasta"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"constrained","constraints":["gluten_free"]},
+        {"needId":"rice-cakes","query":"riskaker","identity":{"kind":"reviewed-family","familyId":"family:benchmark:rice-cakes"},"requiredAmount":{"value":300,"unit":"g"},"matchMode":"constrained","constraints":["gluten_free"]},
+        {"needId":"oats","query":"glutenfrie havregryn","identity":{"kind":"reviewed-family","familyId":"family:benchmark:oats"},"requiredAmount":{"value":750,"unit":"g"},"matchMode":"constrained","constraints":["gluten_free"]},
+        {"needId":"tomato-sauce","query":"tomatsaus","identity":{"kind":"reviewed-family","familyId":"family:benchmark:tomato-sauce"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"constrained","constraints":["gluten_free"]}
       ]
     },
     {
@@ -225,11 +225,11 @@
       "tags": ["snacks", "multibuy_candidate", "mixed_units"],
       "acceptanceFocus": ["deposit_disclosure", "multibuy_remainder", "package_count"],
       "items": [
-        { "needId": "water", "query": "kullsyrevann", "requiredAmount": { "value": 6000, "unit": "ml" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "crispbread", "query": "knekkebrød", "requiredAmount": { "value": 500, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "cheese", "query": "fast gulost", "requiredAmount": { "value": 500, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "grapes", "query": "druer", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "nuts", "query": "blandede nøtter", "requiredAmount": { "value": 500, "unit": "g" }, "matchMode": "flexible", "constraints": [] }
+        {"needId":"water","query":"kullsyrevann","identity":{"kind":"reviewed-family","familyId":"family:benchmark:water"},"requiredAmount":{"value":6000,"unit":"ml"},"matchMode":"flexible","constraints":[]},
+        {"needId":"crispbread","query":"knekkebrød","identity":{"kind":"reviewed-family","familyId":"family:benchmark:crispbread"},"requiredAmount":{"value":500,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"cheese","query":"fast gulost","identity":{"kind":"reviewed-family","familyId":"family:benchmark:cheese"},"requiredAmount":{"value":500,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"grapes","query":"druer","identity":{"kind":"reviewed-family","familyId":"family:benchmark:grapes"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"nuts","query":"blandede nøtter","identity":{"kind":"reviewed-family","familyId":"family:benchmark:nuts"},"requiredAmount":{"value":500,"unit":"g"},"matchMode":"flexible","constraints":[]}
       ]
     },
     {
@@ -238,11 +238,11 @@
       "tags": ["meal", "higher_value", "fresh_and_frozen"],
       "acceptanceFocus": ["savings_context", "historical_vs_official", "substitution_explanation"],
       "items": [
-        { "needId": "beef", "query": "biff av storfe", "requiredAmount": { "value": 800, "unit": "g" }, "matchMode": "constrained", "constraints": ["beef"] },
-        { "needId": "potatoes", "query": "poteter", "requiredAmount": { "value": 1500, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "mushrooms", "query": "sjampinjong", "requiredAmount": { "value": 500, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "salad", "query": "salatblanding", "requiredAmount": { "value": 300, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "ice-cream", "query": "iskrem", "requiredAmount": { "value": 1000, "unit": "ml" }, "matchMode": "constrained", "constraints": ["frozen"] }
+        {"needId":"beef","query":"biff av storfe","identity":{"kind":"reviewed-family","familyId":"family:benchmark:beef"},"requiredAmount":{"value":800,"unit":"g"},"matchMode":"constrained","constraints":["beef"]},
+        {"needId":"potatoes","query":"poteter","identity":{"kind":"reviewed-family","familyId":"family:benchmark:potatoes"},"requiredAmount":{"value":1500,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"mushrooms","query":"sjampinjong","identity":{"kind":"reviewed-family","familyId":"family:benchmark:mushrooms"},"requiredAmount":{"value":500,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"salad","query":"salatblanding","identity":{"kind":"reviewed-family","familyId":"family:benchmark:salad"},"requiredAmount":{"value":300,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"ice-cream","query":"iskrem","identity":{"kind":"reviewed-family","familyId":"family:benchmark:ice-cream"},"requiredAmount":{"value":1000,"unit":"ml"},"matchMode":"constrained","constraints":["frozen"]}
       ]
     },
     {
@@ -251,10 +251,10 @@
       "tags": ["small_basket", "convenience_endpoint", "staples"],
       "acceptanceFocus": ["single_store_plan", "savings_endpoint", "frontier_endpoints"],
       "items": [
-        { "needId": "milk", "query": "lettmelk", "requiredAmount": { "value": 1000, "unit": "ml" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "bread", "query": "brød", "requiredAmount": { "value": 1, "unit": "piece" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "coffee", "query": "filterkaffe", "requiredAmount": { "value": 500, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "toilet-paper", "query": "toalettpapir", "requiredAmount": { "value": 8, "unit": "piece" }, "matchMode": "flexible", "constraints": [] }
+        {"needId":"milk","query":"lettmelk","identity":{"kind":"reviewed-family","familyId":"family:benchmark:milk"},"requiredAmount":{"value":1000,"unit":"ml"},"matchMode":"flexible","constraints":[]},
+        {"needId":"bread","query":"brød","identity":{"kind":"reviewed-family","familyId":"family:benchmark:bread"},"requiredAmount":{"value":1,"unit":"piece"},"matchMode":"flexible","constraints":[]},
+        {"needId":"coffee","query":"filterkaffe","identity":{"kind":"reviewed-family","familyId":"family:benchmark:coffee"},"requiredAmount":{"value":500,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"toilet-paper","query":"toalettpapir","identity":{"kind":"reviewed-family","familyId":"family:benchmark:toilet-paper"},"requiredAmount":{"value":8,"unit":"piece"},"matchMode":"flexible","constraints":[]}
       ]
     },
     {
@@ -263,18 +263,18 @@
       "tags": ["large_basket", "mixed_units", "pareto_frontier"],
       "acceptanceFocus": ["maximum_three_stores", "nondominated_frontier", "complete_quantities", "performance"],
       "items": [
-        { "needId": "milk", "query": "lettmelk", "requiredAmount": { "value": 3000, "unit": "ml" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "bread", "query": "grovbrød", "requiredAmount": { "value": 3, "unit": "piece" }, "matchMode": "constrained", "constraints": ["wholegrain"] },
-        { "needId": "eggs", "query": "egg", "requiredAmount": { "value": 18, "unit": "piece" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "chicken", "query": "kyllingfilet", "requiredAmount": { "value": 1200, "unit": "g" }, "matchMode": "constrained", "constraints": ["boneless"] },
-        { "needId": "rice", "query": "ris", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "pasta", "query": "tørr pasta", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "tomatoes", "query": "tomater", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "apples", "query": "epler", "requiredAmount": { "value": 2000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "bananas", "query": "bananer", "requiredAmount": { "value": 1500, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "yogurt", "query": "naturell yoghurt", "requiredAmount": { "value": 1000, "unit": "g" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "toilet-paper", "query": "toalettpapir", "requiredAmount": { "value": 12, "unit": "piece" }, "matchMode": "flexible", "constraints": [] },
-        { "needId": "dish-soap", "query": "oppvaskmiddel", "requiredAmount": { "value": 500, "unit": "ml" }, "matchMode": "flexible", "constraints": [] }
+        {"needId":"milk","query":"lettmelk","identity":{"kind":"reviewed-family","familyId":"family:benchmark:milk"},"requiredAmount":{"value":3000,"unit":"ml"},"matchMode":"flexible","constraints":[]},
+        {"needId":"bread","query":"grovbrød","identity":{"kind":"reviewed-family","familyId":"family:benchmark:bread"},"requiredAmount":{"value":3,"unit":"piece"},"matchMode":"constrained","constraints":["wholegrain"]},
+        {"needId":"eggs","query":"egg","identity":{"kind":"reviewed-family","familyId":"family:benchmark:eggs"},"requiredAmount":{"value":18,"unit":"piece"},"matchMode":"flexible","constraints":[]},
+        {"needId":"chicken","query":"kyllingfilet","identity":{"kind":"reviewed-family","familyId":"family:benchmark:chicken"},"requiredAmount":{"value":1200,"unit":"g"},"matchMode":"constrained","constraints":["boneless"]},
+        {"needId":"rice","query":"ris","identity":{"kind":"reviewed-family","familyId":"family:benchmark:rice"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"pasta","query":"tørr pasta","identity":{"kind":"reviewed-family","familyId":"family:benchmark:pasta"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"tomatoes","query":"tomater","identity":{"kind":"reviewed-family","familyId":"family:benchmark:tomatoes"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"apples","query":"epler","identity":{"kind":"reviewed-family","familyId":"family:benchmark:apples"},"requiredAmount":{"value":2000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"bananas","query":"bananer","identity":{"kind":"reviewed-family","familyId":"family:benchmark:bananas"},"requiredAmount":{"value":1500,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"yogurt","query":"naturell yoghurt","identity":{"kind":"reviewed-family","familyId":"family:benchmark:yogurt"},"requiredAmount":{"value":1000,"unit":"g"},"matchMode":"flexible","constraints":[]},
+        {"needId":"toilet-paper","query":"toalettpapir","identity":{"kind":"reviewed-family","familyId":"family:benchmark:toilet-paper"},"requiredAmount":{"value":12,"unit":"piece"},"matchMode":"flexible","constraints":[]},
+        {"needId":"dish-soap","query":"oppvaskmiddel","identity":{"kind":"reviewed-family","familyId":"family:benchmark:dish-soap"},"requiredAmount":{"value":500,"unit":"ml"},"matchMode":"flexible","constraints":[]}
       ]
     }
   ],
@@ -342,7 +342,7 @@
   ],
   "knownGaps": [
     "Runs contain no expected winners or prices until approved sources are measured.",
-    "Exact-EAN acceptance cases require a rights-cleared canonical catalog snapshot and are added as separate catalog fixtures.",
+    "Exact-product and package-unit scenarios remain synthetic until a rights-cleared canonical catalog snapshot binds their product IDs to source records.",
     "Variable-weight produce requires an explicit purchasable-package policy before measured assertions are accepted."
   ]
 }

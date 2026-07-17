@@ -1,14 +1,81 @@
 # Cloudflare's published proxy ranges are pinned here so direct-origin traffic
-# cannot bypass the preview's Access policy with a forged Host header.
+# cannot reach an upstream with a forged Host header. The owner-only preview
+# keeps its hostname-wide Access gate; exact private paths also get app JWT proof.
 handle.reidar.tech {
 	encode zstd gzip
 
 	@not_cloudflare not remote_ip 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
-	respond @not_cloudflare "Forbidden" 403
-
+	@private_health_paths path /api/internal/health/review /api/internal/health/review/ /api/internal/health/operations /api/internal/health/operations/
+	@operations_paths path /internal/operations /internal/operations/ /api/internal/operations/snapshot /api/internal/operations/snapshot/
+	@review_paths path /review /review/* /api/review /api/review/*
 	@missing_access not header Cf-Access-Jwt-Assertion *
-	respond @missing_access "Forbidden" 403
 
 	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
-	reverse_proxy 127.0.0.1:3004
+	route {
+		respond @not_cloudflare "Forbidden" 403
+		# Container health routes are loopback probes, never origin endpoints.
+		respond @private_health_paths "Not Found" 404
+		respond @missing_access "Forbidden" 403
+
+		handle @operations_paths {
+			reverse_proxy 127.0.0.1:3007 {
+				# Operations has a distinct Access audience and application verifier.
+				# Remove every Cloudflare-added header, then restore only the signed
+				# assertion; no cookie, identity, geography, mTLS, request, or client-IP
+				# material crosses into the aggregate-only service.
+				header_up -Cf-*
+				header_up Cf-Access-Jwt-Assertion {http.request.header.Cf-Access-Jwt-Assertion}
+				header_up -Cookie
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -True-Client-Ip
+				header_up -Forwarded
+				header_up -X-Forwarded-For
+				header_up -Remote-User
+				header_up -X-Forwarded-Email
+				header_up -X-Forwarded-User
+				header_up -X-Real-Ip
+			}
+		}
+
+		handle @review_paths {
+			reverse_proxy 127.0.0.1:3006 {
+				# Delete every Cloudflare header, then restore only the signed assertion
+				# that the application verifies cryptographically. Cookies, bearer or
+				# service credentials, identity, geography, correlation, and client-IP
+				# material never cross this boundary.
+				header_up -Cf-*
+				header_up Cf-Access-Jwt-Assertion {http.request.header.Cf-Access-Jwt-Assertion}
+				header_up -Cookie
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -True-Client-Ip
+				header_up -Forwarded
+				header_up -X-Forwarded-For
+				header_up -Remote-User
+				header_up -X-Forwarded-Email
+				header_up -X-Forwarded-User
+				header_up -X-Real-Ip
+			}
+		}
+
+		handle {
+			reverse_proxy 127.0.0.1:3004 {
+				# The public process has no authentication-cookie dependency. Strip
+				# all Cloudflare material plus credentials, identity, geography,
+				# correlation, and client-IP forwarding headers.
+				header_up -Cf-*
+				header_up -Cookie
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -True-Client-Ip
+				header_up -Forwarded
+				header_up -X-Forwarded-For
+				header_up -Remote-User
+				header_up -X-Forwarded-Email
+				header_up -X-Forwarded-User
+				header_up -X-Real-Ip
+			}
+		}
+	}
 }

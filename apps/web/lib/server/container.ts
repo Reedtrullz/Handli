@@ -1,11 +1,16 @@
 import "server-only";
 
 import { PostgresActiveCatalogReader } from "@handleplan/db/catalog-reader";
+import { PostgresBranchDirectory } from "@handleplan/db/branch-directory";
 import { createDatabase } from "@handleplan/db/client";
+import { PostgresGeographicDirectoryReader } from "@handleplan/db/geographic-directory";
 import {
   PostgresPublicCatalogIndexReader,
   PublicCatalogIndexReaderError,
   type PublicCatalogIndexReader,
+  type PublicCatalogCategory,
+  type PublicCatalogDiscoveryIndexReader,
+  type PublicCatalogDiscoveryPageOptions,
 } from "@handleplan/db/public-catalog-index-reader";
 import {
   PostgresPlanningEvidenceReader,
@@ -13,12 +18,25 @@ import {
   type PlanningEvidenceSnapshot,
 } from "@handleplan/db/planning-evidence-reader";
 import {
+  EmptyPublicOfficialOfferReader,
+  PostgresPublicOfficialOfferReader,
+} from "@handleplan/db/public-official-offer-reader";
+import {
+  PermissivePublicApiRequestBudget,
+  PostgresPublicApiRequestBudget,
+} from "@handleplan/db/public-api-request-budget";
+import {
   PostgresReviewedFamilyReader,
   ReviewedFamilyReaderError,
   type ReviewedFamilyCatalogMatch,
   type ReviewedFamilyReader,
   type ReviewedFamilySnapshot,
 } from "@handleplan/db/reviewed-family-reader";
+import {
+  PostgresPublicSourceStatusReader,
+  PublicSourceStatusReaderError,
+  type PublicSourceStatusReader,
+} from "@handleplan/db/source-status-reader";
 import type {
   ExactProductPlanApiProductSummary,
   PriceObservation,
@@ -28,9 +46,14 @@ import type {
 import { readServerEnv, type ServerEnv } from "./env";
 import { DiscoveryService, type DiscoveryServiceContract } from "./discovery-service";
 import {
+  DiscoveryImpactService,
+  type DiscoveryImpactServiceContract,
+} from "./discovery-impact-service";
+import {
   FamilyCandidateService,
   type FamilyCandidateServiceContract,
 } from "./family-candidate-service";
+import { getPublicApiOperationCoalescer } from "./in-flight-operation-coalescer";
 import {
   PlanService,
   type ActiveCatalogReader,
@@ -38,18 +61,31 @@ import {
 } from "./plan-service";
 import { PriceService } from "./price-service";
 import {
+  PublicApiRuntimeControls,
+  type PublicApiRuntimeControlsContract,
+} from "./public-api-runtime-controls";
+import {
   BoundedDatabaseReadinessProbe,
   createPostgresMigrationCheck,
   type DatabaseReadinessProbe,
   REQUIRED_DATABASE_MIGRATION,
 } from "./readiness";
+import {
+  SourceStatusService,
+  type SourceStatusServiceContract,
+} from "./source-status-service";
+import type { BranchDirectory } from "./travel/gateways";
 
 export interface ServerContainer {
+  branchDirectory?: BranchDirectory;
+  discoveryImpactService: DiscoveryImpactServiceContract;
   discoveryService: DiscoveryServiceContract;
   familyCandidateService: FamilyCandidateServiceContract;
   planService: PlanServiceContract;
+  publicApiRuntimeControls: PublicApiRuntimeControlsContract;
   publicCatalogIndex: PublicCatalogIndexReader;
   readinessProbe: DatabaseReadinessProbe;
+  sourceStatusService: SourceStatusServiceContract;
 }
 
 let singleton: ServerContainer | undefined;
@@ -221,7 +257,38 @@ class InMemoryReviewedFamilyReader implements ReviewedFamilyReader {
   }
 }
 
-class InMemoryPublicCatalogIndexReader implements ActiveCatalogReader, PublicCatalogIndexReader {
+const fakeCategories = {
+  bakery: {
+    depth: 1,
+    id: `category:${"3".repeat(64)}`,
+    name: "Bakeri",
+    sourceId: "fixture-catalog-source",
+  },
+  dairy: {
+    depth: 1,
+    id: `category:${"1".repeat(64)}`,
+    name: "Meieri",
+    sourceId: "fixture-catalog-source",
+  },
+  pantry: {
+    depth: 1,
+    id: `category:${"2".repeat(64)}`,
+    name: "Tørrvarer",
+    sourceId: "fixture-catalog-source",
+  },
+} satisfies Record<string, PublicCatalogCategory>;
+
+const fakeCategoryPathByGtin = new Map<string, PublicCatalogCategory[] | null>([
+  ["7038010000010", [fakeCategories.dairy]],
+  ["7038010000027", [fakeCategories.pantry]],
+  ["7038010000034", [fakeCategories.bakery]],
+  ["7038010000041", null],
+]);
+
+class InMemoryPublicCatalogIndexReader implements
+  ActiveCatalogReader,
+  PublicCatalogIndexReader,
+  PublicCatalogDiscoveryIndexReader {
   private readonly byGtin = new Map(
     fakeCatalogProducts.map((product) => [product.gtin, Object.freeze({ ...product })]),
   );
@@ -281,6 +348,79 @@ class InMemoryPublicCatalogIndexReader implements ActiveCatalogReader, PublicCat
       .map((product) => ({ ...product }))
       .sort((left, right) => left.gtin.localeCompare(right.gtin));
   }
+
+  async readDiscoveryPage(
+    options: PublicCatalogDiscoveryPageOptions,
+    _at: Date,
+    signal?: AbortSignal,
+  ) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    void _at;
+    if (
+      options === null
+      || typeof options !== "object"
+      || !Number.isSafeInteger(options.limit)
+      || options.limit < 1
+      || options.limit > 50
+      || (options.categoryId !== undefined
+        && !/^category:[0-9a-f]{64}$/u.test(options.categoryId))
+    ) {
+      throw new PublicCatalogIndexReaderError("INVALID_REQUEST");
+    }
+    const query = options.query?.trim().toLocaleLowerCase("nb-NO");
+    if (options.query !== undefined && (query === undefined || query.length < 2 || query.length > 120)) {
+      throw new PublicCatalogIndexReaderError("INVALID_REQUEST");
+    }
+    const entries = [...this.byGtin.values()]
+      .filter((product) => query === undefined
+        || product.gtin === options.query?.trim()
+        || product.displayName.toLocaleLowerCase("nb-NO").includes(query)
+        || product.brand?.toLocaleLowerCase("nb-NO").includes(query) === true)
+      .sort((left, right) => left.displayName.toLocaleLowerCase("nb-NO")
+        .localeCompare(right.displayName.toLocaleLowerCase("nb-NO"), "nb-NO")
+        || left.gtin.localeCompare(right.gtin))
+      .map((product) => ({
+        catalogPosition: {
+          gtin: product.gtin,
+          rank: 0,
+          sortName: product.displayName.toLocaleLowerCase("nb-NO"),
+        },
+        categoryPath: fakeCategoryPathByGtin.get(product.gtin) ?? null,
+        product: { ...product },
+      }))
+      .filter(({ categoryPath }) => options.categoryId === undefined
+        || categoryPath?.some(({ id }) => id === options.categoryId) === true)
+      .filter(({ catalogPosition }) => options.cursor === undefined
+        || catalogPosition.rank > options.cursor.rank
+        || (catalogPosition.rank === options.cursor.rank
+          && catalogPosition.sortName > options.cursor.sortName)
+        || (catalogPosition.rank === options.cursor.rank
+          && catalogPosition.sortName === options.cursor.sortName
+          && catalogPosition.gtin > options.cursor.gtin));
+    const scanned = entries.slice(0, options.limit);
+    const hasMore = entries.length > options.limit;
+    return {
+      entries: scanned,
+      hasMore,
+      ...(hasMore ? { nextPosition: scanned.at(-1)!.catalogPosition } : {}),
+      scannedCount: scanned.length,
+    };
+  }
+
+  async categoryFacets(
+    limit: number,
+    _at: Date,
+    signal?: AbortSignal,
+  ) {
+    if (signal?.aborted) throw new PublicCatalogIndexReaderError("CANCELLED");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new PublicCatalogIndexReaderError("INVALID_REQUEST");
+    }
+    const facets = [fakeCategories.bakery, fakeCategories.dairy, fakeCategories.pantry]
+      .map((category) => ({ ...category, productCount: 1 }))
+      .slice(0, limit);
+    return { facets, hasMore: limit < 3 };
+  }
 }
 
 class InMemoryPlanningEvidenceReader implements PlanningEvidenceReader {
@@ -328,35 +468,57 @@ class InMemoryPlanningEvidenceReader implements PlanningEvidenceReader {
   }
 }
 
+class EmptyPublicSourceStatusReader implements PublicSourceStatusReader {
+  async read(_limit: number, _at: Date, signal?: AbortSignal) {
+    if (signal?.aborted) {
+      throw new PublicSourceStatusReaderError("CANCELLED");
+    }
+    return { entries: [], hasMore: false };
+  }
+}
+
 export function createServerContainer(env: ServerEnv): ServerContainer {
   if (env.mode === "fake") {
     if (process.env.NODE_ENV === "production") {
       throw new Error("Fake server composition is disabled in production");
     }
     const catalog = new InMemoryPublicCatalogIndexReader();
-    const priceService = new PriceService({ reader: new InMemoryPlanningEvidenceReader() });
+    const priceService = new PriceService({
+      officialOfferReader: new EmptyPublicOfficialOfferReader(),
+      reader: new InMemoryPlanningEvidenceReader(),
+    });
     const familyCandidateService = new FamilyCandidateService({
       now: () => new Date(FAKE_EVALUATION_TIME),
       reader: new InMemoryReviewedFamilyReader(),
     });
+    const planService = new PlanService({
+      catalog,
+      familyCandidateService,
+      now: () => new Date(FAKE_EVALUATION_TIME),
+      priceService,
+    });
     return {
+      discoveryImpactService: new DiscoveryImpactService({ resolver: planService }),
       discoveryService: new DiscoveryService({
         catalog,
         now: () => new Date(FAKE_EVALUATION_TIME),
         priceService,
       }),
       familyCandidateService,
-      planService: new PlanService({
-        catalog,
-        familyCandidateService,
-        now: () => new Date(FAKE_EVALUATION_TIME),
-        priceService,
-      }),
+      planService,
+      publicApiRuntimeControls: new PublicApiRuntimeControls(
+        new PermissivePublicApiRequestBudget(),
+        getPublicApiOperationCoalescer(),
+      ),
       publicCatalogIndex: catalog,
       readinessProbe: new BoundedDatabaseReadinessProbe({
         checkMigration: async () => true,
         requiredMigration: REQUIRED_DATABASE_MIGRATION,
         timeoutMs: 1_500,
+      }),
+      sourceStatusService: new SourceStatusService({
+        now: () => new Date(FAKE_EVALUATION_TIME),
+        reader: new EmptyPublicSourceStatusReader(),
       }),
     };
   }
@@ -364,24 +526,36 @@ export function createServerContainer(env: ServerEnv): ServerContainer {
   const connection = createDatabase(env.DATABASE_URL);
   const publicCatalogIndex = new PostgresPublicCatalogIndexReader(connection.db);
   const priceService = new PriceService({
+    geographicDirectoryReader: new PostgresGeographicDirectoryReader(connection.db),
+    officialOfferReader: new PostgresPublicOfficialOfferReader(connection.db),
     reader: new PostgresPlanningEvidenceReader(connection.db),
   });
   const familyCandidateService = new FamilyCandidateService({
     reader: new PostgresReviewedFamilyReader(connection.db),
   });
+  const planService = new PlanService({
+    catalog: new PostgresActiveCatalogReader(connection.db),
+    familyCandidateService,
+    priceService,
+  });
   return {
+    branchDirectory: new PostgresBranchDirectory(connection.db),
+    discoveryImpactService: new DiscoveryImpactService({ resolver: planService }),
     discoveryService: new DiscoveryService({ catalog: publicCatalogIndex, priceService }),
     familyCandidateService,
-    planService: new PlanService({
-      catalog: new PostgresActiveCatalogReader(connection.db),
-      familyCandidateService,
-      priceService,
-    }),
+    planService,
+    publicApiRuntimeControls: new PublicApiRuntimeControls(
+      new PostgresPublicApiRequestBudget(connection.db),
+      getPublicApiOperationCoalescer(),
+    ),
     publicCatalogIndex,
     readinessProbe: new BoundedDatabaseReadinessProbe({
       checkMigration: createPostgresMigrationCheck(connection.db),
       requiredMigration: REQUIRED_DATABASE_MIGRATION,
       timeoutMs: 1_500,
+    }),
+    sourceStatusService: new SourceStatusService({
+      reader: new PostgresPublicSourceStatusReader(connection.db),
     }),
   };
 }

@@ -1,8 +1,11 @@
 import type { PlanningEvidenceSnapshot } from "@handleplan/db/planning-evidence-reader";
 import {
+  exactProductPlanApiResponseSchemaFor,
   reviewedFamilyPlanApiResponseV2SchemaFor,
   type ExactProductPlanApiProductSummary,
   type ExactProductPlanApiRequest,
+  type GeographicDirectoryEvidence,
+  type GeographicScope,
   type PriceObservation,
   type ReviewedFamilyCandidateInspectionResponse,
   type ReviewedFamilyPlanApiRequestV2,
@@ -25,6 +28,37 @@ const NOW = new Date("2026-07-15T12:00:00.000Z");
 const GTIN = "7038010000010";
 const GTIN_ALIAS = "7038010000027";
 const CANDIDATE_SET_ID = `candidate-set:${"a".repeat(64)}`;
+const MARKET_CONTEXT = {
+  contractVersion: 1,
+  countryCode: "NO",
+  kind: "national",
+} as const;
+const OSLO_MARKET_CONTEXT = {
+  contractVersion: 1,
+  countryCode: "NO",
+  kind: "launch-region",
+  regionId: "no-0301-oslo",
+} as const;
+const OSLO_DIRECTORY: GeographicDirectoryEvidence = {
+  state: "available",
+  evaluatedAt: NOW.toISOString(),
+  directory: {
+    contractVersion: 1,
+    countryCode: "NO",
+    directoryVersionId: "postal-directory-2026-07",
+    evidenceReference: "manifest:postal-directory-2026-07",
+    publishedAt: "2026-07-15T09:30:00.000Z",
+    regions: [{
+      coverageState: "complete",
+      evidenceReference: "manifest:oslo-postal-set",
+      postalCodes: ["0152", "0452"],
+      regionCode: OSLO_MARKET_CONTEXT.regionId,
+    }],
+    reviewedAt: "2026-07-15T09:00:00.000Z",
+    status: "approved",
+    validFrom: "2026-07-15T00:00:00.000Z",
+  },
+};
 
 function price(
   observedAt = "2026-07-15T10:00:00.000Z",
@@ -41,6 +75,8 @@ function price(
 
 const exactRequest: ExactProductPlanApiRequest = {
   contractVersion: 1,
+  enabledMembershipProgramIds: [],
+  marketContext: MARKET_CONTEXT,
   maxStores: 3,
   needs: [
     {
@@ -94,6 +130,10 @@ function exactPriceService(
   products: PlanningEvidenceSnapshot["products"] = [
     { canonicalProductId: "product:milk", gtin: GTIN },
   ],
+  options: {
+    geographicDirectory?: GeographicDirectoryEvidence;
+    geographicScope?: GeographicScope;
+  } = {},
 ): PriceService {
   const canonicalIdByGtin = new Map(
     products.map(({ canonicalProductId, gtin }) => [gtin, canonicalProductId]),
@@ -106,7 +146,8 @@ function exactPriceService(
       chainId: row.chain,
       contractVersion: 1,
       evidenceLevel: "observed",
-      geographicScope: { countryCode: "NO", kind: "national" },
+      geographicScope: options.geographicScope
+        ?? { countryCode: "NO", kind: "national" },
       id: `price:test:${index + 1}`,
       kind: "price-evidence",
       observedAt: row.observedAt,
@@ -127,7 +168,17 @@ function exactPriceService(
       state: "approved",
     }],
   };
-  return new PriceService({ reader: { getMany: async () => snapshot } });
+  return new PriceService({
+    ...(options.geographicDirectory === undefined
+      ? {}
+      : {
+          geographicDirectoryReader: {
+            read: async () => options.geographicDirectory!,
+          },
+        }),
+    officialOfferReader: { getMany: async () => ({ offers: [], sources: [] }) },
+    reader: { getMany: async () => snapshot },
+  });
 }
 
 const catalogSource = {
@@ -196,6 +247,8 @@ const membership = {
 
 const mixedRequest: ReviewedFamilyPlanApiRequestV2 = {
   contractVersion: 2,
+  enabledMembershipProgramIds: [],
+  marketContext: MARKET_CONTEXT,
   maxStores: 2,
   needs: [
     {
@@ -319,6 +372,43 @@ function mixedPriceResult(): ProductPriceServiceResult {
   };
 }
 
+const memberMilkOffer: ProductPriceServiceResult["productEvidence"][number]["officialOffers"][number] = {
+  applicability: {
+    channels: ["in-store"],
+    contractVersion: 1,
+    endsAt: "2026-07-16T23:59:59.999Z",
+    geographicScope: { countryCode: "NO", kind: "national" },
+    startsAt: "2026-07-15T00:00:00.000Z",
+  },
+  beforePriceOre: 2_500 as PriceObservation["amountOre"],
+  capturedAt: "2026-07-15T10:00:00.000Z",
+  chainId: "extra",
+  conditions: [{ kind: "member", programId: "source-neutral-program" }],
+  contractVersion: 1,
+  evidenceLevel: "observed",
+  id: "offer:member-milk",
+  kind: "official-offer",
+  pricing: {
+    kind: "multibuy",
+    quantity: 2,
+    totalOre: 4_000 as PriceObservation["amountOre"],
+  },
+  productMatch: { canonicalProductId: "product:milk", kind: "exact" },
+  sourceId: priceSource.id,
+  sourceRecordId: "record:member-milk",
+};
+
+function mixedPriceResultWithMemberOffer(): ProductPriceServiceResult {
+  const result = mixedPriceResult();
+  return {
+    ...result,
+    productEvidence: result.productEvidence.map((entry) =>
+      entry.canonicalProductId === "product:milk"
+        ? { ...entry, officialOffers: [memberMilkOffer] }
+        : entry),
+  };
+}
+
 describe("PlanService", () => {
   it("exposes only the persisted-evidence exact planning operation", () => {
     const service = new PlanService({
@@ -354,6 +444,37 @@ describe("PlanService", () => {
     });
     expect(result.evidence.assignmentEvidence).toHaveLength(1);
     expect(result.evidence.sources).toEqual([canonicalSummary.catalogEvidence.source]);
+  });
+
+  it("projects the selected regional directory proof into an exact public result", async () => {
+    const request = { ...exactRequest, marketContext: OSLO_MARKET_CONTEXT };
+    const result = await new PlanService({
+      catalog: catalogReader([canonicalSummary]),
+      now: () => NOW,
+      priceService: exactPriceService([price()], undefined, {
+        geographicDirectory: OSLO_DIRECTORY,
+        geographicScope: {
+          countryCode: "NO",
+          kind: "postal-set",
+          postalCodes: ["0152", "0452"],
+        },
+      }),
+    }).calculateExact(request);
+
+    expect(result.geographicDirectoryAttestation).toMatchObject({
+      directoryVersionId: "postal-directory-2026-07",
+      evaluatedAt: NOW.toISOString(),
+      region: { regionCode: OSLO_MARKET_CONTEXT.regionId },
+    });
+    const { completeCandidateSet: _privateCandidateSet, ...publicResult } = result;
+    expect(_privateCandidateSet.plans.length).toBeGreaterThan(0);
+    expect(exactProductPlanApiResponseSchemaFor(request).safeParse({
+      ...publicResult,
+      caveats: [],
+      contractVersion: 1,
+      enabledMembershipProgramIds: request.enabledMembershipProgramIds,
+      marketContext: request.marketContext,
+    }).success).toBe(true);
   });
 
   it("fails closed before enumeration when two requested GTINs share one canonical identity", async () => {
@@ -570,7 +691,12 @@ describe("PlanService", () => {
     }, NOW, signal);
     expect(catalog.calls).toEqual([{ at: NOW, gtins: [GTIN], signal }]);
     expect(readProducts).toHaveBeenCalledOnce();
-    expect(readProducts).toHaveBeenCalledWith([GTIN, GTIN_ALIAS], NOW, signal);
+    expect(readProducts).toHaveBeenCalledWith(
+      [GTIN, GTIN_ALIAS],
+      mixedRequest.marketContext,
+      NOW,
+      signal,
+    );
     expect(result.needMatches).toEqual([
       {
         candidateProductIds: ["product:coffee"],
@@ -598,11 +724,111 @@ describe("PlanService", () => {
       "catalog-source",
       "price-source",
     ]);
+    const { completeCandidateSet, ...publicResult } = result;
+    expect(completeCandidateSet.plans).toHaveLength(1);
     expect(reviewedFamilyPlanApiResponseV2SchemaFor(mixedRequest).safeParse({
-      ...result,
+      ...publicResult,
       caveats: [],
       contractVersion: 2,
+      enabledMembershipProgramIds: mixedRequest.enabledMembershipProgramIds,
+      marketContext: mixedRequest.marketContext,
     }).success).toBe(true);
+  });
+
+  it("projects the same bounded regional proof into a reviewed-family public result", async () => {
+    const request = { ...mixedRequest, marketContext: OSLO_MARKET_CONTEXT };
+    const regionalPriceResult = mixedPriceResult();
+    regionalPriceResult.geographicDirectory = OSLO_DIRECTORY;
+    regionalPriceResult.productEvidence = regionalPriceResult.productEvidence.map((entry) => ({
+      ...entry,
+      ordinaryPrices: entry.ordinaryPrices.map((ordinary) => ({
+        ...ordinary,
+        geographicScope: {
+          countryCode: "NO" as const,
+          kind: "postal-set" as const,
+          postalCodes: ["0152", "0452"],
+        },
+      })),
+    }));
+    const result = await new PlanService({
+      catalog: catalogReader([mixedExactSummary]),
+      familyCandidateService: { inspectAt: async () => inspection },
+      now: () => NOW,
+      priceService: {
+        readExact: vi.fn(),
+        readProducts: async () => regionalPriceResult,
+      },
+    }).calculateReviewed(request);
+
+    expect(result.geographicDirectoryAttestation).toMatchObject({
+      directoryVersionId: "postal-directory-2026-07",
+      region: { regionCode: OSLO_MARKET_CONTEXT.regionId },
+    });
+    const { completeCandidateSet: _privateCandidateSet, ...publicResult } = result;
+    expect(_privateCandidateSet.plans.length).toBeGreaterThan(0);
+    expect(reviewedFamilyPlanApiResponseV2SchemaFor(request).safeParse({
+      ...publicResult,
+      caveats: [],
+      contractVersion: 2,
+      enabledMembershipProgramIds: request.enabledMembershipProgramIds,
+      marketContext: request.marketContext,
+    }).success).toBe(true);
+  });
+
+  it("keeps disabled member evidence visible and recomputes multibuy plus remainder when enabled", async () => {
+    const request = {
+      ...mixedRequest,
+      needs: mixedRequest.needs.map((need) =>
+        need.id === "need:milk" ? { ...need, quantity: 3 } : need),
+    } satisfies ReviewedFamilyPlanApiRequestV2;
+    const calculate = (enabledMembershipProgramIds: string[]) => new PlanService({
+      catalog: catalogReader([mixedExactSummary]),
+      familyCandidateService: { inspectAt: async () => inspection },
+      now: () => NOW,
+      priceService: {
+        readExact: vi.fn(),
+        readProducts: async () => mixedPriceResultWithMemberOffer(),
+      },
+    }).calculateReviewed({ ...request, enabledMembershipProgramIds });
+
+    const disabled = await calculate([]);
+    const disabledMilk = disabled.plans[0]?.assignments.find(
+      ({ needId }) => needId === "need:milk",
+    );
+    expect(disabled.plans[0]).toMatchObject({ chains: ["extra"], totalOre: 12_500 });
+    expect(disabled.plans[0]?.assignments.every(({ fulfilment }) => fulfilment.complete))
+      .toBe(true);
+    expect(disabled.plans[0]?.chains.length).toBeLessThanOrEqual(3);
+    expect(disabledMilk).toMatchObject({
+      checkout: { ordinaryTotalOre: 7_500, savingOre: 0, totalOre: 7_500 },
+      fulfilment: { packageCount: 3 },
+    });
+    expect(disabledMilk?.checkout.appliedOfferId).toBeUndefined();
+    expect(disabled.evidence.officialOffers).toEqual([memberMilkOffer]);
+
+    const enabled = await calculate(["source-neutral-program"]);
+    const enabledMilk = enabled.plans[0]?.assignments.find(
+      ({ needId }) => needId === "need:milk",
+    );
+    expect(enabled.plans[0]).toMatchObject({ chains: ["extra"], totalOre: 11_500 });
+    expect(enabled.plans[0]?.assignments.every(({ fulfilment }) => fulfilment.complete))
+      .toBe(true);
+    expect(enabled.plans[0]?.chains.length).toBeLessThanOrEqual(3);
+    expect(enabledMilk).toMatchObject({
+      checkout: {
+        appliedOfferId: memberMilkOffer.id,
+        ordinaryTotalOre: 7_500,
+        savingOre: 1_000,
+        totalOre: 6_500,
+      },
+      fulfilment: { packageCount: 3 },
+      officialOffer: {
+        id: memberMilkOffer.id,
+        sourceId: priceSource.id,
+        sourceRecordId: memberMilkOffer.sourceRecordId,
+      },
+    });
+    expect(enabled.evidence.officialOffers).toEqual([memberMilkOffer]);
   });
 
   it("inspects repeated identical family selections once and preserves every need", async () => {

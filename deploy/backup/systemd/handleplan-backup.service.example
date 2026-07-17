@@ -1,0 +1,41 @@
+# Example only. A .example unit is not loadable by systemd and is disabled.
+[Unit]
+Description=Handleplan encrypted off-host database backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=handleplan-backup
+Group=handleplan-backup
+KillMode=control-group
+Environment=HANDLEPLAN_BACKUP_ENABLED=false
+EnvironmentFile=-/etc/handleplan/backup.env
+ExecStart=/usr/bin/node /opt/apps/handleplan/operations/current/deploy/backup/create-backup.mjs
+UMask=0077
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+# This path must be a separately reviewed read-only bind/snapshot with narrow
+# traversal ACLs; this inert example does not create or prove that boundary.
+ReadOnlyPaths=/etc/handleplan /opt/apps/handleplan/operations /var/lib/handleplan-backup/private-captures
+ReadWritePaths=/var/lib/handleplan-backup
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+TimeoutStartSec=2h
+TimeoutStopSec=10s
+LimitCORE=0
+LimitFSIZE=16G

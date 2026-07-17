@@ -12,6 +12,11 @@ import type {
   PlanResultV2,
   ReviewedFamilyPlanApiRequestV2,
   ReviewedFamilyPlanApiResponseV2,
+  TravelPlanApiResponse,
+} from "@handleplan/domain";
+import {
+  deriveExactProductPlanDeltaExplanationsV1,
+  deriveReviewedFamilyPlanDeltaExplanationsV1,
 } from "@handleplan/domain";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -23,12 +28,20 @@ const GTIN_COFFEE = "7038010000027";
 const GENERATED_AT = "2026-07-16T12:00:00.000Z";
 const OBSERVED_AT = "2026-07-16T11:00:00.000Z";
 const CANDIDATE_SET_ID = `candidate-set:${"a".repeat(64)}`;
+const LOCATION_TOKEN = `location-choice:${"z".repeat(43)}`;
+const ALTERNATE_LOCATION_TOKEN = `location-choice:${"y".repeat(43)}`;
 const EXPECTED_CHAINS = ["bunnpris", "extra", "rema-1000"] as const;
+const MARKET_CONTEXT = {
+  contractVersion: 1,
+  countryCode: "NO",
+  kind: "national",
+} as const;
 type Chain = (typeof EXPECTED_CHAINS)[number];
 const money = (value: number) => value as MoneyOre;
 
 const basket: BrowserBasket = {
-  version: 3,
+  version: 4,
+  marketContext: MARKET_CONTEXT,
   needs: [{
     id: "milk",
     query: "LOCAL QUERY MUST STAY PRIVATE",
@@ -51,12 +64,15 @@ const basket: BrowserBasket = {
     productFamily: "local-family",
   }],
   convenienceWeightBasisPoints: 5_000,
+  enabledMembershipProgramIds: [],
   familyConfirmations: [],
   travel: { enabled: false, mode: "car" },
 };
 
 const strictRequest: ExactProductPlanApiRequest = {
   contractVersion: 1,
+  enabledMembershipProgramIds: [],
+  marketContext: MARKET_CONTEXT,
   maxStores: 3,
   needs: [{
     id: "milk",
@@ -72,7 +88,8 @@ const strictRequest: ExactProductPlanApiRequest = {
 };
 
 const mixedBasket: BrowserBasket = {
-  version: 3,
+  version: 4,
+  marketContext: MARKET_CONTEXT,
   needs: [
     {
       id: "coffee",
@@ -114,6 +131,7 @@ const mixedBasket: BrowserBasket = {
     productFamily: "local-family",
   }],
   convenienceWeightBasisPoints: 5_000,
+  enabledMembershipProgramIds: [],
   familyConfirmations: [{
     candidateCount: 1,
     confirmation: {
@@ -135,6 +153,8 @@ const mixedBasket: BrowserBasket = {
 
 const mixedRequest: ReviewedFamilyPlanApiRequestV2 = {
   contractVersion: 2,
+  enabledMembershipProgramIds: [],
+  marketContext: MARKET_CONTEXT,
   maxStores: 3,
   needs: [
     {
@@ -273,6 +293,13 @@ const publicOffer: OfficialOffer = {
   sourceRecordId: "source-record:offer:milk",
 };
 
+const memberOffer: OfficialOffer = {
+  ...publicOffer,
+  conditions: [{ kind: "member", programId: "source-neutral-program" }],
+  id: "offer:member:milk",
+  sourceRecordId: "source-record:offer:member:milk",
+};
+
 const offerPlan: PlanResultV2 = {
   ...plan("server-offer", "extra", 1_990),
   assignments: [{
@@ -293,6 +320,7 @@ const offerPlan: PlanResultV2 = {
 };
 
 function resultResponse(options: {
+  enabledMembershipProgramIds?: string[];
   plans?: PlanResultV2[];
   pricedChains?: Chain[];
   offers?: OfficialOffer[];
@@ -303,9 +331,11 @@ function resultResponse(options: {
       ? [...EXPECTED_CHAINS]
       : [...new Set(plans.flatMap(({ chains }) => chains))] as Chain[]);
   const offers = options.offers ?? [];
-  return {
+  const response: Omit<ExactProductPlanApiResponse, "planDeltaExplanations"> = {
     caveats: ["Kjedepris dokumenterer ikke lagerstatus."],
     contractVersion: 1,
+    enabledMembershipProgramIds: options.enabledMembershipProgramIds ?? [],
+    marketContext: MARKET_CONTEXT,
     evidence: {
       assignmentEvidence: plans.flatMap((candidate) => candidate.assignments.map((assignment) => ({
         chainId: assignment.chain,
@@ -352,6 +382,67 @@ function resultResponse(options: {
     plans,
     priceDataSource: "cache",
     products: [canonicalProduct],
+  };
+  const planDeltaExplanations = deriveExactProductPlanDeltaExplanationsV1(response);
+  if (planDeltaExplanations === undefined) throw new Error("invalid result explanation fixture");
+  return { ...response, planDeltaExplanations };
+}
+
+function calculatedTravelResponse(
+  planning: ExactProductPlanApiResponse = resultResponse(),
+): TravelPlanApiResponse {
+  const routes = planning.plans.map((candidate, routeIndex) => ({
+    aggregate: {
+      calculatedAt: planning.generatedAt,
+      distanceMeters: 4_200,
+      durationSeconds: 720,
+      mode: "car" as const,
+      providerSourceId: "valhalla-osm",
+      routeFingerprint: `route:${routeIndex}:${"r".repeat(32)}`,
+    },
+    planId: candidate.id,
+    stops: candidate.chains.map((chainId, stopIndex) => ({
+      branchId: `branch:${chainId}:${routeIndex}`,
+      chainId,
+      name: `${chainId === "rema-1000" ? "REMA 1000" : chainId === "extra" ? "Extra" : "Bunnpris"} Majorstuen`,
+      sequence: stopIndex + 1,
+    })),
+  }));
+  const planDeltaExplanations = deriveExactProductPlanDeltaExplanationsV1({
+    ...planning,
+    travelRoutes: routes,
+  });
+  if (planDeltaExplanations === undefined) throw new Error("invalid travel explanation fixture");
+  return {
+    contractVersion: 1,
+    planning: { ...planning, planDeltaExplanations },
+    travel: { contractVersion: 1, kind: "calculated", routes },
+  };
+}
+
+function locationTokenResponse() {
+  return {
+    contractVersion: 1,
+    expiresAt: "2099-07-17T12:05:00.000Z",
+    generatedAt: "2099-07-17T12:00:00.000Z",
+    selectionToken: LOCATION_TOKEN,
+  };
+}
+
+function locationSearchResponse(candidates: Array<{
+  label: string;
+  matchQuality: "exact" | "approximate";
+  selectionToken: string;
+}>, timestamps: { expiresAt: string; generatedAt: string } = {
+  expiresAt: "2099-07-17T12:05:00.000Z",
+  generatedAt: "2099-07-17T12:00:00.000Z",
+}) {
+  return {
+    candidates,
+    contractVersion: 1,
+    expiresAt: timestamps.expiresAt,
+    generatedAt: timestamps.generatedAt,
+    source: { displayName: "Kartverket", id: "kartverket-geocoder" },
   };
 }
 
@@ -508,9 +599,11 @@ function mixedResultResponse(): ReviewedFamilyPlanApiResponseV2 {
     },
   ];
 
-  return {
+  const response: Omit<ReviewedFamilyPlanApiResponseV2, "planDeltaExplanations"> = {
     caveats: ["Kjedepris dokumenterer ikke lagerstatus."],
     contractVersion: 2,
+    enabledMembershipProgramIds: [],
+    marketContext: MARKET_CONTEXT,
     evidence: {
       assignmentEvidence: assignments.map((assignment) => ({
         chainId: assignment.chain,
@@ -582,6 +675,9 @@ function mixedResultResponse(): ReviewedFamilyPlanApiResponseV2 {
     productClaims: [coffeeClaim, milkClaim],
     taxonomy: mixedTaxonomy,
   };
+  const planDeltaExplanations = deriveReviewedFamilyPlanDeltaExplanationsV1(response);
+  if (planDeltaExplanations === undefined) throw new Error("invalid mixed explanation fixture");
+  return { ...response, planDeltaExplanations };
 }
 
 function okFetch(body: unknown = resultResponse()) {
@@ -652,8 +748,8 @@ describe("Planlegg strict result workspace", () => {
     expect(screen.getByText("Melk fra server")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Godkjente varebytter" })).toBeVisible();
     expect(screen.getByText(/Valgt blant 1 kontrollert produkt/)).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Ikke tilgjengelig for varebytter ennå" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Start Handlemodus" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start Handlemodus" })).toBeVisible();
+    expect(screen.queryByText(/Ikke tilgjengelig for varebytter/)).not.toBeInTheDocument();
     expect(screen.queryByText(/LOCAL .* MUST STAY PRIVATE/)).not.toBeInTheDocument();
 
     const posted = String(fetch.mock.calls[0]![1]!.body);
@@ -727,6 +823,137 @@ describe("Planlegg strict result workspace", () => {
     expect(screen.getByText(/1 pakke dekker hele behovet/)).toBeVisible();
   });
 
+  it("offers only verified membership programs and recomputes when the local choice changes", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const posted = JSON.parse(String(init?.body)) as ExactProductPlanApiRequest;
+      return new Response(JSON.stringify(resultResponse({
+        enabledMembershipProgramIds: posted.enabledMembershipProgramIds,
+        offers: [memberOffer],
+      })), {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    render(<ResultPage />);
+
+    const initial = await screen.findByRole("checkbox", {
+      name: /Medlemspris hos Extra/,
+    });
+    expect(initial).not.toBeChecked();
+    expect(screen.getByText(/Ingen medlemsprogrammer er valgt automatisk/)).toBeVisible();
+    expect(screen.queryByRole("checkbox", { name: "forged-hidden-program" }))
+      .not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("source-neutral-program");
+
+    await user.click(initial);
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(String(fetch.mock.calls[1]![1]?.body))).toMatchObject({
+      enabledMembershipProgramIds: ["source-neutral-program"],
+    });
+    expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}"))
+      .toMatchObject({ enabledMembershipProgramIds: ["source-neutral-program"] });
+    const enabled = await screen.findByRole("checkbox", {
+      name: /Medlemspris hos Extra/,
+    });
+    expect(enabled).toBeChecked();
+
+    await user.click(enabled);
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+    expect(JSON.parse(String(fetch.mock.calls[2]![1]?.body))).toMatchObject({
+      enabledMembershipProgramIds: [],
+    });
+    expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}"))
+      .toMatchObject({ enabledMembershipProgramIds: [] });
+  });
+
+  it("keeps the selected convenience preference through membership recompute and reload", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const posted = JSON.parse(String(init?.body)) as ExactProductPlanApiRequest;
+      return new Response(JSON.stringify(resultResponse({
+        enabledMembershipProgramIds: posted.enabledMembershipProgramIds,
+        offers: [memberOffer],
+        plans: equivalentPlans,
+      })), {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const first = render(<ResultPage />);
+
+    await user.click(await screen.findByRole("radio", { name: /Likeverdig alternativ 3/ }));
+    expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}"))
+      .toMatchObject({ convenienceWeightBasisPoints: 0 });
+
+    await user.click(screen.getByRole("checkbox", { name: /Medlemspris hos Extra/ }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}"))
+      .toMatchObject({
+        convenienceWeightBasisPoints: 0,
+        enabledMembershipProgramIds: ["source-neutral-program"],
+      });
+    first.unmount();
+
+    render(<ResultPage />);
+    expect(await screen.findByRole("radio", { name: /Likeverdig alternativ 3/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Medlemspris hos Extra/ })).toBeChecked();
+    expect(document.body).not.toHaveTextContent("source-neutral-program");
+    expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}"))
+      .toMatchObject({
+        convenienceWeightBasisPoints: 0,
+        enabledMembershipProgramIds: ["source-neutral-program"],
+      });
+  });
+
+  it("keeps a saved program without a current offer visible and removable", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify({
+      ...basket,
+      enabledMembershipProgramIds: ["saved-program"],
+    }));
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const posted = JSON.parse(String(init?.body)) as ExactProductPlanApiRequest;
+      return new Response(JSON.stringify(resultResponse({
+        enabledMembershipProgramIds: posted.enabledMembershipProgramIds,
+        offers: [memberOffer],
+      })), {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    render(<ResultPage />);
+
+    const saved = await screen.findByRole("checkbox", {
+      name: /Lagret medlemsvalg uten aktivt tilbud/,
+    });
+    expect(saved).toBeChecked();
+    expect(screen.getByText(
+      "Ingen verifiserte medlemstilbud er tilgjengelige nå. Du kan fjerne valget.",
+    )).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: /Medlemspris hos Extra/ }))
+      .not.toBeChecked();
+    expect(document.body).not.toHaveTextContent("saved-program");
+    expect(document.body).not.toHaveTextContent("source-neutral-program");
+
+    await user.click(saved);
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(String(fetch.mock.calls[1]![1]?.body))).toMatchObject({
+      enabledMembershipProgramIds: [],
+    });
+    expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}"))
+      .toMatchObject({ enabledMembershipProgramIds: [] });
+    await waitFor(() => expect(screen.queryByRole("checkbox", {
+      name: /Lagret medlemsvalg uten aktivt tilbud/,
+    }))
+      .not.toBeInTheDocument());
+  });
+
   it("shows comparison completeness and unresolved chains without inventing absence", async () => {
     localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
     vi.stubGlobal("fetch", okFetch(resultResponse({
@@ -781,6 +1008,25 @@ describe("Planlegg strict result workspace", () => {
     render(<ResultPage />);
 
     expect(screen.getByRole("heading", { name: "Handlekurven er tom" })).toBeVisible();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("preserves a stale-market basket but sends no plan request until explicit reselection", () => {
+    const fetch = okFetch();
+    vi.stubGlobal("fetch", fetch);
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify({
+      ...basket,
+      marketContext: {
+        contractVersion: 1,
+        countryCode: "NO",
+        kind: "launch-region",
+        regionId: "no-9999-not-launched",
+      },
+    }));
+    render(<ResultPage />);
+
+    expect(screen.getByRole("heading", { name: "Velg prisområde på nytt" })).toBeVisible();
+    expect(screen.getByText(/Handlelisten er bevart/)).toBeVisible();
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -927,6 +1173,425 @@ describe("Planlegg strict result workspace", () => {
     render(<ResultPage />);
     expect(await screen.findByRole("heading", { name: "Kunne ikke vise handleplanen" })).toBeVisible();
     expect(cancelled).toBe(true);
+  });
+
+  it("asks for an explicit opt-in before requesting browser location and renders calculated routes", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    let locationAttempt = 0;
+    const getCurrentPosition = vi.fn((
+      success: PositionCallback,
+      error: PositionErrorCallback,
+    ) => {
+      if (locationAttempt++ > 0) {
+        error({ code: 1, message: "private detail", PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+        return;
+      }
+      success({
+        coords: {
+          accuracy: 10,
+          altitude: null,
+          altitudeAccuracy: null,
+          heading: null,
+          latitude: 59.9139,
+          longitude: 10.7522,
+          speed: null,
+          toJSON: () => ({}),
+        },
+        timestamp: Date.now(),
+        toJSON: () => ({}),
+      });
+    });
+    vi.stubGlobal("navigator", { geolocation: { getCurrentPosition } });
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      void init;
+      const path = String(input);
+      const body = path === "/api/plans"
+        ? resultResponse()
+        : path === "/api/locations/current"
+          ? locationTokenResponse()
+          : path === "/api/plans/travel"
+            ? calculatedTravelResponse()
+            : undefined;
+      return new Response(JSON.stringify(body), {
+        status: body === undefined ? 404 : 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    render(<ResultPage />);
+
+    await screen.findByRole("radio", { name: /Eneste komplette plan/ });
+    expect(getCurrentPosition).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Bruk min posisjon" })).not.toBeInTheDocument();
+    expect(screen.queryByText("© OpenStreetMap-bidragsytere")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("switch", { name: "Beregn" }));
+    expect(getCurrentPosition).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Bruk min posisjon" }));
+
+    expect(await screen.findByText("Reisetid er beregnet for de komplette planene under.")).toBeVisible();
+    expect(screen.getAllByText("12 min").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("4,2 km").length).toBeGreaterThan(0);
+    expect(screen.getByText("Estimert reisetid", { selector: "dt" })).toBeVisible();
+    expect(screen.getByText("Estimert reisetid: 12 min · 4,2 km · 1 stopp")).toBeVisible();
+    expect(screen.getByText("1. REMA 1000 Majorstuen")).toBeVisible();
+    expect(screen.getByRole("link", { name: "© OpenStreetMap-bidragsytere" })).toHaveAttribute(
+      "href",
+      "https://www.openstreetmap.org/copyright",
+    );
+    const feedback = document.querySelector("[aria-live='polite']");
+    expect(feedback).not.toBeNull();
+    expect(document.querySelectorAll("[aria-live]")).toHaveLength(1);
+    expect(feedback).not.toContainElement(screen.getByRole("link", { name: "© OpenStreetMap-bidragsytere" }));
+
+    const currentCall = fetch.mock.calls.find(([input]) => String(input) === "/api/locations/current")!;
+    expect(JSON.parse(String(currentCall[1]?.body))).toEqual({
+      contractVersion: 1,
+      coordinate: { latitudeE6: 59_913_900, longitudeE6: 10_752_200 },
+    });
+    const travelCall = fetch.mock.calls.find(([input]) => String(input) === "/api/plans/travel")!;
+    expect(String(travelCall[1]?.body)).not.toMatch(/latitude|longitude|coordinate/i);
+    expect(fetch.mock.calls.map(([input]) => String(input)).join(" ")).not.toMatch(/59\.9139|10\.7522|location-choice/);
+    expect(localStorage.getItem(BASKET_STORAGE_KEY)).not.toMatch(/59\.9139|10\.7522|location-choice/);
+
+    await user.click(screen.getByRole("button", { name: "Bruk min posisjon" }));
+    expect(screen.getByText(/Posisjonen ble ikke delt/)).toBeVisible();
+    expect(screen.queryByText("private detail")).not.toBeInTheDocument();
+    expect(screen.queryByText("Estimert reisetid", { selector: "dt" })).not.toBeInTheDocument();
+    expect(screen.queryByText("© OpenStreetMap-bidragsytere")).not.toBeInTheDocument();
+  });
+
+  it("keeps geolocation failures private and leaves the price-only plan intact", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    const getCurrentPosition = vi.fn((_success: PositionCallback, error: PositionErrorCallback) => {
+      error({ code: 1, message: "private browser detail", PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+    });
+    vi.stubGlobal("navigator", { geolocation: { getCurrentPosition } });
+    const fetch = okFetch();
+    vi.stubGlobal("fetch", fetch);
+    render(<ResultPage />);
+
+    await user.click(await screen.findByRole("switch", { name: "Beregn" }));
+    await user.click(screen.getByRole("button", { name: "Bruk min posisjon" }));
+
+    expect(screen.getByText(/Posisjonen ble ikke delt/)).toBeVisible();
+    expect(screen.queryByText("private browser detail")).not.toBeInTheDocument();
+    expect(screen.getByText("22,90 kr", { selector: ".result-total" })).toBeVisible();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("© OpenStreetMap-bidragsytere")).not.toBeInTheDocument();
+  });
+
+  it("confirms one exact address option, keeps it out of URLs/storage, and posts only the opaque token to travel", async () => {
+    const user = userEvent.setup();
+    const address = "Storgata 1, 0155 Oslo";
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    let searchCount = 0;
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      void init;
+      const path = String(input);
+      const body = path === "/api/plans"
+        ? resultResponse()
+        : path === "/api/locations/search"
+          ? searchCount++ === 0
+            ? locationSearchResponse([])
+            : searchCount === 2
+              ? locationSearchResponse([{
+                  label: address,
+                  matchQuality: "exact",
+                  selectionToken: LOCATION_TOKEN,
+                }, {
+                  label: "Storgata 10, 0155 Oslo",
+                  matchQuality: "approximate",
+                  selectionToken: ALTERNATE_LOCATION_TOKEN,
+                }])
+              : locationSearchResponse([{
+                  label: "Karl Johans gate 1, Oslo",
+                  matchQuality: "exact",
+                  selectionToken: LOCATION_TOKEN,
+                }], {
+                  expiresAt: "2020-07-17T12:05:00.000Z",
+                  generatedAt: "2020-07-17T12:00:00.000Z",
+                })
+          : path === "/api/plans/travel"
+            ? calculatedTravelResponse()
+            : undefined;
+      return new Response(JSON.stringify(body), {
+        status: body === undefined ? 404 : 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const view = render(<ResultPage />);
+
+    await user.click(await screen.findByRole("switch", { name: "Beregn" }));
+    const addressInput = screen.getByRole("combobox", { name: /adresse og poststed/ });
+    expect(addressInput).toHaveAttribute("autocomplete", "off");
+    expect(addressInput).toHaveAttribute("aria-expanded", "false");
+    await user.type(addressInput, address);
+    await user.click(screen.getByRole("button", { name: "Finn adresse" }));
+    expect(await screen.findByText(/Vi fant ingen adresseforslag/)).toBeVisible();
+    expect(fetch).toHaveBeenCalledTimes(2);
+
+    await user.click(screen.getByRole("button", { name: "Finn adresse" }));
+    expect(await screen.findByRole("option", { name: /Storgata 1, 0155 Oslo/ })).toBeVisible();
+    expect(screen.getByRole("option", { name: /Storgata 10, 0155 Oslo/ })).toBeVisible();
+    expect(addressInput).toHaveAttribute("aria-expanded", "true");
+    expect(addressInput).toHaveAttribute("aria-controls", "result-travel-address-options");
+    expect(fetch.mock.calls.filter(([input]) => String(input) === "/api/plans/travel"))
+      .toHaveLength(0);
+    expect(localStorage.getItem(BASKET_STORAGE_KEY)).not.toMatch(/Storgata|location-choice/);
+    addressInput.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(addressInput).toHaveAttribute("aria-activedescendant", "result-travel-address-option-1");
+    await user.keyboard("{Enter}");
+    expect(await screen.findByText("Reisetid er beregnet for de komplette planene under.")).toBeVisible();
+
+    const searchCall = fetch.mock.calls.find(([input]) => String(input) === "/api/locations/search")!;
+    expect(JSON.parse(String(searchCall[1]?.body))).toEqual({ contractVersion: 1, query: address });
+    const travelCall = fetch.mock.calls.find(([input]) => String(input) === "/api/plans/travel")!;
+    const travelBody = JSON.parse(String(travelCall[1]?.body));
+    expect(travelBody).toEqual({
+      contractVersion: 1,
+      locationSelectionToken: ALTERNATE_LOCATION_TOKEN,
+      planning: strictRequest,
+      travelMode: "car",
+    });
+    expect(JSON.stringify(travelBody)).not.toMatch(/Storgata|latitude|longitude|coordinate/i);
+    expect(fetch.mock.calls.map(([input]) => String(input)).join(" ")).not.toMatch(/Storgata|location-choice|59\.9139/);
+    expect(localStorage.getItem(BASKET_STORAGE_KEY)).not.toMatch(/Storgata|location-choice|59\.9139/);
+
+    const car = screen.getByRole("radio", { name: "Bil" });
+    car.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("radio", { name: "Sykkel" })).toBeChecked();
+    await waitFor(() => {
+      const travelCalls = fetch.mock.calls.filter(([input]) => String(input) === "/api/plans/travel");
+      expect(travelCalls).toHaveLength(2);
+      expect(JSON.parse(String(travelCalls[1]![1]?.body))).toMatchObject({ travelMode: "bike" });
+    });
+
+    await user.clear(addressInput);
+    expect(screen.queryByText("Estimert reisetid", { selector: "dt" })).not.toBeInTheDocument();
+    expect(screen.queryByText("© OpenStreetMap-bidragsytere")).not.toBeInTheDocument();
+    await user.click(car);
+    expect(car).toBeChecked();
+    expect(fetch.mock.calls.filter(([input]) => String(input) === "/api/plans/travel")).toHaveLength(2);
+    await user.type(addressInput, "Karl Johans gate 1, Oslo");
+    await user.click(screen.getByRole("button", { name: "Finn adresse" }));
+    await user.click(await screen.findByRole("option", { name: /Karl Johans gate 1, Oslo/ }));
+    expect(await screen.findByText(/Startpunktet utløp/)).toBeVisible();
+    expect(screen.queryByText("Estimert reisetid", { selector: "dt" })).not.toBeInTheDocument();
+    expect(screen.queryByText("© OpenStreetMap-bidragsytere")).not.toBeInTheDocument();
+    expect(fetch.mock.calls.filter(([input]) => String(input) === "/api/plans/travel")).toHaveLength(2);
+
+    view.unmount();
+    render(<ResultPage />);
+    expect(await screen.findByRole("switch", { name: "Beregn" })).not.toBeChecked();
+    expect(screen.queryByRole("combobox", { name: /adresse og poststed/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("© OpenStreetMap-bidragsytere")).not.toBeInTheDocument();
+  });
+
+  it("clears ephemeral origin and route state across pagehide and persisted pageshow", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    let travelRequestCount = 0;
+    let resolvePendingTravel!: (response: Response) => void;
+    let pendingTravelSignal: AbortSignal | undefined;
+    const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/plans") {
+        return Promise.resolve(new Response(JSON.stringify(resultResponse()), {
+          headers: { "content-type": "application/json" },
+        }));
+      }
+      if (path === "/api/locations/search") {
+        const query = JSON.parse(String(init?.body)).query as string;
+        return Promise.resolve(new Response(JSON.stringify(locationSearchResponse([{
+          label: query,
+          matchQuality: "exact",
+          selectionToken: LOCATION_TOKEN,
+        }])), { headers: { "content-type": "application/json" } }));
+      }
+      if (path === "/api/plans/travel" && travelRequestCount++ === 0) {
+        return Promise.resolve(new Response(JSON.stringify(calculatedTravelResponse()), {
+          headers: { "content-type": "application/json" },
+        }));
+      }
+      if (path === "/api/plans/travel") {
+        pendingTravelSignal = init?.signal ?? undefined;
+        return new Promise<Response>((resolve) => { resolvePendingTravel = resolve; });
+      }
+      return Promise.resolve(new Response(undefined, { status: 404 }));
+    });
+    vi.stubGlobal("fetch", fetch);
+    const view = render(<ResultPage />);
+
+    await user.click(await screen.findByRole("switch", { name: "Beregn" }));
+    const firstAddress = screen.getByRole("combobox", { name: /adresse og poststed/ });
+    await user.type(firstAddress, "Storgata 1, Oslo");
+    await user.click(screen.getByRole("button", { name: "Finn adresse" }));
+    await user.click(await screen.findByRole("option", { name: /Storgata 1, Oslo/ }));
+    expect(await screen.findByText("Estimert reisetid", { selector: "dt" })).toBeVisible();
+
+    act(() => window.dispatchEvent(new Event("pagehide")));
+    expect(screen.getByRole("switch", { name: "Beregn" })).not.toBeChecked();
+    expect(screen.queryByRole("combobox", { name: /adresse og poststed/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("Estimert reisetid", { selector: "dt" })).not.toBeInTheDocument();
+    expect(screen.queryByText("© OpenStreetMap-bidragsytere")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("switch", { name: "Beregn" }));
+    const secondAddress = screen.getByRole("combobox", { name: /adresse og poststed/ });
+    await user.type(secondAddress, "Karl Johans gate 1, Oslo");
+    const ordinaryPageShow = new Event("pageshow");
+    Object.defineProperty(ordinaryPageShow, "persisted", { value: false });
+    act(() => window.dispatchEvent(ordinaryPageShow));
+    expect(screen.getByRole("switch", { name: "Beregn" })).toBeChecked();
+    expect(secondAddress).toHaveValue("Karl Johans gate 1, Oslo");
+
+    await user.click(screen.getByRole("button", { name: "Finn adresse" }));
+    await user.click(await screen.findByRole("option", { name: /Karl Johans gate 1, Oslo/ }));
+    expect(await screen.findByText("Beregner rute …")).toBeVisible();
+    expect(pendingTravelSignal).toBeDefined();
+    expect(pendingTravelSignal?.aborted).toBe(false);
+
+    const restoredPageShow = new Event("pageshow");
+    Object.defineProperty(restoredPageShow, "persisted", { value: true });
+    act(() => window.dispatchEvent(restoredPageShow));
+    expect(pendingTravelSignal?.aborted).toBe(true);
+    expect(screen.getByRole("switch", { name: "Beregn" })).not.toBeChecked();
+    expect(screen.queryByRole("combobox", { name: /adresse og poststed/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("Beregner rute …")).not.toBeInTheDocument();
+    expect(localStorage.getItem(BASKET_STORAGE_KEY)).not.toMatch(/Storgata|Karl Johans|location-choice/);
+
+    await act(async () => resolvePendingTravel(new Response(JSON.stringify(calculatedTravelResponse()), {
+      headers: { "content-type": "application/json" },
+    })));
+    expect(screen.queryByText("Estimert reisetid", { selector: "dt" })).not.toBeInTheDocument();
+    expect(screen.queryByText("© OpenStreetMap-bidragsytere")).not.toBeInTheDocument();
+    view.unmount();
+  });
+
+  it("disables mode changes while a new origin lookup is pending", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    let resolveSearch!: (response: Response) => void;
+    const fetch = vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/plans") {
+        return Promise.resolve(new Response(JSON.stringify(resultResponse()), {
+          headers: { "content-type": "application/json" },
+        }));
+      }
+      if (path === "/api/locations/search") {
+        return new Promise<Response>((resolve) => { resolveSearch = resolve; });
+      }
+      return Promise.resolve(new Response(undefined, { status: 404 }));
+    });
+    vi.stubGlobal("fetch", fetch);
+    const view = render(<ResultPage />);
+
+    await user.click(await screen.findByRole("switch", { name: "Beregn" }));
+    await user.type(screen.getByRole("combobox", { name: /adresse og poststed/ }), "Storgata 1, Oslo");
+    await user.click(screen.getByRole("button", { name: "Finn adresse" }));
+
+    expect(screen.getByRole("radio", { name: "Bil" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "Sykkel" })).toBeDisabled();
+    expect(fetch.mock.calls.filter(([input]) => String(input) === "/api/plans/travel")).toHaveLength(0);
+
+    view.unmount();
+    resolveSearch(new Response(JSON.stringify(locationSearchResponse([])), {
+      headers: { "content-type": "application/json" },
+    }));
+  });
+
+  it("uses the latest keyboard preference when a pending travel response arrives", async () => {
+    const user = userEvent.setup();
+    const planning = resultResponse({ plans: equivalentPlans });
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    let resolveTravel!: (response: Response) => void;
+    const fetch = vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/plans") {
+        return Promise.resolve(new Response(JSON.stringify(planning), {
+          headers: { "content-type": "application/json" },
+        }));
+      }
+      if (path === "/api/locations/search") {
+        return Promise.resolve(new Response(JSON.stringify(locationSearchResponse([{
+          label: "Storgata 1, Oslo",
+          matchQuality: "exact",
+          selectionToken: LOCATION_TOKEN,
+        }])), { headers: { "content-type": "application/json" } }));
+      }
+      if (path === "/api/plans/travel") {
+        return new Promise<Response>((resolve) => { resolveTravel = resolve; });
+      }
+      return Promise.resolve(new Response(undefined, { status: 404 }));
+    });
+    vi.stubGlobal("fetch", fetch);
+    render(<ResultPage />);
+
+    await user.click(await screen.findByRole("switch", { name: "Beregn" }));
+    await user.type(screen.getByRole("combobox", { name: /adresse og poststed/ }), "Storgata 1, Oslo");
+    await user.click(screen.getByRole("button", { name: "Finn adresse" }));
+    await user.click(await screen.findByRole("option", { name: /Storgata 1, Oslo/ }));
+    expect(await screen.findByText("Beregner rute …")).toBeVisible();
+
+    const slider = screen.getByRole("slider", { name: /Velg komplett plan/ });
+    slider.focus();
+    await user.keyboard("{End}");
+    expect(screen.getByRole("radio", { name: /Likeverdig alternativ 3/ })).toBeChecked();
+
+    await act(async () => resolveTravel(new Response(JSON.stringify(calculatedTravelResponse(planning)), {
+      headers: { "content-type": "application/json" },
+    })));
+    expect(await screen.findByText("Reisetid er beregnet for de komplette planene under.")).toBeVisible();
+    expect(screen.getByRole("radio", { name: /Likeverdig alternativ 3/ })).toBeChecked();
+    expect(screen.getByRole("region", { name: "Butikk 1: Bunnpris" })).toBeVisible();
+  });
+
+  it("applies a server-authoritative unavailable planning snapshot without implying a route was calculated", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+    const newerPlanning = resultResponse({ plans: [plan("new-price-only", "extra", 2_590)] });
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      const body = path === "/api/plans"
+        ? resultResponse()
+        : path === "/api/locations/search"
+          ? locationSearchResponse([{
+              label: "Storgata 1, Oslo",
+              matchQuality: "exact",
+              selectionToken: LOCATION_TOKEN,
+            }])
+          : path === "/api/plans/travel"
+            ? {
+                contractVersion: 1,
+                planning: newerPlanning,
+                travel: { contractVersion: 1, kind: "unavailable", reason: "timeout" },
+              }
+            : undefined;
+      return new Response(JSON.stringify(body), {
+        status: body === undefined ? 404 : 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    render(<ResultPage />);
+
+    await user.click(await screen.findByRole("switch", { name: "Beregn" }));
+    await user.type(screen.getByRole("combobox", { name: /adresse og poststed/ }), "Storgata 1, Oslo");
+    await user.click(screen.getByRole("button", { name: "Finn adresse" }));
+    await user.click(await screen.findByRole("option", { name: /Storgata 1, Oslo/ }));
+
+    expect(await screen.findByText(/Ruten tok for lang tid/)).toBeVisible();
+    expect(screen.getByText("25,90 kr", { selector: ".result-total" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Butikk 1: Extra" })).toBeVisible();
+    expect(screen.queryByText("© OpenStreetMap-bidragsytere")).not.toBeInTheDocument();
+    expect(screen.queryByText("Estimert reisetid", { selector: "dt" })).not.toBeInTheDocument();
   });
 
   it("aborts the request on unmount and ignores a late response", async () => {

@@ -3,11 +3,17 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      promotion_manifest:
+        description: Reserved V1 promotion path; drafts and promotions are rejected until the evidence architecture is complete
+        required: false
+        type: string
 
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 50
     services:
       postgres:
         image: postgres:16.10-alpine@sha256:ab8380566c3ea09690a9ecaa85a59d82bfc6eb86744151a2a54335866c83a3e9
@@ -24,18 +30,47 @@ jobs:
           --health-retries 12
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0, Node 24 action runtime
+        with:
+          # The exact first parent is built and booted after current migrations
+          # on push CI; this is the minimum history required for that proof.
+          fetch-depth: 2
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0, Node 24 action runtime
         with:
           node-version: 22.22.3
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
+      - name: Reject high and critical dependency advisories
+        run: corepack pnpm security:audit
+      - name: Verify dependency licenses and committed inventory
+        run: corepack pnpm security:licenses
+      - name: Scan repository for committed secrets
+        run: corepack pnpm security:secrets
+      - name: Test supply-chain checkers
+        run: corepack pnpm security:scripts:test
+      - name: Test disabled backup and restore tooling
+        run: corepack pnpm operations:backup:test
+      - name: Test external public-monitor contracts
+        run: corepack pnpm operations:monitor:test
+      - name: Test release-manifest checker
+        run: corepack pnpm release:manifest:test
+      - name: Enforce the intentionally closed V1 promotion path
+        if: ${{ inputs.promotion_manifest != '' }}
+        env:
+          PROMOTION_MANIFEST: ${{ inputs.promotion_manifest }}
+        run: corepack pnpm release:manifest:verify -- --require-promotion "$PROMOTION_MANIFEST"
+      - name: Generate revision-bound SPDX source SBOM
+        run: corepack pnpm security:sbom
       - name: Validate V1 data
         run: corepack pnpm validate:v1-data
+      - name: Test V1 basket acceptance foundation
+        run: corepack pnpm acceptance:v1-baskets:test
       - name: Apply production migrations twice
         env:
           APP_DATABASE_PASSWORD: ci_app_url_safe_0000000000000000001
           DATABASE_MIGRATION_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
           MIGRATIONS_DIR: ${{ github.workspace }}/deploy/migrations
+          OPERATIONS_DATABASE_PASSWORD: ci_operations_url_safe_000000000001
+          REVIEW_DATABASE_PASSWORD: ci_review_url_safe_00000000000000001
           WEB_DATABASE_PASSWORD: ci_web_url_safe_0000000000000000001
         run: |
           node deploy/migrate.mjs
@@ -46,8 +81,10 @@ jobs:
           CI: "true"
           DATABASE_ADMIN_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
           MIGRATIONS_DIR: ${{ github.workspace }}/deploy/migrations
+          OPERATIONS_DATABASE_PASSWORD: ci_operations_url_safe_000000000001
           POSTGRES_CLIENT_HOST: 127.0.0.1
           POSTGRES_CLIENT_NETWORK: host
+          REVIEW_DATABASE_PASSWORD: ci_review_url_safe_00000000000000001
           WEB_DATABASE_PASSWORD: ci_web_url_safe_0000000000000000001
         run: node tests/acceptance/prove-database-upgrade.mjs
       - name: Prove runtime database least privilege
@@ -56,22 +93,84 @@ jobs:
           CI: "true"
           DATABASE_ADMIN_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
           MIGRATIONS_DIR: ${{ github.workspace }}/deploy/migrations
+          OPERATIONS_DATABASE_PASSWORD: ci_operations_url_safe_000000000001
           RUNTIME_ROLE_PROOF_DATABASE: handleplan_runtime_role_proof_ci
+          REVIEW_DATABASE_PASSWORD: ci_review_url_safe_00000000000000001
           WEB_DATABASE_PASSWORD: ci_web_url_safe_0000000000000000001
         run: node tests/acceptance/prove-runtime-database-role.mjs
       - name: Run PostgreSQL integration tests
         env:
           DATABASE_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
+          DATABASE_MIGRATION_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
           RUN_DB_INTEGRATION: "1"
+          RUN_OFFICIAL_OFFER_DB_INTEGRATION: "1"
+          REVIEW_DATABASE_URL: postgresql://handleplan_review:ci_review_url_safe_00000000000000001@127.0.0.1:5432/handleplan
           WEB_DATABASE_URL: postgresql://handleplan_web:ci_web_url_safe_0000000000000000001@127.0.0.1:5432/handleplan
         # Integration files share one ephemeral database and deliberately append
         # immutable audit rows, so file-level parallelism would invalidate their
         # isolation contract even when every individual test is sequential.
         run: corepack pnpm --filter @handleplan/db exec vitest run --no-file-parallelism
+      - name: Boot the exact previous application image against the expanded schema
+        if: ${{ github.event_name == 'push' }}
+        env:
+          APP_COMMIT_SHA: ${{ github.sha }}
+          WEB_DATABASE_PASSWORD: ci_web_url_safe_0000000000000000001
+        run: |
+          set -eu
+          test "$(git rev-parse HEAD)" = "$APP_COMMIT_SHA"
+          previous_revision=$(git rev-parse --verify "$APP_COMMIT_SHA^")
+          printf '%s\n' "$previous_revision" | grep -Eq '^[0-9a-f]{40}$'
+          git merge-base --is-ancestor "$previous_revision" "$APP_COMMIT_SHA"
+          install -d -m 700 .artifacts/security
+          previous_archive=.artifacts/security/handleplan-previous-source.tar
+          previous_image="handleplan:previous-$previous_revision"
+          previous_container="handleplan-previous-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          cleanup_previous_smoke() {
+            docker rm -f "$previous_container" >/dev/null 2>&1 || true
+          }
+          trap cleanup_previous_smoke EXIT HUP INT TERM
+          git archive --format=tar --output="$previous_archive" "$previous_revision"
+          test "$(wc -c < "$previous_archive" | tr -d '[:space:]')" -gt 0
+          test "$(wc -c < "$previous_archive" | tr -d '[:space:]')" -le 134217728
+          docker build --build-arg APP_COMMIT_SHA="$previous_revision" \
+            --tag "$previous_image" - < "$previous_archive"
+          docker run --detach --name "$previous_container" --network host \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --env APP_COMMIT_SHA="$previous_revision" \
+            --env DATABASE_URL="postgresql://handleplan_web:$WEB_DATABASE_PASSWORD@127.0.0.1:5432/handleplan" \
+            --env NEXT_TELEMETRY_DISABLED=1 --env NODE_ENV=production \
+            --env PORT=3014 --entrypoint node "$previous_image" \
+            /app/apps/web/server.js >/dev/null
+          previous_ready=0
+          attempts=0
+          while [ "$attempts" -lt 24 ]; do
+            if [ "$(docker inspect --format '{{.State.Running}}' "$previous_container")" != true ]; then
+              echo "Previous application image exited before readiness" >&2
+              exit 1
+            fi
+            if curl --fail --silent --show-error http://127.0.0.1:3014/api/health \
+              | grep -F "\"commit\":\"$previous_revision\"" >/dev/null \
+              && curl --fail --silent --show-error http://127.0.0.1:3014/api/ready \
+              | grep -F '"status":"ok"' >/dev/null; then
+              previous_ready=1
+              break
+            fi
+            attempts=$((attempts + 1))
+            sleep 5
+          done
+          test "$previous_ready" -eq 1 || {
+            echo "Previous application image did not become ready against the expanded schema" >&2
+            exit 1
+          }
+          test "$(docker inspect --format '{{.RestartCount}}' "$previous_container")" = 0
+          printf 'previous-image-expanded-schema-smoke=ok revision=%s\n' "$previous_revision"
       - run: corepack pnpm typecheck
       - run: corepack pnpm lint
       - run: corepack pnpm test
       - run: corepack pnpm build
+      - name: Test immutable CI image handoff
+        run: node --test tests/operations/deployment-artifact-handoff.test.mjs
       - name: Validate deployment assets
         env:
           APP_COMMIT_SHA: ${{ github.sha }}
@@ -79,13 +178,70 @@ jobs:
           HANDLEPLAN_IMAGE: handleplan:ci
           HANDLEPLAN_MIGRATION_IMAGE: handleplan:ci
           KASSAL_API_KEY: ci-placeholder
+          OPERATIONS_ACCESS_AUDIENCE: ci_operations_access_audience_0001
+          OPERATIONS_ACCESS_ISSUER: https://ci.cloudflareaccess.com
+          OPERATIONS_ACCESS_TEAM_DOMAIN: https://ci.cloudflareaccess.com
+          OPERATIONS_BASE_URL: https://handleplan-operations.invalid
+          OPERATIONS_DATABASE_PASSWORD: ci_operations_url_safe_000000000001
+          OPERATIONS_SOURCE_ROSTER_JSON: '["kassalapp"]'
           POSTGRES_PASSWORD: ci_admin_url_safe_0000000000000001
+          REVIEW_ACCESS_AUDIENCE: ci_review_access_audience_00000001
+          REVIEW_ACCESS_ISSUER: https://ci.cloudflareaccess.com
+          REVIEW_ACCESS_TEAM_DOMAIN: https://ci.cloudflareaccess.com
+          REVIEW_BASE_URL: https://handleplan-review.invalid
+          REVIEW_DATABASE_PASSWORD: ci_review_url_safe_00000000000000001
+          REVIEW_EVIDENCE_PROOF_SECRET: QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI
           WEB_DATABASE_PASSWORD: ci_web_url_safe_0000000000000000001
         run: |
+          set -eu
           sh -n deploy/*.sh
           node --check deploy/migrate.mjs
+          docker run --rm --network none \
+            -v "$PWD/deploy/Caddyfile.handleplan:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
           docker compose -f deploy/compose.production.yml config -q
-          docker build --build-arg APP_COMMIT_SHA="$APP_COMMIT_SHA" -t "$HANDLEPLAN_IMAGE" .
-      - run: corepack pnpm exec playwright install --with-deps chromium
+          test "$(git rev-parse HEAD)" = "$APP_COMMIT_SHA"
+          git archive --format=tar --output=.artifacts/security/handleplan-source.tar "$APP_COMMIT_SHA"
+          docker build --build-arg APP_COMMIT_SHA="$APP_COMMIT_SHA" -t "$HANDLEPLAN_IMAGE" - < .artifacts/security/handleplan-source.tar
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$HANDLEPLAN_IMAGE")" = "$APP_COMMIT_SHA"
+          docker image save --output .artifacts/security/handleplan-image.docker.tar "$HANDLEPLAN_IMAGE"
+          corepack pnpm security:provenance
+          artifact_dir=.artifacts/deployment
+          install -d -m 700 "$artifact_dir"
+          install -m 600 .artifacts/security/handleplan-source.tar "$artifact_dir/handleplan-source.tar"
+          install -m 600 .artifacts/security/handleplan-image.docker.tar "$artifact_dir/handleplan-image.docker.tar"
+          install -m 600 .artifacts/security/handleplan.provenance.json "$artifact_dir/handleplan.provenance.json"
+          install -m 600 .artifacts/security/handleplan.spdx.json "$artifact_dir/handleplan.spdx.json"
+          image_id=$(docker image inspect --format '{{.Id}}' "$HANDLEPLAN_IMAGE")
+          printf '%s\n' "$image_id" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          image_archive_sha256=$(sha256sum "$artifact_dir/handleplan-image.docker.tar" | awk '{print $1}')
+          source_archive_sha256=$(sha256sum "$artifact_dir/handleplan-source.tar" | awk '{print $1}')
+          provenance_sha256=$(sha256sum "$artifact_dir/handleplan.provenance.json" | awk '{print $1}')
+          sbom_sha256=$(sha256sum "$artifact_dir/handleplan.spdx.json" | awk '{print $1}')
+          printf '%s\n' \
+            'format=handleplan-ci-image-bundle-v1' \
+            "revision=$APP_COMMIT_SHA" \
+            "image_reference=handleplan:$APP_COMMIT_SHA" \
+            "image_id=$image_id" \
+            "image_archive_sha256=$image_archive_sha256" \
+            "source_archive_sha256=$source_archive_sha256" \
+            "provenance_sha256=$provenance_sha256" \
+            "sbom_sha256=$sbom_sha256" \
+            "ci_run_id=$GITHUB_RUN_ID" \
+            "ci_run_attempt=$GITHUB_RUN_ATTEMPT" \
+            > "$artifact_dir/handleplan-image-bundle.v1"
+          test "$(wc -l < "$artifact_dir/handleplan-image-bundle.v1" | tr -d '[:space:]')" -eq 10
+          sha256sum "$artifact_dir"/*
+      - name: Upload exact CI image bundle
+        id: upload-image-bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: handleplan-ci-image-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: .artifacts/deployment/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - run: corepack pnpm exec playwright install --with-deps chromium firefox webkit
       - run: corepack pnpm e2e:handlemodus
       - run: corepack pnpm exec playwright test

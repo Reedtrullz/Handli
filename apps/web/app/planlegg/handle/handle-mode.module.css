@@ -231,6 +231,11 @@
   gap: 3px;
 }
 
+.purchaseDetails {
+  display: grid;
+  gap: 3px;
+}
+
 .storeCard small {
   color: #627166;
 }
@@ -306,5 +311,35 @@
 
   .actions button {
     width: 100%;
+  }
+}
+
+@media (max-width: 360px) {
+  .header {
+    gap: 8px;
+    padding: 0 10px;
+  }
+
+  .header nav {
+    gap: 6px;
+  }
+
+  .header nav a {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    font-size: .9rem;
+  }
+
+  .wordmark {
+    min-height: 44px;
+    gap: 7px;
+    font-size: 1rem;
+  }
+
+  .mark {
+    width: 24px;
+    height: 24px;
+    flex: 0 0 24px;
   }
 }

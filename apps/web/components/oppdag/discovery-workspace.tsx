@@ -1,7 +1,9 @@
 "use client";
 
 import {
-  publicDiscoveryResponseSchema,
+  DISCOVERY_IMPACT_ACTION_MAX,
+  publicDiscoveryRequestV1Schema,
+  publicDiscoveryResponseSchemaFor,
   type ExactProductPlanApiEvidenceSource,
   type ExactProductPlanApiProductSummary,
   type HistoricalComparison,
@@ -9,6 +11,7 @@ import {
   type PriceEvidence,
   type Product,
   type PublicDiscoveryProduct,
+  type PublicDiscoveryRequestV1,
   type PublicDiscoveryResponse,
 } from "@handleplan/domain";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -19,11 +22,18 @@ import {
   saveBasket,
   type BrowserBasket,
 } from "../../lib/browser-basket";
+import type { DiscoveryImpactCalculation } from "../../lib/discovery-impact-client";
+import { launchMarketLabel } from "../../lib/launch-markets";
+import { membershipOfferConditionCopy } from "../../lib/membership-presentation";
+import { MarketSelector } from "../market/market-selector";
+import { DiscoveryImpactBatch } from "./discovery-impact-batch";
 
 const MAX_DISCOVERY_RESPONSE_BYTES = 128 * 1024;
+const DISCOVERY_PAGE_SIZE = DISCOVERY_IMPACT_ACTION_MAX;
 const chains = ["bunnpris", "rema-1000", "extra"] as const;
 type Chain = (typeof chains)[number];
-type ChainFilter = "all" | Chain;
+type ChainFilter = PublicDiscoveryRequestV1["chain"];
+type DiscoveryTypeFilter = PublicDiscoveryRequestV1["resultType"];
 type VisibleProduct = PublicDiscoveryProduct & {
   visibleComparisons: HistoricalComparison[];
   visibleOffers: OfficialOffer[];
@@ -31,7 +41,7 @@ type VisibleProduct = PublicDiscoveryProduct & {
 };
 
 export type DiscoverySearch = (
-  query: string | undefined,
+  request: PublicDiscoveryRequestV1,
   signal: AbortSignal,
 ) => Promise<PublicDiscoveryResponse>;
 
@@ -100,18 +110,31 @@ async function readBoundedJson(response: Response): Promise<unknown> {
 }
 
 export async function searchDiscoveryFromApi(
-  query: string | undefined,
+  request: PublicDiscoveryRequestV1,
   signal: AbortSignal,
 ): Promise<PublicDiscoveryResponse> {
-  const url = query === undefined
-    ? "/api/discovery/search"
-    : `/api/discovery/search?q=${encodeURIComponent(query)}`;
+  const parsedRequest = publicDiscoveryRequestV1Schema.safeParse(request);
+  if (!parsedRequest.success) throw new Error("DISCOVERY_SEARCH_FAILED");
+  const input = parsedRequest.data;
+  const params = new URLSearchParams({
+    chain: input.chain,
+    market: input.marketContext.kind === "national"
+      ? "national"
+      : input.marketContext.regionId,
+    pageSize: String(input.pageSize),
+    type: input.resultType,
+  });
+  if (input.query !== undefined) params.set("q", input.query);
+  if (input.categoryId !== undefined) params.set("category", input.categoryId);
+  if (input.cursor !== undefined) params.set("cursor", input.cursor);
+  const url = `/api/discovery/search?${params.toString()}`;
   const response = await fetch(url, { signal });
   if (!response.ok) {
     await cancelBody(response.body);
     throw new Error("DISCOVERY_SEARCH_FAILED");
   }
-  const parsed = publicDiscoveryResponseSchema.safeParse(await readBoundedJson(response));
+  const parsed = publicDiscoveryResponseSchemaFor(input)
+    .safeParse(await readBoundedJson(response));
   if (!parsed.success) throw new Error("DISCOVERY_SEARCH_FAILED");
   return parsed.data;
 }
@@ -208,11 +231,21 @@ function officialOfferSavingsBasisPoints(offer: OfficialOffer): number {
 }
 
 function offerConditions(offer: OfficialOffer): string {
-  return offer.conditions.map((condition) => {
+  return [...new Set(offer.conditions.map((condition) => {
     if (condition.kind === "public") return "Åpent tilbud";
-    if (condition.kind === "member") return `Medlemspris (${condition.programId})`;
+    if (condition.kind === "member") return membershipOfferConditionCopy(offer.chainId);
     return `Minst ${condition.quantity} stk`;
-  }).join(" • ");
+  }))].join(" • ");
+}
+
+function offerScope(offer: OfficialOffer): string {
+  const scope = offer.applicability.geographicScope;
+  if (scope.kind === "national") return `Hele ${scope.countryCode === "NO" ? "Norge" : scope.countryCode}`;
+  if (scope.kind === "regions") return `Regioner: ${scope.regionCodes.join(", ")}`;
+  if (scope.kind === "stores") {
+    return `${scope.storeIds.length} ${scope.storeIds.length === 1 ? "oppgitt butikk" : "oppgitte butikker"}`;
+  }
+  return "Geografisk omfang er ikke avklart";
 }
 
 function unresolvedCoverage(entry: PublicDiscoveryProduct): Chain[] {
@@ -232,19 +265,19 @@ function coverageText(entry: PublicDiscoveryProduct): string {
     : `Delvis dekning. Uavklart: ${unresolved.join(", ")}.`;
 }
 
-function bestComparisonScore(entry: VisibleProduct): number {
-  return Math.max(0, ...entry.visibleComparisons.map(({ savingsBasisPoints }) => savingsBasisPoints));
-}
-
-function bestOfferScore(entry: VisibleProduct): number {
-  return Math.max(0, ...entry.visibleOffers.map(officialOfferSavingsBasisPoints));
-}
-
-function lowestOrdinaryPrice(entry: VisibleProduct): number {
-  return Math.min(Number.MAX_SAFE_INTEGER, ...entry.visiblePrices.map(({ amountOre }) => amountOre));
+function categoryPathText(entry: PublicDiscoveryProduct): string {
+  const source = entry.catalog.catalogEvidence.source.displayName;
+  if (entry.categoryPath === null) {
+    return `Observert kildekategori: ikke fanget i kataloggrunnlaget fra ${source}.`;
+  }
+  if (entry.categoryPath.length === 0) {
+    return `Observert kildekategori: ${source} oppga ingen kategori.`;
+  }
+  return `Observert kildekategori: ${entry.categoryPath.map(({ name }) => name).join(" › ")} • kilde: ${source}.`;
 }
 
 interface DiscoveryWorkspaceProps {
+  calculateImpact?: DiscoveryImpactCalculation;
   createId?: () => string;
   searchDiscovery?: DiscoverySearch;
   storage?: Storage;
@@ -257,6 +290,7 @@ export function DiscoveryWorkspace(props: DiscoveryWorkspaceProps) {
 }
 
 function DiscoveryWorkspaceClient({
+  calculateImpact,
   createId = () => globalThis.crypto.randomUUID(),
   searchDiscovery = searchDiscoveryFromApi,
   storage,
@@ -264,20 +298,43 @@ function DiscoveryWorkspaceClient({
   const [basket, setBasket] = useState<BrowserBasket>(() => loadBasket(storage));
   const [query, setQuery] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState<string | undefined>();
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | undefined>();
   const [searchRevision, setSearchRevision] = useState(0);
   const [chain, setChain] = useState<ChainFilter>("all");
+  const [discoveryType, setDiscoveryType] = useState<DiscoveryTypeFilter>("all");
+  const [pageCursors, setPageCursors] = useState<Array<string | undefined>>([undefined]);
   const [result, setResult] = useState<PublicDiscoveryResponse | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const controller = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    if (basket.marketContext === null) {
+      controller.current?.abort();
+      return;
+    }
+    const marketContext = basket.marketContext;
+    const cursor = pageCursors.at(-1);
+    const request = publicDiscoveryRequestV1Schema.parse({
+      ...(selectedCategoryId === undefined ? {} : { categoryId: selectedCategoryId }),
+      chain,
+      contractVersion: 1,
+      ...(cursor === undefined ? {} : { cursor }),
+      marketContext,
+      pageSize: DISCOVERY_PAGE_SIZE,
+      ...(submittedQuery === undefined ? {} : { query: submittedQuery }),
+      resultType: discoveryType,
+    });
     const nextController = new AbortController();
     controller.current?.abort();
     controller.current = nextController;
-    void searchDiscovery(submittedQuery, nextController.signal)
+    void searchDiscovery(
+      request,
+      nextController.signal,
+    )
       .then((nextResult) => {
         if (nextController.signal.aborted) return;
-        const parsed = publicDiscoveryResponseSchema.safeParse(nextResult);
+        const parsed = publicDiscoveryResponseSchemaFor(request)
+          .safeParse(nextResult);
         if (!parsed.success) throw new Error("DISCOVERY_SEARCH_FAILED");
         setResult(parsed.data);
         setStatus("ready");
@@ -288,36 +345,52 @@ function DiscoveryWorkspaceClient({
         setStatus("error");
       });
     return () => nextController.abort();
-  }, [searchDiscovery, searchRevision, submittedQuery]);
+  }, [
+    basket.marketContext,
+    chain,
+    discoveryType,
+    pageCursors,
+    searchDiscovery,
+    searchRevision,
+    selectedCategoryId,
+    submittedQuery,
+  ]);
 
-  const visible = useMemo<VisibleProduct[]>(() => (result?.products ?? []).flatMap((entry) => {
+  const effectiveStatus = basket.marketContext === null ? "market-required" : status;
+
+  const visible = useMemo<VisibleProduct[]>(() => (
+    basket.marketContext === null ? [] : result?.products ?? []
+  ).map((entry) => {
     const visiblePrices = entry.ordinaryPrices.filter(({ chainId }) =>
       isChain(chainId) && (chain === "all" || chainId === chain));
-    const visibleOffers = entry.officialOffers.filter(({ chainId }) =>
+    const chainOffers = entry.officialOffers.filter(({ chainId }) =>
       isChain(chainId) && (chain === "all" || chainId === chain));
     const visiblePriceIds = new Set(visiblePrices.map(({ id }) => id));
-    const visibleComparisons = entry.historicalComparisons.filter(({ currentEvidenceId, chainId }) =>
+    const chainComparisons = entry.historicalComparisons.filter(({ currentEvidenceId, chainId }) =>
       isChain(chainId)
       && (chain === "all" || chainId === chain)
       && visiblePriceIds.has(currentEvidenceId));
-    if (chain !== "all" && visiblePrices.length === 0 && visibleOffers.length === 0) return [];
-    return [{ ...entry, visibleComparisons, visibleOffers, visiblePrices }];
-  }).sort((left, right) => {
-    const offerPresence = Number(right.visibleOffers.length > 0) - Number(left.visibleOffers.length > 0);
-    return offerPresence
-      || bestOfferScore(right) - bestOfferScore(left)
-      || bestComparisonScore(right) - bestComparisonScore(left)
-      || lowestOrdinaryPrice(left) - lowestOrdinaryPrice(right)
-      || left.catalog.displayName.localeCompare(right.catalog.displayName, "nb-NO");
-  }), [chain, result]);
+    const visibleOffers = discoveryType === "historical-comparison" ? [] : chainOffers;
+    const visibleComparisons = discoveryType === "official-offer" ? [] : chainComparisons;
+    return { ...entry, visibleComparisons, visibleOffers, visiblePrices };
+  }), [basket.marketContext, chain, discoveryType, result]);
 
   const basketEans = new Set(basket.matchingRules.flatMap((rule) =>
     rule.mode === "exact" && rule.exactEan ? [rule.exactEan] : [],
   ));
-  const quantity = basket.needs.reduce((sum, need) => sum + need.quantity, 0);
+  const needCount = basket.needs.length;
   const hasCompleteCoverage = result !== null
     && result.products.length > 0
     && result.products.every(({ comparisonScope }) => comparisonScope.completeness === "complete");
+  const marketLabel = basket.marketContext === null
+    ? "valgt prisområde"
+    : launchMarketLabel(basket.marketContext);
+  const currentPage = pageCursors.length - 1;
+  const visiblePage = visible;
+  const impactProducts = useMemo(
+    () => visiblePage.map(({ catalog }) => catalog),
+    [visiblePage],
+  );
 
   function submitSearch(nextQuery = query): void {
     const trimmed = nextQuery.trim();
@@ -325,6 +398,17 @@ function DiscoveryWorkspaceClient({
     setStatus("loading");
     setQuery(trimmed);
     setSubmittedQuery(trimmed);
+    setSelectedCategoryId(undefined);
+    setPageCursors([undefined]);
+    setSearchRevision((current) => current + 1);
+  }
+
+  function selectCategory(categoryId: string): void {
+    setStatus("loading");
+    setQuery("");
+    setSubmittedQuery(undefined);
+    setSelectedCategoryId(categoryId === "" ? undefined : categoryId);
+    setPageCursors([undefined]);
     setSearchRevision((current) => current + 1);
   }
 
@@ -332,6 +416,13 @@ function DiscoveryWorkspaceClient({
     setStatus("loading");
     setQuery("");
     setSubmittedQuery(undefined);
+    setSelectedCategoryId(undefined);
+    setPageCursors([undefined]);
+    setSearchRevision((current) => current + 1);
+  }
+
+  function retryCurrentView(): void {
+    setStatus("loading");
     setSearchRevision((current) => current + 1);
   }
 
@@ -341,6 +432,11 @@ function DiscoveryWorkspaceClient({
       saveBasket(next, storage);
       return next;
     });
+  }
+
+  function replaceBasket(next: BrowserBasket): void {
+    saveBasket(next, storage);
+    setBasket(next);
   }
 
   return (
@@ -356,13 +452,24 @@ function DiscoveryWorkspaceClient({
 
       <section className="coverage-notice" aria-label="Dekningsstatus">
         <p>{hasCompleteCoverage
-          ? "Dekningen er komplett for varene som vises: Bunnpris, Extra og REMA 1000 er avklart."
-          : "Dekningen varierer per vare. Manglende kjeder vises som uavklart og regnes aldri som dyrere, billigere eller uten varen."}</p>
+          ? `For ${marketLabel} er alle tre kjeder avklart for akkurat varene som vises. Dette er ikke en lanserings- eller totaldekningspåstand.`
+          : `For ${marketLabel} varierer dekningen per vare. Manglende kjeder vises som uavklart og regnes aldri som dyrere, billigere eller uten varen.`}</p>
       </section>
 
       <div className="oppdag-grid">
         <div className="discovery-column">
           <section className="discovery-controls" aria-label="Finn prisfunn">
+            <MarketSelector
+              id="oppdag-market"
+              marketContext={basket.marketContext}
+              onChange={(marketContext) => {
+                const next = { ...basket, marketContext };
+                saveBasket(next, storage);
+                setBasket(next);
+                setStatus("loading");
+                setPageCursors([undefined]);
+              }}
+            />
             <form onSubmit={(event) => { event.preventDefault(); submitSearch(); }}>
               <label htmlFor="discovery-query">Filtrer varene (valgfritt)</label>
               <div className="discovery-search-row">
@@ -382,15 +489,58 @@ function DiscoveryWorkspaceClient({
                 <button key={suggestion} type="button" onClick={() => submitSearch(suggestion)}>{suggestion}</button>
               ))}
             </div>
-            {submittedQuery ? <button className="browse-reset" type="button" onClick={browseAll}>Vis hele varekatalogen</button> : null}
+            <div className="discovery-category-control">
+              <label htmlFor="discovery-category">Observert kategori (valgfritt)</label>
+              <select
+                id="discovery-category"
+                value={selectedCategoryId ?? ""}
+                onChange={(event) => selectCategory(event.target.value)}
+                disabled={status === "loading" && result === null}
+              >
+                <option value="">Alle observerte kategorier</option>
+                {(result?.observedCategories.facets ?? []).map((facet) => (
+                  <option key={facet.id} value={facet.id}>
+                    {facet.name} • kilde: {sourceLabel(result?.sources ?? [], facet.sourceId)} • {facet.productCount} {facet.productCount === 1 ? "vare" : "varer"}
+                  </option>
+                ))}
+              </select>
+              <small>
+                Listen viser bare kategorier observert i godkjent, ferskt kataloggrunnlag.
+                Den er ikke en komplett butikktaksonomi
+                {result?.observedCategories.hasMore ? ", og flere kategorier finnes enn de som vises" : ""}.
+              </small>
+            </div>
+            {submittedQuery || selectedCategoryId ? <button className="browse-reset" type="button" onClick={browseAll}>Fjern søk eller kategori</button> : null}
             <div className="chain-tabs" role="group" aria-label="Velg butikk">
               {(["all", ...chains] as const).map((option) => (
                 <button
                   aria-pressed={chain === option}
                   key={option}
                   type="button"
-                  onClick={() => setChain(option)}
+                  onClick={() => {
+                    setStatus("loading");
+                    setChain(option);
+                    setPageCursors([undefined]);
+                  }}
                 >{option === "all" ? "Alle viste kjeder" : chainLabels[option]}</button>
+              ))}
+            </div>
+            <div className="discovery-type-tabs" role="group" aria-label="Velg funntype">
+              {([
+                ["all", "Alle funn"],
+                ["official-offer", "Offisielle tilbud"],
+                ["historical-comparison", "Historiske sammenligninger"],
+              ] as const).map(([option, label]) => (
+                <button
+                  aria-pressed={discoveryType === option}
+                  key={option}
+                  type="button"
+                  onClick={() => {
+                    setStatus("loading");
+                    setDiscoveryType(option);
+                    setPageCursors([undefined]);
+                  }}
+                >{label}</button>
               ))}
             </div>
           </section>
@@ -400,31 +550,66 @@ function DiscoveryWorkspaceClient({
               <div>
                 <h2 id="discovery-results-title">{submittedQuery
                   ? `Treff for «${submittedQuery}»`
+                  : selectedCategoryId
+                    ? `Observert kategori: ${result?.observedCategories.facets.find(({ id }) => id === selectedCategoryId)?.name ?? "valgt kategori"}`
                   : chain === "all" ? "Varekatalog og prisgrunnlag" : `Prisgrunnlag hos ${chainLabels[chain]}`}</h2>
                 <p>{chain === "all"
-                  ? "Offisielle tilbud vises først. Historiske avvik bygger bare på validerte 30-dagers medianer."
+                  ? "Siden følger stabil katalognavn-rekkefølge. Historiske avvik bygger bare på validerte 30-dagers medianer."
                   : `Viser ordinærpriser og offisielle tilbud som faktisk gjelder hos ${chainLabels[chain]}.`}</p>
               </div>
-              {status === "ready" ? <span>{visible.length} varer</span> : null}
+              {effectiveStatus === "ready" ? <span>{visible.length} {visible.length === 1 ? "vare" : "varer"} på denne siden</span> : null}
             </div>
 
-            {status === "loading" ? <div className="discovery-message" role="status">Henter kontrollert katalog og prisgrunnlag …</div> : null}
-            {status === "error" ? (
+            {effectiveStatus === "loading" ? <div className="discovery-message" role="status">Henter kontrollert katalog og prisgrunnlag …</div> : null}
+            {effectiveStatus === "market-required" ? (
+              <div className="discovery-message" role="status">Handlelisten er bevart. Velg et tilgjengelig prisområde før Oppdag henter prisgrunnlaget.</div>
+            ) : null}
+            {effectiveStatus === "error" ? (
               <div className="discovery-message" role="alert">
                 <strong>Kunne ikke hente katalogen akkurat nå.</strong>
-                <button className="secondary-button" type="button" onClick={() => submittedQuery ? submitSearch(submittedQuery) : browseAll()}>Prøv igjen</button>
+                <button className="secondary-button" type="button" onClick={retryCurrentView}>Prøv igjen</button>
               </div>
             ) : null}
-            {status === "ready" && visible.length === 0 ? (
+            {effectiveStatus === "ready" && visible.length === 0 ? (
               <div className="discovery-message">{submittedQuery
-                ? "Ingen godkjente katalogvarer traff filteret. Prøv et annet søk eller vis hele varekatalogen."
+                ? result?.page.hasMore
+                  ? "Ingen godkjente katalogvarer traff filteret i denne avgrensede katalogdelen. Flere deler finnes; velg Neste for å fortsette."
+                  : "Ingen godkjente katalogvarer traff filteret. Prøv et annet søk eller fjern søket."
+                : selectedCategoryId
+                  ? result?.page.hasMore
+                    ? "Ingen godkjente katalogvarer i denne avgrensede delen traff den valgte observerte kategorien. Flere deler finnes; velg Neste."
+                    : "Ingen godkjente katalogvarer er tilgjengelige i den valgte observerte kategorien akkurat nå."
+                : discoveryType === "official-offer"
+                  ? result?.page.hasMore
+                    ? "Ingen verifiserte offisielle tilbud ble funnet i denne avgrensede katalogdelen. Flere deler finnes; velg Neste."
+                    : "Ingen verifiserte offisielle tilbud er tilgjengelige med de valgte filtrene akkurat nå."
+                  : discoveryType === "historical-comparison"
+                    ? result?.page.hasMore
+                      ? "Ingen validerte historiske sammenligninger ble funnet i denne avgrensede katalogdelen. Flere deler finnes; velg Neste."
+                      : "Ingen validerte historiske sammenligninger er tilgjengelige med de valgte filtrene akkurat nå."
                 : chain === "all"
-                  ? "Ingen godkjente katalogvarer er tilgjengelige akkurat nå."
-                  : `Ingen ordinærpriser eller offisielle tilbud er tilgjengelige fra ${chainLabels[chain]} akkurat nå.`}</div>
+                  ? result?.page.hasMore
+                    ? "Denne avgrensede katalogdelen ga ingen visbare varer. Flere deler finnes; velg Neste for å fortsette."
+                    : "Ingen godkjente katalogvarer er tilgjengelige akkurat nå."
+                  : result?.page.hasMore
+                    ? `Ingen ordinærpriser eller offisielle tilbud fra ${chainLabels[chain]} ble funnet i denne avgrensede katalogdelen. Flere deler finnes; velg Neste.`
+                    : `Ingen ordinærpriser eller offisielle tilbud er tilgjengelige fra ${chainLabels[chain]} akkurat nå.`}</div>
             ) : null}
-            {status === "ready" && visible.length > 0 ? (
-              <div className="opportunity-list">
-                {visible.map((entry) => {
+            {effectiveStatus === "ready" && visible.length > 0 ? (
+              <>
+                <DiscoveryImpactBatch
+                  basket={basket}
+                  {...(calculateImpact === undefined ? {} : { calculateImpact })}
+                  createId={createId}
+                  key={JSON.stringify({
+                    basket,
+                    pageGtins: impactProducts.map(({ gtin }) => gtin),
+                  })}
+                  onBasketChange={replaceBasket}
+                  products={impactProducts}
+                />
+                <div className="opportunity-list">
+                {visiblePage.map((entry) => {
                   const prices = [...entry.visiblePrices].sort((left, right) =>
                     left.amountOre - right.amountOre || left.chainId.localeCompare(right.chainId));
                   const best = prices[0];
@@ -481,7 +666,8 @@ function DiscoveryWorkspaceClient({
                               <div>
                                 {beforeTotal !== undefined ? <small>Oppgitt førpris: {formatNok(beforeTotal)}</small> : <small>Tilbudskilden oppgir ikke førpris.</small>}
                                 {savingsOre !== undefined && savingsOre > 0 ? <small>Spar {formatNok(savingsOre)} ({formatPercentFromBasisPoints(savingsBasisPoints)}) basert på tilbudets oppgitte førpris.</small> : null}
-                                <small>Gjelder til {formatDate(offer.applicability.endsAt)} • {sourceLabel(result?.sources ?? [], offer.sourceId)}</small>
+                                <small>Gjelder fra {formatDate(offer.applicability.startsAt)} til {formatDate(offer.applicability.endsAt)} • {offerScope(offer)} • i butikk</small>
+                                <small>Fanget {formatObservedAt(offer.capturedAt)} • {sourceLabel(result?.sources ?? [], offer.sourceId)}</small>
                               </div>
                             </section>
                           );
@@ -496,7 +682,16 @@ function DiscoveryWorkspaceClient({
                                   <span>{chainLabels[price.chainId as Chain]}</span>
                                   <strong>{formatNok(price.amountOre)}</strong>
                                   <small>Ordinærpris • {sourceLabel(result?.sources ?? [], price.sourceId)} • {formatObservedAt(price.observedAt)}</small>
-                                  {comparison ? <small>Historisk median (30 dager): {formatNok(comparison.baselineOre)}. Nå {formatNok(comparison.savingsOre)} lavere ({formatPercentFromBasisPoints(comparison.savingsBasisPoints)}).</small> : null}
+                                  {comparison ? (
+                                    <section
+                                      className="historical-comparison-panel"
+                                      aria-label={`Historisk prissammenligning hos ${chainLabels[price.chainId as Chain]}`}
+                                    >
+                                      <p>Historisk sammenligning • {chainLabels[price.chainId as Chain]}</p>
+                                      <small>Median siste 30 dager: {formatNok(comparison.baselineOre)}.</small>
+                                      <small>Nå {formatNok(comparison.savingsOre)} lavere enn den validerte medianen ({formatPercentFromBasisPoints(comparison.savingsBasisPoints)}). Dette er ikke butikkens førpris.</small>
+                                    </section>
+                                  ) : null}
                                 </li>
                               );
                             })}
@@ -505,6 +700,7 @@ function DiscoveryWorkspaceClient({
 
                         <div className="discovery-evidence-summary">
                           <p>{coverageText(entry)}</p>
+                          <small>{categoryPathText(entry)}</small>
                           <small>Katalog: {entry.catalog.catalogEvidence.source.displayName} • observert {formatObservedAt(entry.catalog.catalogEvidence.observedAt)} • dekning vurdert {formatObservedAt(entry.comparisonScope.evaluatedAt)}</small>
                         </div>
                         <div className="opportunity-action-row">
@@ -522,7 +718,34 @@ function DiscoveryWorkspaceClient({
                     </article>
                   );
                 })}
-              </div>
+                </div>
+              </>
+            ) : null}
+            {effectiveStatus === "ready" && result !== null && (currentPage > 0 || result.page.hasMore) ? (
+              <nav className="discovery-pagination" aria-label="Sider med prisfunn">
+                <button
+                  className="secondary-button"
+                  disabled={currentPage === 0}
+                  onClick={() => {
+                    setStatus("loading");
+                    setPageCursors((values) => values.length <= 1 ? values : values.slice(0, -1));
+                  }}
+                  type="button"
+                >Forrige</button>
+                <span aria-live="polite">
+                  Side {currentPage + 1} • inntil {DISCOVERY_PAGE_SIZE} varer per side • {result.page.scannedCatalogProducts} katalogvarer vurdert i dette serversnittet
+                </span>
+                <button
+                  className="secondary-button"
+                  disabled={!result.page.hasMore || result.page.nextCursor === undefined}
+                  onClick={() => {
+                    if (result.page.nextCursor === undefined) return;
+                    setStatus("loading");
+                    setPageCursors((values) => [...values, result.page.nextCursor]);
+                  }}
+                  type="button"
+                >Neste</button>
+              </nav>
             ) : null}
           </section>
         </div>
@@ -531,7 +754,7 @@ function DiscoveryWorkspaceClient({
           <div className="discovery-basket-card">
             <p>Felles med Planlegg</p>
             <h2 id="discovery-basket-title">Din handleliste</h2>
-            <strong>{quantity} {quantity === 1 ? "vare" : "varer"}</strong>
+            <strong>{needCount} varebehov</strong>
             <span>{basket.needs.length === 0
               ? "Legg til en katalogvare for å starte listen."
               : "Nye varer lagres lokalt som eksakte GTIN-valg og tas med i neste beregning."}</span>
@@ -543,6 +766,7 @@ function DiscoveryWorkspaceClient({
             <p>«Historisk median» krever minst sju observasjonsdager i et validert 30-dagers vindu. Den er ikke butikkens førpris og kalles ikke rabatt.</p>
             <p>Manglende historisk sammenligning betyr ikke at prisen er uendret. Et stort kildegrunnlag kan være utelatt fra Oppdag-snapshotet for å bevare ordinærprisene innenfor størrelsesgrensen.</p>
             <p>Offisielle tilbud viser vilkår og oppgitt førpris bare når det finnes i det godkjente tilbudsgrunnlaget.</p>
+            <p>Kategorier er kildeobservasjoner fra ferske katalograder. De er ikke en påstand om en fullstendig butikktaksonomi, og ukjent kategori holdes forskjellig fra en eksplisitt tom kategori.</p>
             {result ? <small>Lesemodell: kontrollert lokal cache • kilder: {result.sources.map(({ displayName }) => displayName).join(", ") || "ingen priskilder"} • snapshot {formatObservedAt(result.generatedAt)}</small> : null}
           </div>
         </aside>

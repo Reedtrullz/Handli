@@ -36,5 +36,9 @@ must be adopted with the real reporting channel.
 
 The current architecture and open risks are documented in
 [`docs/security/data-flow-threat-model.md`](docs/security/data-flow-threat-model.md).
-Publishing this policy does not mean a penetration test, dependency audit,
-secret scan, or legal/security review has passed.
+Repository checks now reject known high/critical dependency advisories, unknown
+dependency license expressions, and several high-confidence committed-secret
+formats, but that does not prove Git history, container layers, the VPS,
+Cloudflare, provider dashboards, or a release candidate are clean. Publishing
+this policy still does not mean a penetration test or legal/security review has
+passed.

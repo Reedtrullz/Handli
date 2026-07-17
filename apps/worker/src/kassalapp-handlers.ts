@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import {
   type KassalappChainId,
   type KassalappIngestionGateway,
+  type KassalappPhysicalStoreCoverageV1,
+  type PhysicalStoreCoverageReason,
   type KassalappPhysicalStoreSourceRecordV1,
   type KassalappPriceSourceRecordV1,
   type KassalappProductSourceRecordV1,
@@ -10,7 +12,10 @@ import {
   isValidGtin,
 } from "@handleplan/kassalapp";
 
-import type { WorkerJobKind, WorkerRunCounters } from "./contracts";
+import type {
+  KassalappWorkerJobKind,
+  WorkerRunCounters,
+} from "./contracts";
 import {
   WorkerCancelledError,
   type WorkerJobHandler,
@@ -21,7 +26,7 @@ const MAX_INGESTION_BATCH_SIZE = 25;
 const MAX_SOURCE_CALLS_BETWEEN_ACCESS_CHECKS = 25;
 const MAX_TARGETS = 500;
 
-const RUN_TYPE_BY_JOB_KIND: Readonly<Record<WorkerJobKind, string>> = {
+const RUN_TYPE_BY_JOB_KIND: Readonly<Record<KassalappWorkerJobKind, string>> = {
   "benchmark-price-refresh": "benchmark-prices",
   "catalog-refresh": "catalog",
   "historical-observation-collection": "historical-prices",
@@ -43,7 +48,7 @@ export type KassalappSourceAccessState =
 export interface KassalappSourceAccessPolicy {
   getAccessState(
     context: Readonly<{
-      jobKind: WorkerJobKind;
+      jobKind: KassalappWorkerJobKind;
       sourceId: typeof KASSALAPP_SOURCE_ID;
     }>,
     signal: AbortSignal,
@@ -85,6 +90,11 @@ export type KassalappCatalogIngestionOutcome =
       readonly outcomeState: "accepted";
       readonly product: {
         readonly brand?: string;
+        readonly categoryPath?: readonly {
+          readonly depth: number;
+          readonly name: string;
+          readonly sourceCategoryId: string;
+        }[];
         readonly displayName: string;
         readonly packageAmount: number;
         readonly packageUnit: "g" | "ml" | "package" | "piece";
@@ -126,11 +136,24 @@ export type KassalappPhysicalStoreIngestionOutcome =
         readonly longitude?: number;
         readonly name: string;
         readonly observedAt: Date;
+        readonly postalCode?: string;
         readonly status?: "active" | "closed" | "unknown";
       };
       readonly subjectChain: KassalappChainId;
     })
   | (PersistedNonAcceptedOutcome & { readonly recordKind: "physical-store" });
+
+export type KassalappPhysicalStoreCoverage = {
+  readonly chain: KassalappChainId;
+  readonly checkedAt: Date;
+  readonly recordCount: number;
+} & (
+  | { readonly state: "complete"; readonly reason?: never }
+  | {
+      readonly state: "unknown";
+      readonly reason: PhysicalStoreCoverageReason;
+    }
+);
 
 export interface KassalappIngestionRepository<RunHandle = unknown> {
   beginRun(
@@ -156,6 +179,7 @@ export interface KassalappIngestionRepository<RunHandle = unknown> {
   persistPhysicalStoreOutcomes(
     handle: RunHandle,
     outcomes: readonly KassalappPhysicalStoreIngestionOutcome[],
+    coverage: readonly KassalappPhysicalStoreCoverage[],
     signal: AbortSignal,
   ): Promise<unknown>;
   finalizeRun(
@@ -486,6 +510,9 @@ function mapCatalogOutcome(
     subjectEan: record.ean,
     product: {
       ...(record.brand === undefined ? {} : { brand: record.brand }),
+      ...(record.categoryPath === undefined
+        ? {}
+        : { categoryPath: record.categoryPath.map((category) => ({ ...category })) }),
       displayName: record.name,
       packageAmount: record.packageMeasure.amount,
       packageUnit: record.packageMeasure.unit,
@@ -591,6 +618,7 @@ function mapStoreOutcome(
     subjectChain: record.chainId,
     store: {
       ...(record.address === undefined ? {} : { addressLine: record.address }),
+      ...(record.postalCode === undefined ? {} : { postalCode: record.postalCode }),
       latitude: record.latitude,
       longitude: record.longitude,
       name: record.name,
@@ -598,6 +626,32 @@ function mapStoreOutcome(
       status: "active",
     },
   };
+}
+
+function mapStoreCoverage(
+  coverage: KassalappPhysicalStoreCoverageV1,
+  checkedAt: Date,
+  outcomes: readonly KassalappPhysicalStoreIngestionOutcome[],
+): KassalappPhysicalStoreCoverage {
+  const normalizedCoverage = coverage.state === "complete"
+    && outcomes.some((outcome) =>
+      outcome.subjectChain === coverage.chainId && outcome.outcomeState !== "accepted")
+    ? { reason: "INVALID_RECORDS" as const, state: "unknown" as const }
+    : coverage;
+  return normalizedCoverage.state === "complete"
+    ? {
+        chain: coverage.chainId,
+        checkedAt: new Date(checkedAt),
+        recordCount: coverage.recordCount,
+        state: "complete",
+      }
+    : {
+        chain: coverage.chainId,
+        checkedAt: new Date(checkedAt),
+        reason: normalizedCoverage.reason,
+        recordCount: coverage.recordCount,
+        state: "unknown",
+      };
 }
 
 async function persistInBatches<RunHandle, Outcome>(
@@ -617,7 +671,7 @@ async function persistInBatches<RunHandle, Outcome>(
 
 function createExecutor<RunHandle>(
   dependencies: KassalappHandlerDependencies<RunHandle>,
-  jobKind: WorkerJobKind,
+  jobKind: KassalappWorkerJobKind,
   prepare: (
     signal: AbortSignal,
     recheckAccess: (signal: AbortSignal) => Promise<void>,
@@ -740,7 +794,7 @@ function createExecutor<RunHandle>(
 
 export function createKassalappHandlers<RunHandle>(
   dependencies: KassalappHandlerDependencies<RunHandle>,
-): Record<WorkerJobKind, WorkerJobHandler> {
+): Record<KassalappWorkerJobKind, WorkerJobHandler> {
   const { gateway, repository, targetProvider } = dependencies;
 
   const catalogRefresh = createExecutor(dependencies, "catalog-refresh", async (
@@ -883,17 +937,23 @@ export function createKassalappHandlers<RunHandle>(
     const result = await gateway.getSourcePhysicalStores(signal);
     const recordedAt = checkedNow(dependencies.clock);
     const outcomes = result.outcomes.map((outcome) => mapStoreOutcome(outcome, recordedAt));
+    const coverage = result.coverage.map((entry) =>
+      mapStoreCoverage(entry, recordedAt, outcomes));
     const failed = result.coverage.filter((entry) =>
       entry.state === "unknown" && entry.reason === "REQUEST_FAILED").length;
     return {
       failed,
-      persist: async (handle, persistSignal) => await persistInBatches(
-        handle,
-        outcomes,
-        persistSignal,
-        recheckAccess,
-        (run, batch, batchSignal) => repository.persistPhysicalStoreOutcomes(run, batch, batchSignal),
-      ),
+      persist: async (handle, persistSignal) => {
+        throwIfCancelled(persistSignal);
+        await recheckAccess(persistSignal);
+        await repository.persistPhysicalStoreOutcomes(
+          handle,
+          outcomes,
+          coverage,
+          persistSignal,
+        );
+        throwIfCancelled(persistSignal);
+      },
     };
   });
 

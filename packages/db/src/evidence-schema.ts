@@ -565,6 +565,137 @@ export const ingestionRuns = pgTable(
       "ingestion_runs_terminalization_state",
       sql`(${table.status} = 'running' and ${table.completedAt} is null and ${table.terminalizedAt} is null) or (${table.status} <> 'running' and ${table.completedAt} is not null and ${table.terminalizedAt} is not null and ${table.terminalizedAt} >= ${table.createdAt})`,
     ),
+    check(
+      "ingestion_runs_completion_not_after_terminalization",
+      sql`${table.status} = 'running' or ${table.completedAt} <= ${table.terminalizedAt}`,
+    ),
+  ],
+);
+
+export const physicalStoreObservations = pgTable(
+  "physical_store_observations",
+  {
+    id: id("id").primaryKey(),
+    ingestionRunId: foreignId("ingestion_run_id")
+      .notNull()
+      .references(() => ingestionRuns.id),
+    sourceId: varchar("source_id", { length: 64 })
+      .notNull()
+      .references(() => dataSources.id),
+    branchKey: char("branch_key", { length: 64 }).notNull(),
+    externalId: varchar("external_id", { length: 128 }).notNull(),
+    chain: varchar("chain", { length: 32 }).notNull(),
+    name: varchar("name", { length: 240 }).notNull(),
+    latitude: numeric("latitude", { precision: 9, scale: 6 }).notNull(),
+    longitude: numeric("longitude", { precision: 9, scale: 6 }).notNull(),
+    postalCode: varchar("postal_code", { length: 4 }),
+    status: varchar("status", { length: 16 }).notNull(),
+    observedAt: time("observed_at").notNull(),
+    createdAt: time("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    unique("physical_store_observations_run_external_unique").on(
+      table.ingestionRunId,
+      table.sourceId,
+      table.externalId,
+    ),
+    unique("physical_store_observations_run_branch_unique").on(
+      table.ingestionRunId,
+      table.branchKey,
+    ),
+    index("physical_store_observations_run_chain_status_idx").on(
+      table.ingestionRunId,
+      table.chain,
+      table.status,
+      table.branchKey,
+    ),
+    check(
+      "physical_store_observations_branch_key_shape",
+      sql`${table.branchKey} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "physical_store_observations_branch_key_binding",
+      sql`${table.branchKey} = encode(sha256(convert_to(octet_length(${table.sourceId})::text || ':' || ${table.sourceId} || ${table.externalId}, 'UTF8')), 'hex')`,
+    ),
+    check(
+      "physical_store_observations_chain_supported",
+      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra')`,
+    ),
+    check(
+      "physical_store_observations_name_nonempty",
+      sql`length(trim(${table.name})) > 0`,
+    ),
+    check(
+      "physical_store_observations_latitude_range",
+      sql`${table.latitude} between -90 and 90`,
+    ),
+    check(
+      "physical_store_observations_longitude_range",
+      sql`${table.longitude} between -180 and 180`,
+    ),
+    check(
+      "physical_store_observations_status",
+      sql`${table.status} in ('active', 'closed', 'unknown')`,
+    ),
+    check(
+      "physical_store_observations_postal_shape",
+      sql`${table.postalCode} is null or ${table.postalCode} ~ '^[0-9]{4}$'`,
+    ),
+    check(
+      "physical_store_observations_observed_before_creation",
+      sql`${table.observedAt} <= ${table.createdAt}`,
+    ),
+  ],
+);
+
+export const physicalStoreCoverageChecks = pgTable(
+  "physical_store_coverage_checks",
+  {
+    id: id("id").primaryKey(),
+    ingestionRunId: foreignId("ingestion_run_id")
+      .notNull()
+      .references(() => ingestionRuns.id),
+    sourceId: varchar("source_id", { length: 64 })
+      .notNull()
+      .references(() => dataSources.id),
+    chain: varchar("chain", { length: 32 }).notNull(),
+    state: varchar("state", { length: 16 }).notNull(),
+    reason: varchar("reason", { length: 40 }),
+    recordCount: integer("record_count").notNull(),
+    checkedAt: time("checked_at").notNull(),
+    createdAt: time("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    unique("physical_store_coverage_checks_run_chain_unique").on(
+      table.ingestionRunId,
+      table.chain,
+    ),
+    index("physical_store_coverage_checks_run_chain_state_idx").on(
+      table.ingestionRunId,
+      table.chain,
+      table.state,
+      table.checkedAt,
+    ),
+    check(
+      "physical_store_coverage_checks_chain_supported",
+      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra')`,
+    ),
+    check(
+      "physical_store_coverage_checks_state",
+      sql`${table.state} in ('complete', 'unknown')`,
+    ),
+    check(
+      "physical_store_coverage_checks_reason_state",
+      sql`(${table.state} = 'complete' and ${table.reason} is null and ${table.recordCount} > 0) or (${table.state} = 'unknown' and ${table.reason} in ('DUPLICATE_IDENTITY', 'INVALID_RECORDS', 'MISSING_SUPPORTED_CHAIN', 'POSSIBLY_TRUNCATED', 'REQUEST_FAILED'))`,
+    ),
+    check(
+      "physical_store_coverage_checks_record_count_range",
+      sql`${table.recordCount} between 0 and 1000`,
+    ),
+    check(
+      "physical_store_coverage_checks_checked_before_creation",
+      sql`${table.checkedAt} <= ${table.createdAt}`,
+    ),
   ],
 );
 
@@ -636,6 +767,11 @@ export const catalogObservations = pgTable(
     retrievedAt: time("retrieved_at").notNull(),
     sourceUpdatedAt: time("source_updated_at"),
     rawRecordHash: char("raw_record_hash", { length: 64 }).notNull(),
+    categoryPath: jsonb("category_path").$type<Array<{
+      sourceCategoryId: string;
+      depth: number;
+      name: string;
+    }>>(),
     createdAt: time("created_at").notNull().defaultNow(),
   },
   (table) => [
@@ -652,6 +788,13 @@ export const catalogObservations = pgTable(
       table.canonicalProductId,
       table.retrievedAt,
       table.id,
+    ),
+    index("catalog_observations_category_path_gin_idx")
+      .using("gin", table.categoryPath.op("jsonb_path_ops"))
+      .where(sql`${table.categoryPath} is not null`),
+    check(
+      "catalog_observations_category_path_shape",
+      sql`${table.categoryPath} is null or case when jsonb_typeof(${table.categoryPath}) = 'array' then jsonb_array_length(${table.categoryPath}) <= 100 else false end`,
     ),
     check(
       "catalog_observations_gtin_shape",
@@ -978,6 +1121,10 @@ export const approvedOffers = pgTable(
       "approved_offers_status",
       sql`${table.status} in ('approved', 'published', 'expired', 'revoked')`,
     ),
+    check(
+      "approved_offers_published_candidate_binding",
+      sql`${table.status} <> 'published' or ${table.candidateId} is not null`,
+    ),
     check("approved_offers_version_positive", sql`${table.version} > 0`),
   ],
 );
@@ -994,6 +1141,7 @@ export const offerTargets = pgTable(
     ),
     matchMethod: varchar("match_method", { length: 24 }).notNull(),
     matchConfidence: smallint("match_confidence").notNull(),
+    createdAt: time("created_at").notNull().defaultNow(),
   },
   (table) => [
     check(
@@ -1020,6 +1168,7 @@ export const offerConditions = pgTable(
       .references(() => approvedOffers.id),
     conditionType: varchar("condition_type", { length: 32 }).notNull(),
     conditionValue: jsonb("condition_value").$type<Record<string, unknown>>().notNull(),
+    createdAt: time("created_at").notNull().defaultNow(),
   },
   (table) => [
     check(
@@ -1040,6 +1189,7 @@ export const reviewActions = pgTable(
     actorId: varchar("actor_id", { length: 160 }).notNull(),
     action: varchar("action", { length: 24 }).notNull(),
     expectedVersion: integer("expected_version").notNull(),
+    decisionBoundaryVersion: smallint("decision_boundary_version").default(1),
     previousValues: jsonb("previous_values").$type<Record<string, unknown>>(),
     newValues: jsonb("new_values").$type<Record<string, unknown>>(),
     reason: text("reason").notNull(),
@@ -1064,6 +1214,10 @@ export const reviewActions = pgTable(
       "review_actions_expected_version_nonnegative",
       sql`${table.expectedVersion} >= 0`,
     ),
+    check(
+      "review_actions_decision_boundary_version",
+      sql`${table.decisionBoundaryVersion} is null or ${table.decisionBoundaryVersion} = 1`,
+    ),
   ],
 );
 
@@ -1074,6 +1228,7 @@ export const sourceHealthSnapshots = pgTable(
     sourceId: varchar("source_id", { length: 64 })
       .notNull()
       .references(() => dataSources.id),
+    workerJobId: varchar("worker_job_id", { length: 200 }),
     geographicScopeId: foreignId("geographic_scope_id").references(
       () => geographicScopes.id,
     ),
@@ -1092,6 +1247,14 @@ export const sourceHealthSnapshots = pgTable(
       table.sourceId,
       table.recordedAt,
     ),
+    uniqueIndex("source_health_snapshots_worker_job_uidx")
+      .on(table.workerJobId)
+      .where(sql`${table.workerJobId} is not null`),
+    foreignKey({
+      columns: [table.workerJobId],
+      foreignColumns: [workerJobResults.jobId],
+      name: "source_health_snapshots_worker_job_fk",
+    }),
     check(
       "source_health_snapshots_status",
       sql`${table.status} in ('healthy', 'degraded', 'failed', 'disabled')`,
@@ -1103,6 +1266,14 @@ export const sourceHealthSnapshots = pgTable(
     check(
       "source_health_snapshots_review_age_nonnegative",
       sql`${table.oldestReviewAgeSeconds} is null or ${table.oldestReviewAgeSeconds} >= 0`,
+    ),
+    check(
+      "source_health_snapshots_worker_payload_allowlist",
+      sql`${table.workerJobId} is null or (${table.details} = '{}'::jsonb and ${table.reviewQueueCount} = 0 and ${table.oldestReviewAgeSeconds} is null)`,
+    ),
+    check(
+      "source_health_snapshots_success_clocks_not_future",
+      sql`${table.workerJobId} is null or ((${table.lastDiscoverySuccessAt} is null or ${table.lastDiscoverySuccessAt} <= ${table.recordedAt}) and (${table.lastCaptureSuccessAt} is null or ${table.lastCaptureSuccessAt} <= ${table.recordedAt}) and (${table.lastPublishSuccessAt} is null or ${table.lastPublishSuccessAt} <= ${table.recordedAt}) and (${table.newestEligibleEvidenceAt} is null or ${table.newestEligibleEvidenceAt} <= ${table.recordedAt}))`,
     ),
   ],
 );
@@ -1153,7 +1324,7 @@ export const workerJobResults = pgTable(
     ),
     check(
       "worker_job_results_job_kind",
-      sql`${table.jobKind} in ('catalog-refresh', 'benchmark-price-refresh', 'physical-store-sync', 'historical-observation-collection')`,
+      sql`${table.jobKind} in ('catalog-refresh', 'benchmark-price-refresh', 'physical-store-sync', 'historical-observation-collection', 'official-offer-discovery', 'official-offer-fetch', 'official-offer-ingestion', 'official-offer-lifecycle-reconcile')`,
     ),
     check(
       "worker_job_results_status",
@@ -1256,6 +1427,26 @@ export const providerRequestBudgetEvents = pgTable(
     check(
       "provider_request_budget_events_provider_key_shape",
       sql`${table.providerKey} ~ '^[a-z][a-z0-9_-]{0,63}$'`,
+    ),
+  ],
+);
+
+export const publicApiRequestBudgetEvents = pgTable(
+  "public_api_request_budget_events",
+  {
+    routeKey: varchar("route_key", { length: 32 }).notNull(),
+    claimedAt: timestamp("claimed_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .default(sql`clock_timestamp()`),
+  },
+  (table) => [
+    index("public_api_request_budget_events_route_time_idx").on(
+      table.routeKey,
+      table.claimedAt,
+    ),
+    check(
+      "public_api_request_budget_events_route_key_allowed",
+      sql`${table.routeKey} in ('discovery-impact', 'discovery-search', 'locations-current', 'locations-search', 'plan-candidates', 'plans', 'plans-travel', 'products-search')`,
     ),
   ],
 );

@@ -4,6 +4,7 @@ import {
   hasUniqueStrings,
   internalGeocodedCandidateSchema,
   internalTravelBranchSchema,
+  marketContextV1Schema,
   nonEmptyStringSchema,
   sourceIdSchema,
   travelChainIdSchema,
@@ -11,6 +12,7 @@ import {
   travelModeSchema,
   type InternalGeocodedCandidate,
   type InternalTravelBranch,
+  type MarketContextV1,
   type RouteMatrix,
   type TravelChainId,
   type TravelCoordinate,
@@ -52,9 +54,19 @@ export const branchDirectorySnapshotSchema = z
     complete: z.boolean(),
     contractVersion: contractVersionSchema,
     eligibleChainIds: z.array(travelChainIdSchema).min(1).max(3),
+    marketContext: marketContextV1Schema,
+    regionEvidence: z.object({
+      contractVersion: z.literal(1),
+      countryCode: z.literal("NO"),
+      directoryEvidenceReference: nonEmptyStringSchema,
+      directoryVersionId: nonEmptyStringSchema,
+      regionEvidenceReference: nonEmptyStringSchema,
+      regionId: nonEmptyStringSchema,
+      reviewedAt: canonicalTimestampSchema,
+    }).strict().optional(),
   })
   .strict()
-  .superRefine(({ branches, eligibleChainIds }, context) => {
+  .superRefine(({ branches, eligibleChainIds, marketContext, regionEvidence }, context) => {
     if (!hasUniqueStrings(eligibleChainIds)) {
       context.addIssue({
         code: "custom",
@@ -78,6 +90,27 @@ export const branchDirectorySnapshotSchema = z
         });
       }
     });
+    if (marketContext.kind === "national" && regionEvidence !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "National branch snapshots cannot claim regional evidence",
+        path: ["regionEvidence"],
+      });
+    }
+    if (
+      marketContext.kind === "launch-region"
+      && (
+        regionEvidence === undefined
+        || regionEvidence.countryCode !== marketContext.countryCode
+        || regionEvidence.regionId !== marketContext.regionId
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Launch-region branch snapshots require matching directory evidence",
+        path: ["regionEvidence"],
+      });
+    }
   });
 
 export type BranchDirectorySnapshot = z.infer<typeof branchDirectorySnapshotSchema>;
@@ -85,6 +118,7 @@ export type BranchDirectorySnapshot = z.infer<typeof branchDirectorySnapshotSche
 export interface BranchDirectoryQuery {
   eligibleChainIds: readonly TravelChainId[];
   evaluatedAt: Date;
+  marketContext: MarketContextV1;
 }
 
 export interface BranchDirectory {

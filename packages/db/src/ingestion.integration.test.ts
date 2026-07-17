@@ -203,6 +203,10 @@ describe.skipIf(!runDatabaseIntegration).sequential(
           outcomeState: "accepted",
           product: {
             brand: "Testbrand",
+            categoryPath: [
+              { depth: 1, name: "Meieri", sourceCategoryId: "10" },
+              { depth: 2, name: "Melk", sourceCategoryId: "20" },
+            ],
             displayName: "Exact milk",
             retrievedAt: now,
             sourceUpdatedAt: new Date("2026-07-16T11:55:00.000Z"),
@@ -265,7 +269,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       expect(new Set(products.map(({ product_id: productId }) => productId)).size).toBe(2);
 
       const catalogEvidence = await connection.sql`
-        select source_record_id, display_name, retrieved_at, source_updated_at
+        select source_record_id, category_path, display_name, retrieved_at, source_updated_at
         from catalog_observations
         where ingestion_run_id = ${handle.id}
         order by source_record_id
@@ -281,15 +285,24 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         new Date("2026-07-16T11:55:00.000Z"),
       );
       expect(catalogEvidence[1]!.source_updated_at).toBeNull();
+      expect(catalogEvidence[0]!.category_path).toEqual([
+        { depth: 1, name: "Meieri", sourceCategoryId: "10" },
+        { depth: 2, name: "Melk", sourceCategoryId: "20" },
+      ]);
+      expect(catalogEvidence[1]!.category_path).toBeNull();
 
       const sourceLinks = await connection.sql`
-        select external_id, canonical_product_id
+        select external_id, canonical_product_id, normalized_fields->'categoryPath' as category_path
         from source_products
         where source_id = 'kassalapp'
           and external_id in (${`catalog-a-${nonce}`}, ${`catalog-b-${nonce}`})
         order by external_id
       `;
       expect(sourceLinks).toEqual([{
+        category_path: [
+          { depth: 1, name: "Meieri", sourceCategoryId: "10" },
+          { depth: 2, name: "Melk", sourceCategoryId: "20" },
+        ],
         canonical_product_id: products.find(({ value }) => value === sharedEan)!.product_id,
         external_id: `catalog-a-${nonce}`,
       }]);
@@ -851,7 +864,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
     });
 
     it("audits coordinate-less stores as unknown and persists only complete locations", async () => {
-      const handle = await beginRun("stores", "stores");
+      const handle = await beginRun("stores", "physical-stores");
       const missingId = `store-missing-${nonce}`;
       const completeId = `store-complete-${nonce}`;
       const outcomes: PhysicalStoreIngestionOutcome[] = [
@@ -881,7 +894,13 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         },
       ];
 
-      await expect(repository.persistPhysicalStoreOutcomes(handle, outcomes)).resolves.toEqual({
+      await expect(repository.persistPhysicalStoreOutcomes(handle, outcomes, [{
+        chain: "extra",
+        checkedAt: now,
+        reason: "INVALID_RECORDS",
+        recordCount: 2,
+        state: "unknown",
+      }])).resolves.toEqual({
         inserted: 2,
         received: 2,
       });
@@ -909,12 +928,58 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         name: "Complete",
       })]);
       expectSameInstant(stores[0]!.observed_at, now);
+      const [branchEvidence] = await connection.sql`
+        select
+          branch_key,
+          external_id,
+          chain,
+          name,
+          latitude,
+          longitude,
+          status,
+          created_at
+        from physical_store_observations
+        where ingestion_run_id = ${handle.id}
+      `;
+      expect(branchEvidence).toMatchObject({
+        chain: "extra",
+        external_id: completeId,
+        name: "Complete",
+        status: "active",
+      });
+      expect(branchEvidence?.branch_key).toMatch(/^[0-9a-f]{64}$/);
+      expect(new Date(String(branchEvidence?.created_at)).getTime()).toBeGreaterThan(
+        now.getTime(),
+      );
+      const [branchCoverage] = await connection.sql`
+        select chain, state, reason, record_count, created_at
+        from physical_store_coverage_checks
+        where ingestion_run_id = ${handle.id}
+      `;
+      expect(branchCoverage).toMatchObject({
+        chain: "extra",
+        reason: "INVALID_RECORDS",
+        record_count: 2,
+        state: "unknown",
+      });
+      expect(new Date(String(branchCoverage?.created_at)).getTime()).toBeGreaterThan(
+        now.getTime(),
+      );
+      await expect(connection.sql`
+        update physical_store_observations
+        set name = 'Rewritten branch evidence'
+        where ingestion_run_id = ${handle.id}
+      `).rejects.toThrow(/append-only/i);
+      await expect(connection.sql`
+        delete from physical_store_coverage_checks
+        where ingestion_run_id = ${handle.id}
+      `).rejects.toThrow(/append-only/i);
 
       const originalStore = outcomes[1]!;
       if (originalStore.outcomeState !== "accepted") {
         throw new Error("Expected accepted store integration fixture");
       }
-      const olderHandle = await beginRun("stores-older", "stores");
+      const olderHandle = await beginRun("stores-older", "physical-stores");
       await repository.persistPhysicalStoreOutcomes(olderHandle, [
         {
           ...originalStore,
@@ -924,7 +989,12 @@ describe.skipIf(!runDatabaseIntegration).sequential(
             observedAt: new Date("2026-07-15T12:00:00.000Z"),
           },
         },
-      ]);
+      ], [{
+        chain: "extra",
+        checkedAt: now,
+        recordCount: 1,
+        state: "complete",
+      }]);
       const [storeAfterOlderReplay] = await connection.sql`
         select name, observed_at
         from physical_stores
@@ -932,6 +1002,43 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       `;
       expect(storeAfterOlderReplay).toMatchObject({ name: "Complete" });
       expectSameInstant(storeAfterOlderReplay!.observed_at, now);
+    });
+
+    it("rolls outcomes and branch rows back when complete coverage is inconsistent", async () => {
+      const handle = await beginRun("stores-atomic-rollback", "physical-stores");
+      const externalId = `store-atomic-${nonce}`;
+
+      await expect(repository.persistPhysicalStoreOutcomes(handle, [{
+        outcomeState: "accepted",
+        recordKind: "physical-store",
+        recordedAt: now,
+        sourceRecordId: externalId,
+        store: {
+          name: "Must roll back",
+          observedAt: now,
+        },
+        subjectChain: "extra",
+      }], [{
+        chain: "extra",
+        checkedAt: now,
+        recordCount: 1,
+        state: "complete",
+      }])).rejects.toThrow(/every counted routing record/i);
+
+      const [counts] = await connection.sql`
+        select
+          (select count(*)::integer from source_record_outcomes
+            where ingestion_run_id = ${handle.id}) as outcomes,
+          (select count(*)::integer from physical_store_observations
+            where ingestion_run_id = ${handle.id}) as observations,
+          (select count(*)::integer from physical_store_coverage_checks
+            where ingestion_run_id = ${handle.id}) as coverage
+      `;
+      expect(counts).toEqual({ coverage: 0, observations: 0, outcomes: 0 });
+      await expect(repository.finalizeRun(handle, {
+        completedAt: new Date("2026-07-16T12:05:00.000Z"),
+        status: "completed",
+      })).rejects.toThrow(/requires coverage evidence/i);
     });
   },
 );

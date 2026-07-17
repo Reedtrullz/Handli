@@ -11,20 +11,53 @@ import {
   DiscoveryUnavailableError,
   type DiscoveryServiceContract,
 } from "../../../../lib/server/discovery-service";
+import { InFlightOperationCoalescer } from "../../../../lib/server/in-flight-operation-coalescer";
+import { PublicApiRuntimeControls } from "../../../../lib/server/public-api-runtime-controls";
 import { createDiscoverySearchHandler } from "./route";
 
 const GENERATED_AT = "2026-07-16T12:00:00.000Z";
+const MARKET = { contractVersion: 1, countryCode: "NO", kind: "national" } as const;
 const emptyResponse: PublicDiscoveryResponse = {
   contractVersion: 1,
   generatedAt: GENERATED_AT,
+  marketContext: MARKET,
+  observedCategories: {
+    completeness: "partial",
+    facets: [],
+    hasMore: false,
+    kind: "observed-category-directory",
+  },
+  page: {
+    hasMore: false,
+    kind: "bounded-catalog-slice",
+    pageSize: 8,
+    scannedCatalogProducts: 0,
+  },
   priceDataSource: "cache",
   products: [],
+  selection: { chain: "all", resultType: "all" },
   sources: [],
 };
 
+function emptyResponseFor(
+  request: Parameters<DiscoveryServiceContract["discover"]>[0],
+): PublicDiscoveryResponse {
+  return {
+    ...emptyResponse,
+    marketContext: request.marketContext,
+    page: { ...emptyResponse.page, pageSize: request.pageSize },
+    selection: {
+      ...(request.categoryId === undefined ? {} : { categoryId: request.categoryId }),
+      chain: request.chain,
+      ...(request.query === undefined ? {} : { query: request.query }),
+      resultType: request.resultType,
+    },
+  };
+}
+
 function request(query: string, signal?: AbortSignal): Request {
   return new Request(
-    `https://handleplan.no/api/discovery/search?q=${encodeURIComponent(query)}`,
+    `https://handleplan.no/api/discovery/search?market=national&q=${encodeURIComponent(query)}`,
     { signal },
   );
 }
@@ -32,6 +65,17 @@ function request(query: string, signal?: AbortSignal): Request {
 function service(overrides: Partial<DiscoveryServiceContract> = {}): DiscoveryServiceContract {
   return {
     browse: async () => emptyResponse,
+    browseCategory: async () => emptyResponse,
+    discover: async (request, signal) => {
+      const result = request.query !== undefined && overrides.search !== undefined
+        ? await overrides.search(request.query, request.marketContext, signal)
+        : request.categoryId !== undefined && overrides.browseCategory !== undefined
+          ? await overrides.browseCategory(request.categoryId, request.marketContext, signal)
+          : overrides.browse !== undefined
+            ? await overrides.browse(request.marketContext, signal)
+            : emptyResponse;
+      return result === emptyResponse ? emptyResponseFor(request) : result;
+    },
     search: async () => emptyResponse,
     ...overrides,
   };
@@ -66,6 +110,7 @@ function oversizedResponse(): PublicDiscoveryResponse {
         packageMeasure: { amount: 1_000, unit: "ml" as const },
         unitsPerPack: 1,
       },
+      categoryPath: null,
       comparisonScope: {
         completeness: "partial" as const,
         contractVersion: 1 as const,
@@ -107,24 +152,87 @@ function oversizedResponse(): PublicDiscoveryResponse {
   return publicDiscoveryResponseSchema.parse({
     contractVersion: 1,
     generatedAt: GENERATED_AT,
+    marketContext: MARKET,
+    observedCategories: {
+      completeness: "partial",
+      facets: [],
+      hasMore: false,
+      kind: "observed-category-directory",
+    },
+    page: {
+      hasMore: false,
+      kind: "bounded-catalog-slice",
+      pageSize: 8,
+      scannedCatalogProducts: 4,
+    },
     priceDataSource: "cache",
     products,
+    selection: { chain: "all", resultType: "all" },
     sources: [source],
   });
 }
 
 describe("GET /api/discovery/search", () => {
+  it("enforces global admission before discovery and returns bounded Retry-After", async () => {
+    const search = vi.fn<DiscoveryServiceContract["search"]>();
+    const runtimeControls = new PublicApiRuntimeControls(
+      { claim: async () => ({ admitted: false, retryAfterSeconds: 11 }) },
+      new InFlightOperationCoalescer(),
+    );
+    const getService = vi.fn(() => service({ search }));
+    const response = await createDiscoverySearchHandler(
+      getService,
+      { runtimeControls },
+    )(request("melk"));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("11");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    await expect(response.json()).resolves.toEqual({ code: "RATE_LIMITED" });
+    expect(getService).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on admission storage outage without reflecting backend detail", async () => {
+    const runtimeControls = new PublicApiRuntimeControls(
+      { claim: async () => { throw new Error("private database URL sentinel"); } },
+      new InFlightOperationCoalescer(),
+    );
+    const response = await createDiscoverySearchHandler(
+      () => service(),
+      { runtimeControls },
+    )(request("melk"));
+    expect(response.status).toBe(503);
+    expect(await response.text()).toBe('{"code":"REQUEST_BUDGET_UNAVAILABLE"}');
+  });
+
   it("browses when no query is supplied and forwards cancellation", async () => {
     const browse = vi.fn<DiscoveryServiceContract["browse"]>().mockResolvedValue(emptyResponse);
-    const incoming = new Request("https://handleplan.no/api/discovery/search");
+    const incoming = new Request("https://handleplan.no/api/discovery/search?market=national");
 
     const response = await createDiscoverySearchHandler(() => service({ browse }))(incoming);
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("application/json; charset=utf-8");
     expect(response.headers.get("cache-control")).toBe("private, no-store");
-    expect(browse).toHaveBeenCalledWith(expect.any(AbortSignal));
+    expect(browse).toHaveBeenCalledWith(MARKET, expect.any(AbortSignal));
     await expect(response.json()).resolves.toEqual(emptyResponse);
+  });
+
+  it("requires one explicit allowlisted market before resolving discovery", async () => {
+    const getService = vi.fn(() => service());
+    const handler = createDiscoverySearchHandler(getService);
+
+    const missing = await handler(new Request("https://handleplan.no/api/discovery/search"));
+    expect(missing.status).toBe(400);
+    await expect(missing.json()).resolves.toEqual({ code: "MARKET_CONTEXT_REQUIRED" });
+
+    const stale = await handler(new Request(
+      "https://handleplan.no/api/discovery/search?market=no-9999-not-launched",
+    ));
+    expect(stale.status).toBe(422);
+    await expect(stale.json()).resolves.toEqual({ code: "MARKET_UNAVAILABLE" });
+    expect(getService).not.toHaveBeenCalled();
   });
 
   it("uses persisted search and accepts the full bounded query length", async () => {
@@ -135,7 +243,27 @@ describe("GET /api/discovery/search", () => {
     const response = await createDiscoverySearchHandler(() => service({ search }))(incoming);
 
     expect(response.status).toBe(200);
-    expect(search).toHaveBeenCalledWith(query, expect.any(AbortSignal));
+    expect(search).toHaveBeenCalledWith(query, MARKET, expect.any(AbortSignal));
+  });
+
+  it("browses one opaque observed category and rejects combining it with text", async () => {
+    const browseCategory = vi.fn<DiscoveryServiceContract["browseCategory"]>()
+      .mockResolvedValue(emptyResponse);
+    const categoryId = `category:${"a".repeat(64)}`;
+    const handler = createDiscoverySearchHandler(() => service({ browseCategory }));
+
+    const response = await handler(new Request(
+      `https://handleplan.no/api/discovery/search?market=national&category=${categoryId}`,
+    ));
+    expect(response.status).toBe(200);
+    expect(browseCategory).toHaveBeenCalledWith(categoryId, MARKET, expect.any(AbortSignal));
+
+    expect((await handler(new Request(
+      `https://handleplan.no/api/discovery/search?market=national&q=melk&category=${categoryId}`,
+    ))).status).toBe(400);
+    expect((await handler(new Request(
+      "https://handleplan.no/api/discovery/search?market=national&category=category%3Araw-source-id",
+    ))).status).toBe(400);
   });
 
   it("bounds service-backed browsing and distinguishes client cancellation", async () => {
@@ -143,11 +271,11 @@ describe("GET /api/discovery/search", () => {
     try {
       let deadlineSignal: AbortSignal | undefined;
       const timeoutPending = createDiscoverySearchHandler(() => service({
-        browse: async (signal) => {
+        browse: async (_market, signal) => {
           deadlineSignal = signal;
           return new Promise<never>(() => undefined);
         },
-      }), { timeoutMs: 25 })(new Request("https://handleplan.no/api/discovery/search"));
+      }), { timeoutMs: 25 })(new Request("https://handleplan.no/api/discovery/search?market=national"));
 
       await vi.advanceTimersByTimeAsync(25);
       const timeoutResponse = await timeoutPending;
@@ -159,7 +287,7 @@ describe("GET /api/discovery/search", () => {
       const client = new AbortController();
       let clientSignal: AbortSignal | undefined;
       const cancelledPending = createDiscoverySearchHandler(() => service({
-        search: async (_query, signal) => {
+        search: async (_query, _market, signal) => {
           clientSignal = signal;
           return new Promise<never>(() => undefined);
         },
@@ -184,8 +312,8 @@ describe("GET /api/discovery/search", () => {
 
     expect((await handler(request("m"))).status).toBe(400);
     expect((await handler(request("m".repeat(121)))).status).toBe(400);
-    expect((await handler(new Request("https://handleplan.no/api/discovery/search?q=melk&q=ost"))).status).toBe(400);
-    expect((await handler(new Request("https://handleplan.no/api/discovery/search?q=melk&debug=1"))).status).toBe(400);
+    expect((await handler(new Request("https://handleplan.no/api/discovery/search?market=national&q=melk&q=ost"))).status).toBe(400);
+    expect((await handler(new Request("https://handleplan.no/api/discovery/search?market=national&q=melk&debug=1"))).status).toBe(400);
     expect(browse).not.toHaveBeenCalled();
     expect(search).not.toHaveBeenCalled();
   });
@@ -194,7 +322,7 @@ describe("GET /api/discovery/search", () => {
     const malformed = { ...emptyResponse, priceDataSource: "upstream" } as unknown as PublicDiscoveryResponse;
     const response = await createDiscoverySearchHandler(() => service({
       browse: async () => malformed,
-    }))(new Request("https://handleplan.no/api/discovery/search"));
+    }))(new Request("https://handleplan.no/api/discovery/search?market=national"));
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({ code: "PRICE_DATA_UNAVAILABLE" });
@@ -206,7 +334,7 @@ describe("GET /api/discovery/search", () => {
 
     const response = await createDiscoverySearchHandler(() => service({
       browse: async () => oversized,
-    }))(new Request("https://handleplan.no/api/discovery/search"));
+    }))(new Request("https://handleplan.no/api/discovery/search?market=national"));
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({ code: "PRICE_DATA_UNAVAILABLE" });

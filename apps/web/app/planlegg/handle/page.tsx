@@ -1,12 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  formatNok,
+  type TripPurchaseTermsV2,
+} from "@handleplan/domain";
 
 import {
   createBrowserTripSnapshotRepository,
   type ActiveTripV1,
   type TripSnapshotRepository,
 } from "../../../lib/trip-snapshot-repository";
+import { membershipOfferConditionCopy } from "../../../lib/membership-presentation";
 
 import styles from "./handle-mode.module.css";
 
@@ -27,6 +32,133 @@ function itemDetail(active: ActiveTripV1, needId: string): string {
   if (assignment === undefined) return "";
   const packages = assignment.fulfilment.packageCount;
   return `${packages} ${packages === 1 ? "pakke" : "pakker"}`;
+}
+
+function formatMeasure(measure: TripPurchaseTermsV2["requested"]): string {
+  if (measure.unit === "package") {
+    return `${measure.amount} ${measure.amount === 1 ? "pakke" : "pakker"}`;
+  }
+  if (measure.unit === "piece") {
+    return `${measure.amount.toLocaleString("nb-NO")} stk`;
+  }
+  return `${measure.amount.toLocaleString("nb-NO")} ${measure.unit}`;
+}
+
+function formatEvidenceTime(timestamp: string): string {
+  return new Date(timestamp).toLocaleString("nb-NO", {
+    dateStyle: "short",
+    timeStyle: "short",
+  });
+}
+
+function offerPricing(purchase: TripPurchaseTermsV2): string | undefined {
+  const pricing = purchase.appliedOffer?.pricing;
+  if (pricing === undefined) return undefined;
+  return pricing.kind === "unit"
+    ? `${formatNok(pricing.unitPriceOre)} per pakke`
+    : `${pricing.quantity} for ${formatNok(pricing.totalOre)}`;
+}
+
+function offerConditions(purchase: TripPurchaseTermsV2): string | undefined {
+  const offer = purchase.appliedOffer;
+  if (offer === undefined) return undefined;
+  return [...new Set(offer.conditions.map((condition) => {
+    if (condition.kind === "public") return "offentlig tilbud";
+    if (condition.kind === "minimum-quantity") return `minst ${condition.quantity} pakker`;
+    return membershipOfferConditionCopy(offer.chainId);
+  }))].join(" · ");
+}
+
+function offerScope(purchase: TripPurchaseTermsV2): string | undefined {
+  const scope = purchase.appliedOffer?.applicability.geographicScope;
+  if (scope === undefined) return undefined;
+  switch (scope.kind) {
+    case "national":
+      return `nasjonalt (${scope.countryCode})`;
+    case "regions":
+      return `regioner: ${scope.regionCodes.join(", ")}`;
+    case "stores":
+      return `butikker: ${scope.storeIds.join(", ")}`;
+    case "unknown":
+      return `ukjent område: ${scope.reason}`;
+  }
+}
+
+function PurchaseDetail({ active, needId }: { active: ActiveTripV1; needId: string }) {
+  if (active.snapshot.contractVersion !== 2) {
+    return <small>{itemDetail(active, needId)}</small>;
+  }
+  const purchase = active.snapshot.checklistItems.find((item) => item.needId === needId)?.purchase;
+  if (purchase === undefined) return null;
+
+  const offer = purchase.appliedOffer;
+  const pricing = offerPricing(purchase);
+  const conditions = offerConditions(purchase);
+  const channels = offer?.applicability.channels.map((channel) =>
+    channel === "in-store" ? "i butikk" : "på nett").join(" og ");
+  return (
+    <span className={styles.purchaseDetails}>
+      <small>
+        Behov {formatMeasure(purchase.requested)} · kjøp {formatMeasure(purchase.purchased)}
+        {" "}({purchase.packageCount} {purchase.packageCount === 1 ? "pakke" : "pakker"} à {formatMeasure(purchase.packageMeasure)})
+        {" "}· {formatMeasure(purchase.surplus)} til overs
+      </small>
+      <small>
+        Forventet {formatNok(purchase.checkoutTotalOre)} · ordinært {formatNok(purchase.ordinaryTotalOre)}
+        {purchase.savedOre > 0 ? ` · ${formatNok(purchase.savedOre)} spart` : " · ingen tilbudssparing"}
+      </small>
+      <small>
+        Ordinær pris observert {formatEvidenceTime(purchase.observedAt)} fra {purchase.ordinaryPrice.sourceId}
+        {purchase.freshness === "eligible" ? " · kvalifisert ved planlegging" : ""}
+      </small>
+      {offer !== undefined && (
+        <>
+          <small>Tilbud: {pricing} · {conditions}</small>
+          <small>
+            Gjelder {formatEvidenceTime(offer.applicability.startsAt)}–{formatEvidenceTime(offer.applicability.endsAt)}
+            {" "}· {channels} · {offerScope(purchase)}
+          </small>
+          <small>
+            Tilbud observert {formatEvidenceTime(offer.capturedAt)} fra {offer.sourceId}
+            {offer.beforePriceOre === undefined
+              ? ""
+              : ` · oppgitt førpris ${formatNok(offer.beforePriceOre)}`}
+          </small>
+        </>
+      )}
+    </span>
+  );
+}
+
+function ReviewedSelectionDetail({
+  active,
+  needId,
+}: {
+  active: ActiveTripV1;
+  needId: string;
+}) {
+  if (active.snapshot.contractVersion !== 2) return null;
+  const reviewed = active.snapshot.reviewedFamilyEvidence;
+  if (reviewed === undefined) return null;
+  const match = reviewed.needMatches.find((candidate) => candidate.needId === needId);
+  if (match?.kind !== "reviewed-family") return null;
+  const assignment = active.snapshot.plan.assignments.find((candidate) =>
+    candidate.needId === needId);
+  const membership = assignment === undefined
+    ? undefined
+    : reviewed.memberships.find((candidate) =>
+        candidate.familyId === match.familyId
+        && candidate.canonicalProductId === assignment.canonicalProductId);
+  if (membership === undefined) return null;
+  const method = membership.method === "human-review"
+    ? "menneskelig kontroll uten lagret identitet"
+    : `kontrollregel ${membership.ruleVersion}`;
+  return (
+    <small>
+      Godkjent varebytte: {match.family.labelNo} · {method}
+      {" "}· taksonomi {reviewed.taxonomy.versionId}
+    </small>
+  );
 }
 
 export function HandleMode({ repository, now = () => new Date() }: HandleModeProps) {
@@ -166,10 +298,16 @@ export function HandleMode({ repository, now = () => new Date() }: HandleModePro
             <>
               <section className={styles.progressCard} aria-labelledby="trip-progress-title">
                 <div>
-                  <h2 id="trip-progress-title">{done} av {total} varer</h2>
+                  <h2 id="trip-progress-title">
+                    {done} av {total} {total === 1 ? "vare" : "varer"}
+                  </h2>
                   <p>Avkrysning lagres lokalt på denne enheten.</p>
                 </div>
-                <progress aria-label={`${done} av ${total} varer fullført`} max={total} value={done} />
+                <progress
+                  aria-label={`${done} av ${total} ${total === 1 ? "vare" : "varer"} fullført`}
+                  max={total}
+                  value={done}
+                />
               </section>
 
               {stale && (
@@ -181,10 +319,17 @@ export function HandleMode({ repository, now = () => new Date() }: HandleModePro
 
               {active.snapshot.navigation.kind === "route" && (
                 <p className={styles.routeSummary}>
-                  Beregnet reise: {Math.ceil(active.snapshot.navigation.aggregate.durationSeconds / 60)} min,
+                  Estimert reise{active.snapshot.navigation.aggregate.mode === undefined
+                    ? ""
+                    : active.snapshot.navigation.aggregate.mode === "car"
+                      ? " med bil"
+                      : " med sykkel"}: {Math.ceil(active.snapshot.navigation.aggregate.durationSeconds / 60)} min,
                   {" "}{(active.snapshot.navigation.aggregate.distanceMeters / 1_000).toLocaleString("nb-NO", {
                     maximumFractionDigits: 1,
                   })} km. Startstedet er ikke lagret.
+                  {active.snapshot.navigation.aggregate.sourceId === "valhalla-openstreetmap-self-hosted" ? (
+                    <> Rutedata: <a href="https://www.openstreetmap.org/copyright">© OpenStreetMap-bidragsytere</a>.</>
+                  ) : null}
                 </p>
               )}
 
@@ -209,7 +354,8 @@ export function HandleMode({ repository, now = () => new Date() }: HandleModePro
                               />
                               <span>
                                 <strong>{item.label}</strong>
-                                <small>{itemDetail(active, item.needId)}</small>
+                                <ReviewedSelectionDetail active={active} needId={item.needId} />
+                                <PurchaseDetail active={active} needId={item.needId} />
                               </span>
                             </label>
                           </li>

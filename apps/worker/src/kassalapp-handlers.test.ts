@@ -93,6 +93,7 @@ function storeRecord(
     chainId: "extra",
     chainCode: "COOP_EXTRA",
     address: "Storgata 1",
+    postalCode: "0152",
     latitude: 59.91,
     longitude: 10.75,
     sourceUpdatedAt: "2026-07-15T08:30:00.000Z",
@@ -358,6 +359,40 @@ describe("Kassalapp worker handlers", () => {
     );
   });
 
+  it("maps the normalized product category path into audited catalog persistence", async () => {
+    const gateway = createGateway();
+    vi.mocked(gateway.getSourceProductByEan).mockResolvedValue([{
+      state: "accepted",
+      record: productRecord({
+        categoryPath: [
+          { depth: 1, name: "Meieri", sourceCategoryId: "10" },
+          { depth: 2, name: "Melk", sourceCategoryId: "20" },
+        ],
+      }),
+    }]);
+    const repository = createRepository();
+    const handlers = createKassalappHandlers(createDependencies({ gateway, repository }));
+
+    await handlers["catalog-refresh"](context);
+
+    const persisted = vi.mocked(repository.persistCatalogOutcomes).mock.calls[0]?.[1][0];
+    expect(persisted).toMatchObject({
+      normalizedRecord: {
+        categoryPath: [
+          { depth: 1, name: "Meieri", sourceCategoryId: "10" },
+          { depth: 2, name: "Melk", sourceCategoryId: "20" },
+        ],
+      },
+      outcomeState: "accepted",
+      product: {
+        categoryPath: [
+          { depth: 1, name: "Meieri", sourceCategoryId: "10" },
+          { depth: 2, name: "Melk", sourceCategoryId: "20" },
+        ],
+      },
+    });
+  });
+
   it("maps current price subjects for explicit coverage and leaves unknown chains audit-only", async () => {
     const gateway = createGateway();
     vi.mocked(gateway.getSourceBulkPrices).mockResolvedValue([
@@ -484,6 +519,7 @@ describe("Kassalapp worker handlers", () => {
           latitude: 59.91,
           longitude: 10.75,
           name: "Extra Sentrum",
+          postalCode: "0152",
         }),
       }),
       expect.objectContaining({
@@ -498,7 +534,14 @@ describe("Kassalapp worker handlers", () => {
         rawChainCode: "FUTURE_CHAIN",
         sourceRecordId: "store-unknown-chain",
       }),
-    ], SIGNAL);
+    ], [{
+      chain: "extra",
+      checkedAt: NOW,
+      reason: "INVALID_RECORDS",
+      recordCount: 2,
+      state: "unknown",
+    }], SIGNAL);
+    expect(repository.persistPhysicalStoreOutcomes).toHaveBeenCalledTimes(1);
   });
 
   it.each(["conditional", "blocked", "revoked"] as const)(

@@ -47,7 +47,7 @@ The protected alpha may describe a value as lower than a named previous observat
 For each requested need and every declared supported chain, the server returns exactly one state:
 
 - `priced`: eligible evidence can be used;
-- `known-not-carried`: affirmative evidence says the item is not carried;
+- `known-not-carried`: affirmative evidence says the item is not carried, checked no later than the comparison snapshot and no more than 72 hours before it;
 - `stale`: evidence exists but is too old;
 - `ineligible`: evidence exists but fails permission, scope, membership, ambiguity, or another eligibility rule; or
 - `unknown`: Handleplan cannot establish the result.
@@ -55,6 +55,15 @@ For each requested need and every declared supported chain, the server returns e
 A missing upstream row is `unknown` unless affirmative evidence proves `known-not-carried`. It must never silently disappear.
 
 Every plan response identifies expected, verified, and unknown chains; complete or partial comparison status; per-need/per-chain reasons; and evidence identifiers for every assignment. Useful plans may be returned from partial evidence, but unqualified “best across all three” copy is prohibited.
+
+## Geographic applicability and branch proof
+
+- National, region, postal-set, and store-set evidence remain distinct. A regional selection may use a postal-set price or offer only when a current, approved, versioned postal directory proves that the set covers the complete selected region.
+- When that proof authorizes a public plan, the response carries a bounded attestation for only the selected region (never the complete national directory). Exact, reviewed-family, travel-filtered, and immutable-trip validation all bind it to the same directory version, market, and evaluation clock; trip expiry cannot outlive the attestation.
+- Partial postal overlap is ambiguous, not applicable. A missing, conflicting, future, expired, blocked, retired, incomplete, or ambiguous directory fails closed and cannot improve a public recommendation.
+- Directory versions are assembled in a non-public `building` state and become immutable when sealed. A later terminal version shadows an older approval at the same or later review clock.
+- Region-bound routing uses only branches whose persisted source-provided postal code joins the same current directory version and complete region proof. It does not infer a branch region from coordinates, an address supplied by the shopper, or the optional route origin.
+- No approved directory rows are seeded by the application. A launch region becomes routable only after explicit reviewed directory evidence is loaded; otherwise travel returns the existing branch-data-unavailable outcome.
 
 ## Matching and quantity fulfilment
 
@@ -71,7 +80,7 @@ Every plan response identifies expected, verified, and unknown chains; complete 
 
 Travel is optional. The result page asks for an origin only after explicit opt-in and labels the output “calculated route estimate.” If routing fails, Handleplan recomputes a coherent price-only frontier.
 
-An origin, address, coordinates, origin label, or origin-adjacent route geometry must not be written to browser persistence, URLs, cookies, analytics, application logs, persistent caches, or evidence storage. Provider credentials remain server-only. Public responses contain selected branch stops and aggregate time/distance, not the origin.
+An origin, address, coordinates, origin label, or origin-adjacent route geometry must not be written to browser persistence, URLs, cookies, analytics, application logs, persistent caches, or evidence storage. Provider credentials remain server-only. The private, no-store address lookup may return at most five bounded labels with short-lived opaque tokens so the user can make a real selection; it never returns coordinates or provider identifiers. Travel-plan responses contain selected branch stops and aggregate time/distance, not the origin.
 
 Anonymous basket and active-trip data stay on the device and remain user-clearable. Handleplan adds no behavioural analytics without a separate documented consent decision.
 

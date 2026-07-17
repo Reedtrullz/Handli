@@ -1,4 +1,4 @@
-import type { PublicCatalogIndexReader } from "@handleplan/db/public-catalog-index-reader";
+import type { PublicCatalogDiscoveryIndexReader } from "@handleplan/db/public-catalog-index-reader";
 import {
   PublicCatalogIndexReaderError,
 } from "@handleplan/db/public-catalog-index-reader";
@@ -23,6 +23,11 @@ import {
 
 const NOW = new Date("2026-07-16T12:00:00.000Z");
 const GTINS = ["7038010000010", "7038010000027"] as const;
+const MARKET_CONTEXT = {
+  contractVersion: 1,
+  countryCode: "NO",
+  kind: "national",
+} as const;
 const money = (value: number) => value as MoneyOre;
 const source = {
   contractVersion: 1 as const,
@@ -104,13 +109,35 @@ function priceResultFor(catalog: readonly ExactProductPlanApiProductSummary[]): 
   };
 }
 
-function catalogReader(rows = products): PublicCatalogIndexReader & {
-  browse: ReturnType<typeof vi.fn>;
-  search: ReturnType<typeof vi.fn>;
+const category = {
+  depth: 1,
+  id: `category:${"c".repeat(64)}`,
+  name: "Meieri",
+  sourceId: source.id,
+} as const;
+
+function catalogReader(rows = products): PublicCatalogDiscoveryIndexReader & {
+  categoryFacets: ReturnType<typeof vi.fn>;
+  readDiscoveryPage: ReturnType<typeof vi.fn>;
 } {
   return {
-    browse: vi.fn(async () => [...rows]),
-    search: vi.fn(async () => [...rows]),
+    categoryFacets: vi.fn(async () => ({
+      facets: rows.length === 0 ? [] : [{ ...category, productCount: rows.length }],
+      hasMore: false,
+    })),
+    readDiscoveryPage: vi.fn(async () => ({
+      entries: rows.map((product) => ({
+        catalogPosition: {
+          gtin: product.gtin,
+          rank: 0,
+          sortName: product.displayName.toLocaleLowerCase("nb-NO"),
+        },
+        categoryPath: [{ ...category, sourceId: product.catalogEvidence.source.id }],
+        product,
+      })),
+      hasMore: false,
+      scannedCount: rows.length,
+    })),
   };
 }
 
@@ -123,12 +150,15 @@ describe("DiscoveryService persisted composition", () => {
       catalog,
       now: () => NOW,
       priceService: { readExact },
-    }).browse(signal);
+    }).browse(MARKET_CONTEXT, signal);
 
-    expect(catalog.browse).toHaveBeenCalledWith(36, NOW, signal);
+    expect(catalog.readDiscoveryPage).toHaveBeenCalledWith({ limit: 50 }, NOW, signal);
+    expect(catalog.categoryFacets).toHaveBeenCalledWith(100, NOW, signal);
     expect(readExact).toHaveBeenCalledOnce();
     expect(readExact.mock.calls[0]![0]).toEqual({
       contractVersion: 1,
+      enabledMembershipProgramIds: [],
+      marketContext: MARKET_CONTEXT,
       maxStores: 3,
       needs: products.map(({ gtin }) => ({
         id: `discovery:${gtin}`,
@@ -145,6 +175,13 @@ describe("DiscoveryService persisted composition", () => {
     expect(result).toMatchObject({
       contractVersion: 1,
       generatedAt: NOW.toISOString(),
+      marketContext: MARKET_CONTEXT,
+      observedCategories: {
+        completeness: "partial",
+        facets: [{ id: category.id, productCount: products.length }],
+        hasMore: false,
+        kind: "observed-category-directory",
+      },
       priceDataSource: "cache",
       products: [
         { catalog: { gtin: GTINS[0] }, ordinaryPrices: [{ chainId: "extra" }] },
@@ -161,10 +198,61 @@ describe("DiscoveryService persisted composition", () => {
       catalog,
       now: () => NOW,
       priceService: { readExact },
-    }).search("melk");
+    }).search("melk", MARKET_CONTEXT);
 
-    expect(catalog.search).toHaveBeenCalledWith("melk", 20, NOW, undefined);
+    expect(catalog.readDiscoveryPage).toHaveBeenCalledWith(
+      { limit: 50, query: "melk" },
+      NOW,
+      undefined,
+    );
     expect(result.products).toHaveLength(1);
+  });
+
+  it("fails closed before reading prices when a reader exceeds one bounded evidence batch", async () => {
+    const catalog = catalogReader();
+    catalog.readDiscoveryPage.mockResolvedValue({
+      entries: Array.from({ length: 51 }, (_, index) => ({
+        catalogPosition: {
+          gtin: products[0]!.gtin,
+          rank: 0,
+          sortName: `fixture-${index}`,
+        },
+        categoryPath: [category],
+        product: products[0]!,
+      })),
+      hasMore: false,
+      scannedCount: 51,
+    });
+    const readExact = vi.fn<PriceService["readExact"]>();
+
+    await expect(new DiscoveryService({
+      catalog,
+      now: () => NOW,
+      priceService: { readExact },
+    }).search("melk", MARKET_CONTEXT)).rejects.toBeInstanceOf(DiscoveryUnavailableError);
+    expect(readExact).not.toHaveBeenCalled();
+  });
+
+  it("filters one opaque observed category at the persisted read boundary", async () => {
+    const catalog = catalogReader([products[0]!]);
+    const result = await new DiscoveryService({
+      catalog,
+      now: () => NOW,
+      priceService: { readExact: async () => priceResultFor([products[0]!]) },
+    }).browseCategory(category.id, MARKET_CONTEXT);
+
+    expect(catalog.readDiscoveryPage).toHaveBeenCalledWith(
+      { categoryId: category.id, limit: 50 },
+      NOW,
+      undefined,
+    );
+    expect(catalog.categoryFacets).toHaveBeenCalledWith(100, NOW, undefined);
+    expect(result.products[0]?.categoryPath).toEqual([category]);
+    expect(JSON.stringify(result)).not.toContain("sourceCategoryId");
+    expect(result.observedCategories).toMatchObject({
+      completeness: "partial",
+      kind: "observed-category-directory",
+    });
   });
 
   it("deduplicates canonical aliases while preserving an exact-GTIN search", async () => {
@@ -201,7 +289,7 @@ describe("DiscoveryService persisted composition", () => {
       catalog: catalogReader(aliases),
       now: () => NOW,
       priceService: { readExact: async () => aliasPriceResult },
-    }).browse();
+    }).browse(MARKET_CONTEXT);
     expect(browse.products).toHaveLength(1);
     expect(browse.products[0]!.catalog.gtin).toBe(GTINS[0]);
     expect(browse.sources.map(({ id }) => id)).toEqual(["kassalapp"]);
@@ -210,7 +298,7 @@ describe("DiscoveryService persisted composition", () => {
       catalog: catalogReader(aliases),
       now: () => NOW,
       priceService: { readExact: async () => aliasPriceResult },
-    }).search(alias.gtin);
+    }).search(alias.gtin, MARKET_CONTEXT);
     expect(exactSearch.products).toHaveLength(1);
     expect(exactSearch.products[0]!.catalog.gtin).toBe(alias.gtin);
     expect(exactSearch.products[0]!.canonicalProductId).toBe("product:shared");
@@ -267,7 +355,7 @@ describe("DiscoveryService persisted composition", () => {
       catalog: catalogReader([products[0]!]),
       now: () => NOW,
       priceService: { readExact: async () => mature },
-    }).browse();
+    }).browse(MARKET_CONTEXT);
 
     expect(result.products[0]!.ordinaryPrices).toHaveLength(1);
     expect(result.products[0]!.historicalComparisons).toEqual([]);
@@ -282,11 +370,25 @@ describe("DiscoveryService persisted composition", () => {
       catalog,
       now: () => NOW,
       priceService: { readExact },
-    }).browse()).resolves.toEqual({
+    }).browse(MARKET_CONTEXT)).resolves.toEqual({
       contractVersion: 1,
       generatedAt: NOW.toISOString(),
+      marketContext: MARKET_CONTEXT,
+      observedCategories: {
+        completeness: "partial",
+        facets: [],
+        hasMore: false,
+        kind: "observed-category-directory",
+      },
+      page: {
+        hasMore: false,
+        kind: "bounded-catalog-slice",
+        pageSize: 8,
+        scannedCatalogProducts: 0,
+      },
       priceDataSource: "cache",
       products: [],
+      selection: { chain: "all", resultType: "all" },
       sources: [],
     });
     expect(readExact).not.toHaveBeenCalled();
@@ -304,21 +406,21 @@ describe("DiscoveryService persisted composition", () => {
       catalog: catalogReader(conflicting),
       now: () => NOW,
       priceService: { readExact: async () => priceResultFor(conflicting) },
-    }).browse()).rejects.toBeInstanceOf(DiscoveryUnavailableError);
+    }).browse(MARKET_CONTEXT)).rejects.toBeInstanceOf(DiscoveryUnavailableError);
   });
 
   it("maps catalog and price cancellation without leaking provider details", async () => {
     const cancelledCatalog = catalogReader();
-    cancelledCatalog.browse.mockRejectedValue(new PublicCatalogIndexReaderError("CANCELLED"));
+    cancelledCatalog.readDiscoveryPage.mockRejectedValue(new PublicCatalogIndexReaderError("CANCELLED"));
     await expect(new DiscoveryService({
       catalog: cancelledCatalog,
       priceService: { readExact: async () => priceResultFor(products) },
-    }).browse()).rejects.toBeInstanceOf(DiscoveryRequestCancelledError);
+    }).browse(MARKET_CONTEXT)).rejects.toBeInstanceOf(DiscoveryRequestCancelledError);
 
     await expect(new DiscoveryService({
       catalog: catalogReader(),
       priceService: { readExact: async () => { throw new PriceServiceError("CANCELLED"); } },
-    }).browse()).rejects.toBeInstanceOf(DiscoveryRequestCancelledError);
+    }).browse(MARKET_CONTEXT)).rejects.toBeInstanceOf(DiscoveryRequestCancelledError);
   });
 
   it("sanitizes malformed reader output", async () => {
@@ -329,6 +431,6 @@ describe("DiscoveryService persisted composition", () => {
         ...priceResultFor(products),
         evidence: { assignmentEvidence: [], needs: [], sources: [source] },
       }) },
-    }).browse()).rejects.toBeInstanceOf(DiscoveryUnavailableError);
+    }).browse(MARKET_CONTEXT)).rejects.toBeInstanceOf(DiscoveryUnavailableError);
   });
 });

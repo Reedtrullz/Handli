@@ -123,6 +123,39 @@ source is disabled. Do not relabel it as an empty successful ingestion. A
 terminal ingestion run proves persistence counters, not that the evidence is
 eligible for a public claim; eligibility and coverage remain separate gates.
 
+Migration `016_worker_source_health.sql` makes the schedule ledger drive one
+source-wide, append-only health snapshot in the same fenced transaction for
+each non-cancelled terminal worker result. The worker may write only aggregate
+success clocks, `status`, an empty `details` object, and zero/null review-queue
+placeholders. Request URLs, queries, errors, tokens, addresses, coordinates,
+baskets, provider payloads, queue contents, and generic metadata have no writer
+field and are rejected by database constraints. A unique `worker_job_id` makes
+exact retry converge without duplicating health.
+
+The mapping is deterministic. `succeeded` with at least one accepted record is
+`healthy`; `partial` is `degraded`; `failed` and `timed-out` are `failed`. A
+nominal `succeeded` result with zero accepted records is `degraded`, making a
+silent-zero ingestion visible without calling it successful. Discovery,
+and capture clocks advance only for applicable real progress. Raw worker
+accepted/persisted counts do not prove a governed public publication or
+eligibility, so `last_publish_success_at` and
+`newest_eligible_evidence_at` are carried forward unchanged across every job
+kind. PostgreSQL enforces that boundary; a future publisher may advance those
+clocks only after binding source runtime, current permission, scope, and claim
+eligibility. All previous clocks are carried forward across job kinds and may
+never postdate the terminal result.
+
+Cancellation deliberately creates no health assertion. If an ingestion run
+started, its cancelled terminal row remains newer than the preceding snapshot,
+which the public status model treats as `unknown`; a pre-ingestion shutdown is
+retained only in the private worker-result ledger and does not relabel source
+health. Writing `healthy` would mask the cancellation, while writing
+`degraded` or `failed` would misclassify an operator stop.
+
+Health never changes source governance. Conditional, blocked, or revoked
+sources can accumulate operational evidence but remain ineligible for public
+ranking until the independent source and permission gates are approved.
+
 Migration `011_catalog_observations.sql` adds the append-only public catalog
 payload. Every accepted catalog record is linked to its ingestion attempt and
 stores the exact normalized name, brand, package fields, GTIN, semantic hash,
@@ -178,7 +211,12 @@ without treating a safely recorded degraded source result as a process failure.
 
 Before deployment, render Compose with the protected `production.env` and
 confirm `KASSAL_SOURCE_ACCESS` is still `conditional` unless the full approval
-record exists. Do not print or inspect the API-key value. After deployment,
+record exists. The deploy preflight also requires exactly one bare canonical
+review audience and one bare canonical operations audience and rejects reuse
+before image load or runtime quiesce. Their base origins may be equal because
+the private processes accept disjoint exact paths; their Access applications
+and audience tags may not be equal. Do not print or inspect protected values.
+After deployment,
 `deploy-on-vps.sh` reads the exact web revision from `/api/health`, then executes
 the internal worker health request in the container. It requires zero restarts,
 the exact worker revision, ready health, and a newest completed cycle whose
@@ -187,33 +225,84 @@ duration passed the committed cycle bound and whose `leaseAcquired` value is
 the scheduler loop is alive but does not prove this deployment can own and fence
 work, so it is insufficient for promotion.
 The wait is bounded to 55 minutes, covering the four sequential production job
-timeouts plus their shutdown grace. A failed readback triggers the existing
-previous-image rollback and is never recorded as current. Migrations `010` and
-`011`, together with the durable newest schedule row, remain useful operator
-readbacks after rollout.
+timeouts plus their shutdown grace. After a post-migration startup or readback
+failure, the script stops, removes, and proves `review`, `operations`, `worker`,
+and `app` absent. It may then restore only a prior public app whose local image
+revision label exactly matches the recorded prior commit. With missing state, a pruned or
+mislabeled prior image, or any cleanup failure, it leaves every candidate
+runtime down and records nothing. Migrations `010` and `011`, together with the
+durable newest schedule row, remain useful operator readbacks after rollout.
 
-The protected deploy workflow checks that its checkout is the exact verified
-revision, transfers both `deploy-on-vps.sh` and `deployment-state.sh` into
-`/opt/apps/handleplan/deploy-bundles/<revision>/`, and invokes the real remote
-script path so sibling resolution cannot depend on streamed-shell `$0` state.
+The checksum-bound operations release is prepared from the verified candidate
+source before quiescing anything. Immediately after the migrator succeeds—and
+before any candidate process starts—the script atomically points
+`operations/current` at that release and reads its manifest back. Consequently,
+a later candidate startup/readback failure and public-only image fallback keep
+backup, restore, migration-ledger, and rollback controls at the forward schema
+revision. Because migrations are individually transactional and an unsuccessful
+migrator may already have committed an earlier file, catchable exit cleanup also
+attempts this activation after migration begins. This control pointer does not
+record the application deployment or advance its immutable image/high-water
+state; only complete runtime readback can do that.
+
+The protected deploy workflow runs only from a successful `CI` completion for a
+push to this repository's `main`; it has no direct manual-dispatch bypass. It
+checks out that exact CI revision and downloads the fixed five-file image bundle
+by the triggering workflow's run ID, run attempt, and revision-specific artifact
+name. Before configuring SSH it verifies the manifest shape, every SHA-256,
+archive bounds, the unsigned provenance subject/commit, and the loaded image's
+config digest and revision label. It transfers the bundle plus the verified
+manifest SHA-256, `deploy-on-vps.sh`, and `deployment-state.sh` over the
+pinned-host-key SSH channel into
+`/opt/apps/handleplan/deploy-bundles/<revision>/<ci-run-id>-<ci-attempt>/<deploy-run-id>-<deploy-attempt>/`, and invokes
+the real remote script path so sibling resolution cannot depend on
+streamed-shell `$0` state.
+The VPS fetches the exact `origin/main` ref, requires both the candidate and any
+recorded high-water deployment to remain reachable, and rejects a candidate
+older than that high-water mark. Before loading anything, it independently
+requires the exact five regular artifacts, run ID/attempt/revision bindings,
+all SHA-256 values, a maximum-2-GiB Docker archive, and a maximum-128-MiB source
+archive. It uses the extracted checksummed source archive—not the mutable
+checkout—for Compose and migration definitions, and loads the already-built CI
+Docker archive. It then verifies the loaded config digest/revision label and
+requires the app, review, operations, and worker containers to use that exact
+image ID. The VPS never rebuilds the image. The temporary source extraction is
+removed on every exit. GitHub environment protection remains useful
+defense-in-depth, but revision/CI selection does not assume that an environment
+rule exists or is correctly configured.
 Its 120-minute job bound leaves explicit margin around the 55-minute worker
-cycle wait for build/pull, migration, verification, and rollback. Final workflow
-readback requires both `v1 <revision> current` in the authoritative manifest and
-the matching revision-only compatibility marker.
+cycle wait for artifact transfer/load, migration, verification, and rollback.
+Final workflow readback requires `v1 <revision> current`, the matching
+revision-only compatibility marker, and the exact CI image config digest.
+
+This handoff identifies exact image bytes with the Docker-archive SHA-256 and
+Docker config digest. It does not claim a signed registry OCI manifest,
+release-grade provenance, or public promotion; the CI bundle expires after
+seven days and promotion remains intentionally blocked.
 
 Rollback remains forward-only: the current migrator expands schema first, and
-the previous image must run against that expanded schema. The atomic
+push CI builds and boots the exact first-parent application image against that
+expanded PostgreSQL schema with the read-only web role before the current image
+can pass. The atomic
 `state/current-deployment` manifest ties one exact revision to its compatibility
 mode. A successful readback records `v1 <revision> current`; the revision-only
 `state/current-revision` file remains as a matching compatibility marker for
-older operator tooling. Missing state or a valid old revision-only marker means
-`legacy`, while a malformed manifest, unknown mode, invalid revision, missing
-marker, or mismatch fails closed before an automatic rollback mode is selected.
+older operator tooling. Auxiliary `state/current-image-id`,
+`state/deployment-high-water`, and create-only
+`state/verified-images/<revision>` records bind the exact loaded image and stop
+normal deploys from moving backward. A normal deploy advances the high-water
+revision; an authorized explicit rollback changes the current revision/image
+but preserves the high-water mark. Missing state or a valid old revision-only
+marker means `legacy`, while a malformed manifest, unknown mode, invalid
+revision, missing marker, or mismatch fails closed before an automatic rollback
+mode is selected. See the
+[explicit immutable-image rollback runbook](explicit-image-rollback.md) for the
+separate operator path and its required image/readiness proof.
 
-Rolling back a previously recorded `current` deployment uses normal Compose, so
-its worker remains present and its web process keeps the separate read-only web
-role. Only a legacy previous-image rollback removes the worker and checks the
-old `/api/health` endpoint. It is deliberately safe-degraded: the old app keeps
+Automatic failure recovery never restarts a previous worker or review process.
+After the candidate cleanup/absence proof, it may start only the label-verified
+previous public image through the legacy overlay. It is deliberately
+safe-degraded: the old app keeps
 the read-only `handleplan_web` role, receives a static non-secret compatibility
 key, and points its required HTTPS source origin at closed loopback port
 `127.0.0.1:1`. The database role cannot claim a
@@ -223,6 +312,9 @@ The real Kassal credential is never restored to an internet-facing legacy app.
 Cached-price reads can remain available, but search, refresh, and complete
 planning are explicit rollback non-claims. The old health endpoint proves only
 that this safe-degraded shell started.
+This failed-candidate fallback is not the explicit rollback path: it remains
+public-app-only and source-disabled, does not lower the high-water revision, and
+does not claim full application readiness.
 Stopping or rolling back the worker does not delete evidence or down-migrate
 the schedule ledger.
 If the source must stop immediately, set the deployment cap away from

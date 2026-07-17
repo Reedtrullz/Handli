@@ -272,6 +272,9 @@ function planForSubset(
     channel: input.offerEligibility.channel,
     enabledSourceIds: input.offerEligibility.enabledSourceIds,
     enabledMembershipProgramIds: input.offerEligibility.enabledMembershipProgramIds,
+    ...(input.offerEligibility.geographicDirectory === undefined
+      ? {}
+      : { geographicDirectory: input.offerEligibility.geographicDirectory }),
   };
 
   for (const need of input.needs) {

@@ -53,6 +53,7 @@ export class FakeBranchDirectory implements BranchDirectory {
     this.calls.push({
       eligibleChainIds: [...query.eligibleChainIds],
       evaluatedAt: new Date(query.evaluatedAt),
+      marketContext: { ...query.marketContext },
     });
     this.onCall?.();
     throwIfAborted(signal);

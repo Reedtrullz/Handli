@@ -87,6 +87,39 @@ describe("deriveHistoricalComparison", () => {
     });
   });
 
+  it("does not mix a regional current series with eligible national history", () => {
+    const regionalScope = {
+      kind: "regions",
+      countryCode: "NO",
+      regionCodes: ["NO-03"],
+    };
+    const regionalHistory = history(Array(7).fill(3_000)).map((row, index) => ({
+      ...row,
+      geographicScope: regionalScope,
+      id: `price:regional-history:${index}`,
+      sourceRecordId: `source:regional-history:${index}`,
+    }));
+    const nationalHistory = history(Array(7).fill(100)).map((row, index) => ({
+      ...row,
+      id: `price:national-history:${index}`,
+      sourceRecordId: `source:national-history:${index}`,
+    }));
+    const comparison = derive(
+      [...nationalHistory, ...regionalHistory],
+      evidence("price:regional-current", CURRENT_AT, 900, {
+        geographicScope: regionalScope,
+      }),
+    );
+
+    expect(comparison).toMatchObject({
+      baselineOre: 3_000,
+      currentEvidenceId: "price:regional-current",
+      distinctObservationDays: 7,
+    });
+    expect(comparison?.sourceEvidenceIds.every((id) => id.startsWith("price:regional-history:")))
+      .toBe(true);
+  });
+
   it("uses the floor of the two middle ore values for an even-count median", () => {
     const lowerCurrent = evidence("price:current", CURRENT_AT, 200);
     expect(

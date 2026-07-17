@@ -9,13 +9,19 @@ export default defineConfig({
   reporter: "line",
   timeout: 120_000,
   expect: { timeout: 15_000 },
+  projects: [
+    { name: "chromium", use: { browserName: "chromium" } },
+    { name: "firefox", use: { browserName: "firefox" } },
+    { name: "webkit", use: { browserName: "webkit" } },
+  ],
   use: {
     baseURL: "http://127.0.0.1:3115",
-    browserName: "chromium",
     locale: "nb-NO",
+    screenshot: "off",
     serviceWorkers: "allow",
     timezoneId: "Europe/Oslo",
-    trace: "retain-on-failure",
+    trace: "off",
+    video: "off",
   },
   webServer: {
     command: "node tests/handlemodus/start-production-server.mjs",

@@ -257,6 +257,44 @@ test("Planlegg reflows without horizontal overflow at 320 pixels", async ({ page
   expect(composer!.x + composer!.width).toBeLessThanOrEqual(320);
 });
 
+test("public discovery and trust surfaces pass automated WCAG checks", async ({ page }) => {
+  const surfaces = [
+    { path: "/oppdag", heading: "Oppdag" },
+    { path: "/status", heading: "Datadekning og status" },
+    { path: "/personvern", heading: "Personvern i Handleplan" },
+    { path: "/om", heading: "Handleplan som et offentlig gode" },
+  ] as const;
+
+  for (const surface of surfaces) {
+    await page.goto(surface.path);
+    await expect(page.getByRole("heading", { name: surface.heading, exact: true })).toBeVisible();
+    if (surface.path === "/oppdag") {
+      await expect(page.getByRole("heading", { name: "Varekatalog og prisgrunnlag" }))
+        .toBeVisible();
+    }
+    await expectWcag22AandAA(page);
+  }
+});
+
+test("Planlegg remains operable with forced colours and reduced motion", async ({ page }) => {
+  await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/planlegg");
+
+  const composer = page.getByLabel("Hva skal du handle?");
+  await expect(composer).toBeVisible();
+  await composer.focus();
+  await expect(composer).toBeFocused();
+  const state = await page.evaluate(() => ({
+    horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth,
+    runningAnimations: document.getAnimations().filter(
+      (animation) => animation.playState === "running",
+    ).length,
+  }));
+  expect(state.horizontalOverflow).toBe(false);
+  expect(state.runningAnimations).toBe(0);
+});
+
 test("anonymous shopper approves matching and chooses every complete frontier plan", async ({ page }) => {
   const evidence = collectPublicEvidence(page);
   await page.goto("/");
@@ -274,8 +312,9 @@ test("anonymous shopper approves matching and chooses every complete frontier pl
 
   const storedBeforeResult = await page.evaluate(() => JSON.stringify(localStorage));
   expect(storedBeforeResult).not.toContain("origin");
-  expect(JSON.parse(JSON.parse(storedBeforeResult)["handleplan:basket:v3"])).toMatchObject({
-    version: 3,
+  expect(JSON.parse(JSON.parse(storedBeforeResult)["handleplan:basket:v4"])).toMatchObject({
+    version: 4,
+    marketContext: { contractVersion: 1, countryCode: "NO", kind: "national" },
     familyConfirmations: [],
     needs: [{ query: "TINE Lettmelk 1 % 1 l" }, { query: "Evergood Kaffe 500 g" }, { query: "Norsk grovbrød 750 g" }],
     products: expect.arrayContaining([expect.objectContaining({ ean: "7038010000010" })]),
@@ -322,7 +361,7 @@ test("anonymous shopper approves matching and chooses every complete frontier pl
   await expect(page.getByRole("radio", { name: /^Mest spart/ })).toBeChecked();
   const selectedPlanId = await page.getByRole("radio", { checked: true }).getAttribute("value");
   expect(selectedPlanId).toBeTruthy();
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("handleplan:basket:v3"))).toContain('"convenienceWeightBasisPoints":0');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("handleplan:basket:v4"))).toContain('"convenienceWeightBasisPoints":0');
 
   await evidence.settle();
   await page.reload();
@@ -374,9 +413,10 @@ test("a shopper reviews a complete product family before receiving a server-owne
   const basketRow = page.getByRole("listitem", { name: /Melk/ });
   await expect(basketRow.getByText("Gjennomgått varetype")).toBeVisible();
   const persisted = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem("handleplan:basket:v3") ?? "{}"));
+    JSON.parse(localStorage.getItem("handleplan:basket:v4") ?? "{}"));
   expect(persisted).toMatchObject({
-    version: 3,
+    version: 4,
+    marketContext: { contractVersion: 1, countryCode: "NO", kind: "national" },
     familyConfirmations: [{
       candidateCount: 1,
       confirmation: {
@@ -414,10 +454,10 @@ test("a shopper reviews a complete product family before receiving a server-owne
     .toBeVisible();
   const substitutions = page.getByRole("heading", { name: "Godkjente varebytter" })
     .locator("xpath=ancestor::section");
-  await expect(substitutions.getByText("Melk")).toBeVisible();
+  await expect(substitutions.getByText("Melk", { exact: true })).toBeVisible();
   await expect(substitutions.getByText("TINE Lettmelk 1 % 1 l")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Ikke tilgjengelig for varebytter ennå" }))
-    .toBeVisible();
+    .toHaveCount(0);
   await expectWcag22AandAA(page);
   await expectCleanPublicEvidence(evidence);
 });
@@ -440,12 +480,12 @@ test("a shopper discovers a fresh price and carries the exact product into Planl
   const milkCard = page.getByRole("heading", { name: "TINE Lettmelk 1 % 1 l" }).locator("xpath=ancestor::article");
   await milkCard.getByRole("button", { name: "Legg til i handlelisten" }).click();
   await expect(milkCard.getByRole("button", { name: "I handlelisten" })).toBeDisabled();
-  await expect(page.getByText("1 vare")).toBeVisible();
+  await expect(page.getByText("1 varebehov", { exact: true })).toBeVisible();
 
   await page.getByRole("link", { name: /Gå til Planlegg/ }).click();
   await expect(page).toHaveURL(`${BASE_ORIGIN}/planlegg`);
   await expect(page.getByRole("listitem", { name: /TINE Lettmelk 1 % 1 l/ })).toBeVisible();
-  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem("handleplan:basket:v3") ?? "{}"));
+  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem("handleplan:basket:v4") ?? "{}"));
   expect(persisted).toMatchObject({
     needs: [{ query: "TINE Lettmelk 1 % 1 l" }],
     matchingRules: [{ mode: "exact", exactEan: "7038010000010" }],

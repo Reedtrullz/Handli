@@ -6,6 +6,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import type {
   ExactProductPlanApiProductSummary,
   MoneyOre,
+  OfficialOffer,
   PlanAssignmentV2,
 } from "@handleplan/domain";
 import { afterEach, describe, expect, it } from "vitest";
@@ -29,6 +30,28 @@ const product: ExactProductPlanApiProductSummary = {
   gtin: "7038010000010",
   packageMeasure: { amount: 500, unit: "ml" },
   unitsPerPack: 1,
+};
+
+const memberOffer: OfficialOffer = {
+  applicability: {
+    channels: ["in-store"],
+    contractVersion: 1,
+    endsAt: "2026-07-17T12:00:00.000Z",
+    geographicScope: { countryCode: "NO", kind: "national" },
+    startsAt: "2026-07-14T12:00:00.000Z",
+  },
+  beforePriceOre: 3_000 as MoneyOre,
+  capturedAt: "2026-07-15T09:00:00.000Z",
+  chainId: "extra",
+  conditions: [{ kind: "member", programId: "source-neutral-program" }],
+  contractVersion: 1,
+  evidenceLevel: "reviewed",
+  id: "offer:milk",
+  kind: "official-offer",
+  pricing: { kind: "unit", unitPriceOre: 2_500 as MoneyOre },
+  productMatch: { canonicalProductId: "product:milk", kind: "exact" },
+  sourceId: "kassalapp",
+  sourceRecordId: "source-record:offer:milk",
 };
 
 function assignment(
@@ -87,6 +110,7 @@ describe("StoreAssignment strict fulfilment", () => {
         chain="extra"
         order={1}
         assignments={[assignment(requested, count, purchased, surplus)]}
+        officialOffers={[]}
         products={[product]}
       />,
     );
@@ -107,6 +131,7 @@ describe("StoreAssignment strict fulfilment", () => {
           { amount: 0, unit: "package" },
           true,
         )]}
+        officialOffers={[memberOffer]}
         products={[product]}
       />,
     );
@@ -114,5 +139,7 @@ describe("StoreAssignment strict fulfilment", () => {
     expect(screen.getByText("Før 30,00 kr")).toBeVisible();
     expect(screen.getByText("5,00 kr spart")).toBeVisible();
     expect(screen.getByText(/Offisielt tilbud brukt · kilde kassalapp/)).toBeVisible();
+    expect(screen.getByText("Medlemspris hos Extra krever medlemskap.")).toBeVisible();
+    expect(document.body).not.toHaveTextContent("source-neutral-program");
   });
 });

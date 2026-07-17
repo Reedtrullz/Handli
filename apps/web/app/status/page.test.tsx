@@ -3,11 +3,18 @@
 import "@testing-library/jest-dom/vitest";
 
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import StatusPage from "./page";
 
-afterEach(cleanup);
+beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("public coverage status", () => {
   it("shows all candidate regions and chains without implying launch eligibility", () => {
@@ -33,5 +40,7 @@ describe("public coverage status", () => {
     expect(screen.getByText(/16\. juli 2026/)).toBeVisible();
     expect(screen.getByText(/Kassalapp.*rettigheter/i)).toBeVisible();
     expect(screen.getByText(/beskyttet alfa/i)).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Registrerte dataløp" })).toBeVisible();
+    expect(screen.getAllByText(/dokumenterer ikke prisdekning/i)).not.toHaveLength(0);
   });
 });

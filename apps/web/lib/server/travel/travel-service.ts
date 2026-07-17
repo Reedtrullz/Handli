@@ -3,6 +3,8 @@ import {
   chooseBestRoundTrip,
   identifierSchema,
   isFiniteDate,
+  marketContextV1Schema,
+  marketContextsEqual,
   paretoFrontierV2,
   planResultV2Schema,
   projectRepresentativesV2,
@@ -13,6 +15,7 @@ import {
   travelModeSchema,
   type FrontierPlanV2,
   type MatrixBranchCandidate,
+  type MarketContextV1,
   type PlanResultV2,
   type PlanTravelEvidence,
   type TravelCalculationState,
@@ -50,9 +53,16 @@ export interface TravelServiceInput {
   mode: TravelMode;
   capturedEvaluationTime: Date;
   candidates: readonly PlanResultV2[];
+  marketContext: MarketContextV1;
 }
 
 export interface TravelServiceResult {
+  /**
+   * Internal-only full candidate cohort with the exact travel evidence used
+   * for ranking. Present only for a calculated result and never serialized by
+   * a public route.
+   */
+  evaluatedCandidates?: FrontierPlanV2[];
   plans: FrontierPlanV2[];
   travel: TravelCalculationState;
 }
@@ -195,8 +205,10 @@ export class TravelService {
     signal?.throwIfAborted();
     const candidates = parseCandidates(input.candidates);
     const parsedMode = travelModeSchema.safeParse(input.mode);
+    const parsedMarket = marketContextV1Schema.safeParse(input.marketContext);
     if (
       !parsedMode.success
+      || !parsedMarket.success
       || !(input.capturedEvaluationTime instanceof Date)
       || !isFiniteDate(input.capturedEvaluationTime)
     ) {
@@ -220,6 +232,7 @@ export class TravelService {
       rawSnapshot = await this.dependencies.branchDirectory.loadEligibleBranches({
         eligibleChainIds: chains,
         evaluatedAt: new Date(input.capturedEvaluationTime),
+        marketContext: { ...parsedMarket.data },
       }, signal);
       signal?.throwIfAborted();
     } catch (error) {
@@ -235,6 +248,7 @@ export class TravelService {
       !snapshot.success
       || !snapshot.data.complete
       || !sameStringSet(snapshot.data.eligibleChainIds, chains)
+      || !marketContextsEqual(snapshot.data.marketContext, parsedMarket.data)
     ) {
       return unavailable(candidates, "branch-data-unavailable");
     }
@@ -326,6 +340,7 @@ export class TravelService {
           calculatedAt,
           distanceMeters: selection.distanceMeters,
           durationSeconds: selection.durationSeconds,
+          mode: parsedMode.data,
           providerSourceId: providerSource.data,
           routeFingerprint,
         };
@@ -337,9 +352,13 @@ export class TravelService {
         travelEvidence.push({
           planId: candidate.id,
           travel: {
-            ...aggregate,
+            calculatedAt: aggregate.calculatedAt,
             contractVersion: 1,
+            distanceMeters: aggregate.distanceMeters,
+            durationSeconds: aggregate.durationSeconds,
             kind: "calculated",
+            providerSourceId: aggregate.providerSourceId,
+            routeFingerprint: aggregate.routeFingerprint,
           },
         });
       }
@@ -373,6 +392,6 @@ export class TravelService {
     if (!state.success || state.data.kind !== "calculated") {
       return unavailable(candidates, "provider-unavailable");
     }
-    return { plans, travel: state.data };
+    return { evaluatedCandidates: attached, plans, travel: state.data };
   }
 }

@@ -1,4 +1,5 @@
 import coverageManifest from "../../../../docs/data/launch-coverage.v1.json";
+import { SourceStatusPanel } from "../../components/status/source-status-panel";
 
 export const metadata = { title: "Datadekning og status | Handleplan" };
 
@@ -65,6 +66,8 @@ export default function StatusPage() {
             <li>Ingen region har fullført måling med representative handlekurver.</li>
           </ul>
         </section>
+
+        <SourceStatusPanel />
 
         <div className="status-region-list">
           {coverageManifest.candidateRegions.map((region) => {

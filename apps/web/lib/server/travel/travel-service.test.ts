@@ -1,6 +1,7 @@
 import {
   projectRepresentativesV2,
   type InternalTravelBranch,
+  type MarketContextV1,
   type MoneyOre,
   type PlanResultV2,
   type RouteMatrix,
@@ -25,6 +26,7 @@ import {
 } from "./travel-service";
 
 const NOW = new Date("2026-07-17T12:00:00.000Z");
+const MARKET = { contractVersion: 1 as const, countryCode: "NO" as const, kind: "national" as const };
 const ORIGIN: TravelCoordinate = {
   latitudeE6: 59_913_900,
   longitudeE6: 10_752_200,
@@ -121,6 +123,7 @@ function snapshot(branches: readonly InternalTravelBranch[], complete = true) {
     complete,
     contractVersion: 1 as const,
     eligibleChainIds: [...new Set(branches.map(({ chainId }) => chainId))],
+    marketContext: MARKET,
   };
 }
 
@@ -161,16 +164,60 @@ async function calculate(
   travel: TravelService,
   candidates: readonly PlanResultV2[],
   signal?: AbortSignal,
+  marketContext: MarketContextV1 = MARKET,
 ): Promise<TravelServiceResult> {
   return travel.calculate({
     candidates,
     capturedEvaluationTime: NOW,
+    marketContext,
     mode: "car",
     origin: ORIGIN,
   }, signal);
 }
 
 describe("TravelService", () => {
+  it("routes a launch region only from a snapshot carrying matching current proof", async () => {
+    const regionalMarket = {
+      contractVersion: 1 as const,
+      countryCode: "NO" as const,
+      kind: "launch-region" as const,
+      regionId: "no-0301-oslo",
+    };
+    const regionalBranch = branch("branch:extra", "extra", 1_000);
+    const directory = new FakeBranchDirectory({
+      branches: [regionalBranch],
+      complete: true,
+      contractVersion: 1,
+      eligibleChainIds: ["extra"],
+      marketContext: regionalMarket,
+      regionEvidence: {
+        contractVersion: 1,
+        countryCode: "NO",
+        directoryEvidenceReference: "manifest:directory",
+        directoryVersionId: "postal-directory-2026-07",
+        regionEvidenceReference: "manifest:oslo",
+        regionId: regionalMarket.regionId,
+        reviewedAt: "2026-07-16T12:00:00.000Z",
+      },
+    });
+    const router = new FakeRouteMatrixGateway("fixture-router", uniformMatrix(2));
+    const travel = new TravelService({
+      branchDirectory: directory,
+      createRouteFingerprint: () => "route:regional-proof",
+      routeMatrixGateway: router,
+    });
+
+    const result = await calculate(
+      travel,
+      [plan("regional", 10_000, ["extra"])],
+      undefined,
+      regionalMarket,
+    );
+
+    expect(result.travel.kind).toBe("calculated");
+    expect(directory.calls[0]?.marketContext).toEqual(regionalMarket);
+  });
+
   it("routes complete one-, two-, and three-store candidates using one matrix and 1/2/6 order enumeration", async () => {
     const candidates = [
       plan("one", 13_000, ["extra"]),
@@ -446,6 +493,7 @@ describe("TravelService", () => {
     await expect(travel.calculate({
       candidates: [plan("candidate", 10_000, ["extra"])],
       capturedEvaluationTime: "2026-07-17T12:00:00.000Z" as unknown as Date,
+      marketContext: MARKET,
       mode: "car",
       origin: ORIGIN,
     })).rejects.toBeInstanceOf(TravelServiceInputError);
@@ -469,6 +517,7 @@ describe("TravelService", () => {
     const result = await travel.calculate({
       candidates: [plan("private", 10_000, ["extra"])],
       capturedEvaluationTime: NOW,
+      marketContext: MARKET,
       mode: "bike",
       origin: sentinelOrigin,
     });
@@ -482,6 +531,7 @@ describe("TravelService", () => {
       routes: [{
         aggregate: {
           calculatedAt: NOW.toISOString(),
+          mode: "bike",
           providerSourceId: "fixture-router",
           routeFingerprint: "route:random-1",
         },

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
 
 import {
@@ -6,11 +6,13 @@ import {
   canonicalGtin,
   claimEligibilityForRunType,
   physicalStoreReplacementCondition,
+  physicalStoreBranchKey,
   hashSourceRecordOutcome,
   normalizePhysicalStoreIngestionOutcome,
   PostgresIngestionRepository,
   reconstructIngestionRunCounters,
   sourceProductReplacementCondition,
+  validateCatalogCategoryPath,
   validateSourceRecordOutcome,
   type PhysicalStoreIngestionOutcome,
   type SourceRecordOutcomeInput,
@@ -88,6 +90,14 @@ describe("ingestion persistence primitives", () => {
     expect(catalogCanonicalMutationDecision({
       canonical,
       incoming,
+      sourceAccessApproved: false,
+    })).toBe("none");
+    expect(catalogCanonicalMutationDecision({
+      canonical,
+      incoming: {
+        ...incoming,
+        categoryPath: [{ depth: 1, name: "Meieri", sourceCategoryId: "10" }],
+      },
       sourceAccessApproved: false,
     })).toBe("none");
     expect(catalogCanonicalMutationDecision({
@@ -195,6 +205,38 @@ describe("ingestion persistence primitives", () => {
       .not.toBe(hashSourceRecordOutcome(left));
   });
 
+  it("accepts only canonical bounded product category paths", () => {
+    expect(() => validateCatalogCategoryPath(undefined)).not.toThrow();
+    expect(() => validateCatalogCategoryPath([])).not.toThrow();
+    expect(() => validateCatalogCategoryPath([
+      { depth: 1, name: "Meieri", sourceCategoryId: "10" },
+      { depth: 2, name: "Melk", sourceCategoryId: "20" },
+    ])).not.toThrow();
+
+    expect(() => validateCatalogCategoryPath([
+      { depth: 2, name: "Melk", sourceCategoryId: "20" },
+      { depth: 1, name: "Meieri", sourceCategoryId: "10" },
+    ])).toThrow(/canonical order/i);
+    expect(() => validateCatalogCategoryPath([
+      { depth: 1, name: "Meieri", sourceCategoryId: "10" },
+      { depth: 2, name: "Konflikt", sourceCategoryId: "10" },
+    ])).toThrow(/unique/i);
+    expect(() => validateCatalogCategoryPath([
+      { depth: -1, name: "Meieri", sourceCategoryId: "10" },
+    ])).toThrow(/depth/i);
+    expect(() => validateCatalogCategoryPath([
+      { depth: 1, name: " Meieri", sourceCategoryId: "10" },
+    ])).toThrow(/name/i);
+    expect(() => validateCatalogCategoryPath([
+      { depth: 1, name: "Meieri", sourceCategoryId: "01" },
+    ])).toThrow(/sourceCategoryId/i);
+    expect(() => validateCatalogCategoryPath(Array.from({ length: 101 }, (_, index) => ({
+      depth: index,
+      name: `Kategori ${index}`,
+      sourceCategoryId: String(index),
+    })))).toThrow(/at most 100/i);
+  });
+
   it("reconstructs complete worker counters from persisted outcome states", () => {
     expect(
       reconstructIngestionRunCounters(
@@ -254,6 +296,71 @@ describe("ingestion persistence primitives", () => {
         subjectChain: "extra",
       }),
     ).toThrow(/latitude/i);
+  });
+
+  it("accepts only canonical four-digit postal evidence", () => {
+    const outcome = {
+      outcomeState: "accepted" as const,
+      recordKind: "physical-store" as const,
+      recordedAt,
+      sourceRecordId: "store-postal",
+      store: {
+        latitude: 59.91,
+        longitude: 10.75,
+        name: "Postalbutikk",
+        observedAt: recordedAt,
+        postalCode: "0152",
+      },
+      subjectChain: "extra" as const,
+    };
+
+    expect(normalizePhysicalStoreIngestionOutcome(outcome)).toMatchObject({
+      normalizedRecord: { postalCode: "0152" },
+      outcomeState: "accepted",
+    });
+    for (const postalCode of ["152", "01520", "ABCD", " 0152"] as const) {
+      expect(() => normalizePhysicalStoreIngestionOutcome({
+        ...outcome,
+        store: { ...outcome.store, postalCode },
+      })).toThrow(/exactly four digits/i);
+    }
+  });
+
+  it("derives opaque stable branch identities without source-boundary collisions", () => {
+    expect(physicalStoreBranchKey("source-a", "store-1")).toMatch(/^[0-9a-f]{64}$/);
+    expect(physicalStoreBranchKey("source-a", "store-1")).toBe(
+      physicalStoreBranchKey("source-a", "store-1"),
+    );
+    expect(physicalStoreBranchKey("source-a", "store-1")).not.toBe(
+      physicalStoreBranchKey("source-b", "store-1"),
+    );
+    expect(physicalStoreBranchKey("a", "b\u001fc")).not.toBe(
+      physicalStoreBranchKey("a\u001fb", "c"),
+    );
+  });
+
+  it("rejects absent or duplicate physical-store coverage before opening a transaction", async () => {
+    const transaction = vi.fn(() => {
+      throw new Error("transaction must not start");
+    });
+    const repository = new PostgresIngestionRepository({ transaction } as never, {
+      verifyFence: async () => undefined,
+    });
+    const handle = {
+      fenceToken: "fence",
+      id: 1,
+      jobId: "physical-store-job",
+      runType: "physical-stores",
+      sourceId: "kassalapp",
+    } as const;
+
+    await expect(repository.persistPhysicalStoreOutcomes(handle, [], []))
+      .rejects.toThrow(/1-3 chain rows/i);
+    await expect(repository.persistPhysicalStoreOutcomes(handle, [], [
+      { chain: "extra", checkedAt: recordedAt, reason: "REQUEST_FAILED", recordCount: 0, state: "unknown" },
+      { chain: "extra", checkedAt: recordedAt, reason: "REQUEST_FAILED", recordCount: 0, state: "unknown" },
+    ])).rejects.toThrow(/unique/i);
+    expect(transaction).not.toHaveBeenCalled();
   });
 
   it("rejects unbounded outcome batches before opening a transaction", async () => {

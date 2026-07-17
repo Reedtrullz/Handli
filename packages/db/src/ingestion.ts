@@ -9,6 +9,8 @@ import {
   canonicalProducts,
   dataSources,
   ingestionRuns,
+  physicalStoreCoverageChecks,
+  physicalStoreObservations,
   physicalStores,
   priceCache,
   priceCoverageChecks,
@@ -77,8 +79,25 @@ export type PhysicalStoreIngestionOutcome =
     })
   | (NonAcceptedSourceRecordOutcome & { recordKind: "physical-store" });
 
+export type PhysicalStoreCoverageReason =
+  | "DUPLICATE_IDENTITY"
+  | "INVALID_RECORDS"
+  | "MISSING_SUPPORTED_CHAIN"
+  | "POSSIBLY_TRUNCATED"
+  | "REQUEST_FAILED";
+
+export type PhysicalStoreCoverageInput = {
+  chain: SupportedChain;
+  checkedAt: Date;
+  recordCount: number;
+} & (
+  | { state: "complete"; reason?: never }
+  | { state: "unknown"; reason: PhysicalStoreCoverageReason }
+);
+
 export type CatalogProductRecord = {
   brand?: string;
+  categoryPath?: readonly CatalogCategoryPathEntry[];
   displayName: string;
   packageAmount: number;
   packageUnit: "g" | "ml" | "package" | "piece";
@@ -86,6 +105,12 @@ export type CatalogProductRecord = {
   sourceUpdatedAt?: Date;
   unitsPerPack?: number;
 };
+
+export interface CatalogCategoryPathEntry {
+  sourceCategoryId: string;
+  depth: number;
+  name: string;
+}
 
 type CatalogCanonicalSnapshot = {
   brand: string | null;
@@ -210,6 +235,8 @@ function throwIfIngestionCancelled(signal?: AbortSignal): void {
 }
 
 const MAX_INGESTION_OUTCOMES_PER_WRITE = 1_000;
+const MAX_PHYSICAL_STORE_COVERAGE_PER_WRITE = 3;
+const MAX_CATALOG_CATEGORY_PATH_LENGTH = 100;
 
 export const sourceProductReplacementCondition = sql`
   ${sourceProducts.lastSeenAt} < excluded.last_seen_at
@@ -222,6 +249,17 @@ export const sourceProductReplacementCondition = sql`
 export const physicalStoreReplacementCondition = sql`
   ${physicalStores.observedAt} < excluded.observed_at
 `;
+
+export function physicalStoreBranchKey(sourceId: string, externalId: string): string {
+  requireBoundedString(sourceId, "sourceId", 64);
+  requireBoundedString(externalId, "externalId", 128);
+  return createHash("sha256")
+    .update(Buffer.byteLength(sourceId, "utf8").toString())
+    .update(":")
+    .update(sourceId)
+    .update(externalId)
+    .digest("hex");
+}
 
 export class IngestionOutcomeConflictError extends Error {
   constructor(
@@ -452,7 +490,9 @@ function validatePhysicalStoreRecord(store: PhysicalStoreRecord): void {
     requireBoundedString(store.addressLine, "store.addressLine", 240);
   }
   if (store.postalCode !== undefined) {
-    requireBoundedString(store.postalCode, "store.postalCode", 8);
+    if (!/^[0-9]{4}$/u.test(store.postalCode)) {
+      throw new TypeError("store.postalCode must contain exactly four digits");
+    }
   }
   if (store.municipalityCode !== undefined) {
     requireBoundedString(store.municipalityCode, "store.municipalityCode", 8);
@@ -479,6 +519,58 @@ function validatePhysicalStoreRecord(store: PhysicalStoreRecord): void {
   }
 }
 
+function validatePhysicalStoreCoverage(
+  coverage: readonly PhysicalStoreCoverageInput[],
+): void {
+  if (
+    !Array.isArray(coverage)
+    || coverage.length < 1
+    || coverage.length > MAX_PHYSICAL_STORE_COVERAGE_PER_WRITE
+  ) {
+    throw new RangeError("Physical-store coverage requires 1-3 chain rows");
+  }
+  const chains = new Set<SupportedChain>();
+  for (const entry of coverage) {
+    if (
+      entry.chain !== "bunnpris"
+      && entry.chain !== "extra"
+      && entry.chain !== "rema-1000"
+    ) {
+      throw new TypeError("Physical-store coverage chain is invalid");
+    }
+    if (chains.has(entry.chain)) {
+      throw new TypeError("Physical-store coverage chains must be unique");
+    }
+    chains.add(entry.chain);
+    requireValidDate(entry.checkedAt, "coverage.checkedAt");
+    if (
+      !Number.isSafeInteger(entry.recordCount)
+      || entry.recordCount < 0
+      || entry.recordCount > MAX_INGESTION_OUTCOMES_PER_WRITE
+    ) {
+      throw new RangeError("coverage.recordCount must be an integer from 0 to 1000");
+    }
+    if (entry.state === "complete") {
+      if (entry.reason !== undefined || entry.recordCount < 1) {
+        throw new TypeError("Complete physical-store coverage requires records and no reason");
+      }
+      continue;
+    }
+    if (
+      entry.state !== "unknown"
+      || ![
+        "DUPLICATE_IDENTITY",
+        "INVALID_RECORDS",
+        "MISSING_SUPPORTED_CHAIN",
+        "POSSIBLY_TRUNCATED",
+        "REQUEST_FAILED",
+      ].includes(entry.reason)
+    ) {
+      throw new TypeError("Unknown physical-store coverage requires an explicit known reason");
+    }
+  }
+}
+
 function normalizeCatalogOutcome(outcome: CatalogIngestionOutcome): SourceRecordOutcomeInput {
   if (outcome.outcomeState !== "accepted" || !("product" in outcome)) {
     return outcome;
@@ -487,6 +579,9 @@ function normalizeCatalogOutcome(outcome: CatalogIngestionOutcome): SourceRecord
   return {
     normalizedRecord: {
       ...(product.brand === undefined ? {} : { brand: product.brand }),
+      ...(product.categoryPath === undefined
+        ? {}
+        : { categoryPath: product.categoryPath.map((entry) => ({ ...entry })) }),
       displayName: product.displayName,
       packageAmount: product.packageAmount,
       packageUnit: product.packageUnit,
@@ -540,9 +635,78 @@ function normalizePriceOutcome(outcome: PriceIngestionOutcome): SourceRecordOutc
   };
 }
 
+function compareCategoryPathEntries(
+  left: CatalogCategoryPathEntry,
+  right: CatalogCategoryPathEntry,
+): number {
+  return left.depth - right.depth
+    || Number(left.sourceCategoryId) - Number(right.sourceCategoryId);
+}
+
+export function validateCatalogCategoryPath(categoryPath: unknown): void {
+  if (categoryPath === undefined) return;
+  if (!Array.isArray(categoryPath)) {
+    throw new TypeError("product.categoryPath must be an array when supplied");
+  }
+  if (categoryPath.length > MAX_CATALOG_CATEGORY_PATH_LENGTH) {
+    throw new RangeError(
+      `product.categoryPath accepts at most ${MAX_CATALOG_CATEGORY_PATH_LENGTH} entries`,
+    );
+  }
+
+  const seenIds = new Set<string>();
+  let previous: CatalogCategoryPathEntry | undefined;
+  for (const [index, candidate] of categoryPath.entries()) {
+    if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new TypeError(`product.categoryPath[${index}] must be an object`);
+    }
+    const entry = candidate as Record<string, unknown>;
+    if (
+      Object.keys(entry).sort().join("\u0000")
+      !== ["depth", "name", "sourceCategoryId"].join("\u0000")
+    ) {
+      throw new TypeError(`product.categoryPath[${index}] must contain only known fields`);
+    }
+    if (
+      typeof entry.sourceCategoryId !== "string"
+      || !/^(?:0|[1-9][0-9]*)$/.test(entry.sourceCategoryId)
+      || !Number.isSafeInteger(Number(entry.sourceCategoryId))
+      || String(Number(entry.sourceCategoryId)) !== entry.sourceCategoryId
+    ) {
+      throw new TypeError(`product.categoryPath[${index}].sourceCategoryId is invalid`);
+    }
+    if (
+      typeof entry.depth !== "number"
+      || !Number.isSafeInteger(entry.depth)
+      || entry.depth < 0
+      || entry.depth > 100
+    ) {
+      throw new TypeError(`product.categoryPath[${index}].depth is invalid`);
+    }
+    if (
+      typeof entry.name !== "string"
+      || entry.name.length < 1
+      || entry.name.length > 500
+      || entry.name.trim() !== entry.name
+    ) {
+      throw new TypeError(`product.categoryPath[${index}].name is invalid`);
+    }
+    if (seenIds.has(entry.sourceCategoryId)) {
+      throw new TypeError("product.categoryPath sourceCategoryId values must be unique");
+    }
+    seenIds.add(entry.sourceCategoryId);
+    const normalized = entry as unknown as CatalogCategoryPathEntry;
+    if (previous !== undefined && compareCategoryPathEntries(previous, normalized) >= 0) {
+      throw new TypeError("product.categoryPath must use canonical order");
+    }
+    previous = normalized;
+  }
+}
+
 function validateCatalogProduct(product: CatalogProductRecord): void {
   requireBoundedString(product.displayName, "product.displayName", 240);
   if (product.brand !== undefined) requireBoundedString(product.brand, "product.brand", 160);
+  validateCatalogCategoryPath(product.categoryPath);
   requireValidDate(product.retrievedAt, "product.retrievedAt");
   if (product.sourceUpdatedAt !== undefined) {
     requireValidDate(product.sourceUpdatedAt, "product.sourceUpdatedAt");
@@ -896,16 +1060,55 @@ export class PostgresIngestionRepository {
   async persistPhysicalStoreOutcomes(
     handle: IngestionRunHandle,
     outcomes: readonly PhysicalStoreIngestionOutcome[],
+    coverage: readonly PhysicalStoreCoverageInput[],
     signal?: AbortSignal,
   ): Promise<IngestionWriteResult> {
     requireBoundedOutcomeBatch(outcomes);
+    validatePhysicalStoreCoverage(coverage);
     return this.withRunningRun(handle, async (transaction) => {
+      const coverageByChain = new Map(coverage.map((entry) => [entry.chain, entry]));
+      const outcomeIdentity = new Set<string>();
       for (const outcome of outcomes) {
         throwIfIngestionCancelled(signal);
         validateSourceRecordOutcome(outcome);
+        if (
+          outcome.subjectChain !== undefined
+          && !coverageByChain.has(outcome.subjectChain)
+        ) {
+          throw new TypeError("Every physical-store subject chain requires coverage evidence");
+        }
+        const identity = `${outcome.recordKind}\u0000${outcome.sourceRecordId}`;
+        if (outcomeIdentity.has(identity)) {
+          throw new TypeError("Physical-store source identities must be unique within a snapshot");
+        }
+        outcomeIdentity.add(identity);
         if (outcome.outcomeState !== "accepted") continue;
         requireBoundedString(outcome.sourceRecordId, "sourceRecordId", 128);
         validatePhysicalStoreRecord(outcome.store);
+        const chainCoverage = coverageByChain.get(outcome.subjectChain);
+        if (
+          chainCoverage === undefined
+          || outcome.store.observedAt > chainCoverage.checkedAt
+        ) {
+          throw new TypeError("Physical-store observations must precede their chain coverage check");
+        }
+      }
+      for (const entry of coverage) {
+        if (entry.state !== "complete") continue;
+        const chainOutcomes = outcomes.filter(
+          ({ subjectChain }) => subjectChain === entry.chain,
+        );
+        if (
+          chainOutcomes.length !== entry.recordCount
+          || chainOutcomes.some((outcome) =>
+            outcome.outcomeState !== "accepted"
+            || outcome.store.latitude === undefined
+            || outcome.store.longitude === undefined)
+        ) {
+          throw new TypeError(
+            "Complete physical-store coverage requires every counted routing record",
+          );
+        }
       }
 
       const normalized = outcomes.map(normalizePhysicalStoreIngestionOutcome);
@@ -920,6 +1123,21 @@ export class PostgresIngestionRepository {
         ) {
           continue;
         }
+        await transaction
+          .insert(physicalStoreObservations)
+          .values({
+            branchKey: physicalStoreBranchKey(handle.sourceId, outcome.sourceRecordId),
+            chain: outcome.subjectChain,
+            externalId: outcome.sourceRecordId,
+            ingestionRunId: handle.id,
+            latitude: outcome.store.latitude.toFixed(6),
+            longitude: outcome.store.longitude.toFixed(6),
+            name: outcome.store.name,
+            observedAt: outcome.store.observedAt,
+            postalCode: outcome.store.postalCode,
+            sourceId: handle.sourceId,
+            status: outcome.store.status ?? "active",
+          });
         await transaction
           .insert(physicalStores)
           .values({
@@ -952,6 +1170,16 @@ export class PostgresIngestionRepository {
             setWhere: physicalStoreReplacementCondition,
           });
       }
+      throwIfIngestionCancelled(signal);
+      await transaction.insert(physicalStoreCoverageChecks).values(coverage.map((entry) => ({
+        chain: entry.chain,
+        checkedAt: entry.checkedAt,
+        ingestionRunId: handle.id,
+        reason: entry.state === "unknown" ? entry.reason : null,
+        recordCount: entry.recordCount,
+        sourceId: handle.sourceId,
+        state: entry.state,
+      })));
       return audit;
     }, signal);
   }
@@ -1306,6 +1534,7 @@ export class PostgresIngestionRepository {
       .insert(catalogObservations)
       .values({
         brand: outcome.product.brand ?? null,
+        categoryPath: outcome.product.categoryPath?.map((entry) => ({ ...entry })) ?? null,
         canonicalProductId: productId,
         displayName: outcome.product.displayName,
         gtin: outcome.subjectEan,

@@ -78,10 +78,17 @@ export interface KassalappProductSourceRecordV1 extends SourceRecordBase {
   ean: string;
   name: string;
   brand?: string;
+  categoryPath?: KassalappProductCategoryV1[];
   chainCodes?: string[];
   packageMeasure?: NormalizedPackageMeasure;
   packageMeasureState?: "missing" | "unknown-unit";
   sourceUpdatedAt?: string;
+}
+
+export interface KassalappProductCategoryV1 {
+  sourceCategoryId: string;
+  depth: number;
+  name: string;
 }
 
 export interface KassalappPriceSourceRecordV1 extends SourceRecordBase {
@@ -123,6 +130,7 @@ export interface KassalappPhysicalStoreSourceRecordV1 extends SourceRecordBase {
   chainId: KassalappChainId;
   chainCode: string;
   address?: string;
+  postalCode?: string;
   latitude?: number;
   longitude?: number;
   sourceUpdatedAt?: string;
@@ -270,8 +278,8 @@ const comparisonStoreSchema = z.object({
 });
 
 const comparisonCategorySchema = z.object({
-  id: z.number().int().safe(),
-  depth: z.number().int().safe(),
+  id: z.number().int().safe().nonnegative(),
+  depth: z.number().int().safe().nonnegative().max(100),
   name: sourceStringSchema,
 });
 
@@ -352,10 +360,44 @@ export interface ProductNormalizationContext {
   retrievedAt: string;
 }
 
+type ProductCategoryPathResult =
+  | { state: "normalized"; categoryPath: KassalappProductCategoryV1[] | undefined }
+  | { state: "conflict" };
+
+function normalizeProductCategoryPath(
+  categories: readonly z.infer<typeof comparisonCategorySchema>[] | null,
+): ProductCategoryPathResult {
+  if (categories === null) return { state: "normalized", categoryPath: undefined };
+  const byId = new Map<string, KassalappProductCategoryV1>();
+  for (const category of categories) {
+    const normalized = {
+      depth: category.depth,
+      name: category.name,
+      sourceCategoryId: String(category.id),
+    };
+    const previous = byId.get(normalized.sourceCategoryId);
+    if (
+      previous !== undefined
+      && (previous.depth !== normalized.depth || previous.name !== normalized.name)
+    ) {
+      return { state: "conflict" };
+    }
+    byId.set(normalized.sourceCategoryId, normalized);
+  }
+  return {
+    state: "normalized",
+    categoryPath: [...byId.values()].sort((left, right) =>
+      left.depth - right.depth
+      || Number(left.sourceCategoryId) - Number(right.sourceCategoryId)
+      || left.name.localeCompare(right.name, "nb-NO")),
+  };
+}
+
 function normalizedProductRecord(
   parsed: z.infer<typeof upstreamComparisonProductSchema> | z.infer<typeof upstreamProductResourceSchema>,
   ean: string,
   retrievedAt: string,
+  categoryPath: KassalappProductCategoryV1[] | undefined,
   sourceUpdatedAt?: string,
 ): KassalappProductSourceRecordV1 {
   const sourceRecordId = String(parsed.id);
@@ -368,6 +410,7 @@ function normalizedProductRecord(
     ean,
     name: parsed.name,
     ...(parsed.brand === "" || parsed.brand === null ? {} : { brand: parsed.brand }),
+    ...(categoryPath === undefined ? {} : { categoryPath }),
     ...(chainCodes.length === 0 ? {} : { chainCodes }),
     ...(packageResult.state === "normalized" ? { packageMeasure: packageResult.measure } : {}),
     ...(packageResult.state === "unknown" ? {
@@ -416,9 +459,19 @@ export function normalizeProductComparisonSourceResponse(
     if (packageResult.state === "quarantined") {
       return { ean, state: "quarantined" as const, sourceRecordId, reason: "INVALID_MEASURE" as const };
     }
+    const categoryPath = normalizeProductCategoryPath(parsed.data.category);
+    if (categoryPath.state === "conflict") {
+      return { ean, state: "quarantined" as const, sourceRecordId, reason: "DUPLICATE_IDENTITY" as const };
+    }
     return {
       state: "accepted" as const,
-      record: normalizedProductRecord(parsed.data, ean, retrievedAt, sourceUpdatedAt),
+      record: normalizedProductRecord(
+        parsed.data,
+        ean,
+        retrievedAt,
+        categoryPath.categoryPath,
+        sourceUpdatedAt,
+      ),
     };
   }));
 }
@@ -458,10 +511,14 @@ export function normalizeProductSourceResponse(
   if (packageResult.state === "quarantined") {
     return { state: "quarantined", sourceRecordId, reason: "INVALID_MEASURE" };
   }
+  const categoryPath = normalizeProductCategoryPath(parsed.data.category);
+  if (categoryPath.state === "conflict") {
+    return { state: "quarantined", sourceRecordId, reason: "DUPLICATE_IDENTITY" };
+  }
 
   return {
     state: "accepted",
-    record: normalizedProductRecord(parsed.data, ean, retrievedAt),
+    record: normalizedProductRecord(parsed.data, ean, retrievedAt, categoryPath.categoryPath),
   };
 }
 
@@ -960,6 +1017,13 @@ const upstreamPhysicalStoreSchema = z.object({
   }
 });
 
+function postalCodeFromAddress(address: string): string | undefined {
+  const matches = [...address.matchAll(/(?:^|,)\s*([0-9]{4})(?=\s|$)/gu)]
+    .map((match) => match[1]!)
+    .filter((postalCode, index, values) => values.indexOf(postalCode) === index);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 export interface PhysicalStoreNormalizationContext {
   now: Date;
   retrievedAt: string;
@@ -1018,6 +1082,7 @@ export function normalizePhysicalStoreSourceResponse(
     if (chainId === undefined) {
       return { state: "quarantined", sourceRecordId, reason: "UNKNOWN_CHAIN", chainCode };
     }
+    const postalCode = postalCodeFromAddress(parsed.data.address);
     return {
       state: "accepted",
       record: {
@@ -1027,6 +1092,7 @@ export function normalizePhysicalStoreSourceResponse(
         chainId,
         chainCode,
         address: parsed.data.address,
+        ...(postalCode === undefined ? {} : { postalCode }),
         ...(parsed.data.position.lat === null ? {} : {
           latitude: parsed.data.position.lat,
           longitude: parsed.data.position.lng!,

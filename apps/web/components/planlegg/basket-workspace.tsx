@@ -12,6 +12,7 @@ import {
   type BrowserBasket,
 } from "../../lib/browser-basket";
 import type { ReviewedFamilyCandidateInspection } from "../../lib/reviewed-family-candidates";
+import { MarketSelector } from "../market/market-selector";
 import { BasketRow } from "./basket-row";
 import { FamilyComposer } from "./family-composer";
 import { NeedComposer, searchProductsFromApi, type ProductSearch } from "./need-composer";
@@ -73,6 +74,9 @@ function BasketWorkspaceClient({
 }: Required<Pick<BasketWorkspaceProps, "searchProducts" | "createId">> &
   Pick<BasketWorkspaceProps, "storage" | "searchDelayMs" | "inspectFamilyCandidates">) {
   const [basket, setBasket] = useState<BrowserBasket>(() => loadBasket(storage));
+  const [invalidQuantityNeedIds, setInvalidQuantityNeedIds] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   useEffect(() => {
     saveBasket(basket, storage);
@@ -81,6 +85,7 @@ function BasketWorkspaceClient({
   function addApprovedNeed(
     query: string,
     quantity: number,
+    quantityUnit: "piece" | "package" | "g" | "ml",
     rule: Omit<MatchRule, "id">,
     products: Product[] = [],
   ): void {
@@ -94,7 +99,7 @@ function BasketWorkspaceClient({
           id: needId,
           query,
           quantity,
-          quantityUnit: "each",
+          quantityUnit,
           matchRuleId: ruleId,
           required: true,
         },
@@ -106,10 +111,15 @@ function BasketWorkspaceClient({
     }));
   }
 
-  function addExactProduct(product: Product, quantity: number): void {
+  function addExactProduct(
+    product: Product,
+    quantity: number,
+    quantityUnit: "piece" | "package" | "g" | "ml",
+  ): void {
     addApprovedNeed(
       product.name,
       quantity,
+      quantityUnit,
       {
         mode: "exact",
         exactEan: product.ean,
@@ -122,16 +132,31 @@ function BasketWorkspaceClient({
 
   function removeNeed(needId: string): void {
     setBasket((current) => removeBasketNeed(current, needId));
+    setInvalidQuantityNeedIds((current) => {
+      if (!current.has(needId)) return current;
+      const next = new Set(current);
+      next.delete(needId);
+      return next;
+    });
   }
 
-  const quantities = basket.needs.reduce((sum, need) => sum + need.quantity, 0);
   const readiness = strictPlanRequestReadiness(basket);
+  const quantitiesAreValid = invalidQuantityNeedIds.size === 0;
+  const canPlan = readiness.state === "ready" && quantitiesAreValid;
   const familyIds = new Set(basket.familyConfirmations.map(({ family }) => family.id));
 
   return (
     <main className="planlegg-main">
       <div className="planner-grid">
         <div className="basket-column">
+            <MarketSelector
+              id="planlegg-market"
+              marketContext={basket.marketContext}
+              onChange={(marketContext) => setBasket((current) => ({
+                ...current,
+                marketContext,
+              }))}
+            />
             <NeedComposer
               onProduct={addExactProduct}
               searchProducts={searchProducts}
@@ -152,18 +177,21 @@ function BasketWorkspaceClient({
 
             <section className="basket-section">
               <div className="section-heading-row">
-                <h2>Din kurv ({quantities} varer)</h2>
+                <h2>Din kurv ({basket.needs.length} varebehov)</h2>
                 {basket.needs.length > 0 ? (
                   <button
                     className="clear-button"
                     type="button"
-                    onClick={() => setBasket((current) => ({
-                      ...current,
-                      familyConfirmations: [],
-                      needs: [],
-                      matchingRules: [],
-                      products: [],
-                    }))}
+                    onClick={() => {
+                      setBasket((current) => ({
+                        ...current,
+                        familyConfirmations: [],
+                        needs: [],
+                        matchingRules: [],
+                        products: [],
+                      }));
+                      setInvalidQuantityNeedIds(new Set());
+                    }}
                   >Tøm liste</button>
                 ) : null}
               </div>
@@ -187,12 +215,22 @@ function BasketWorkspaceClient({
                         rule={rule}
                         product={product}
                         familyConfirmation={familyConfirmation}
-                        onQuantityChange={(quantity) => setBasket((current) => ({
+                        onQuantityChange={(quantity, quantityUnit) => setBasket((current) => ({
                           ...current,
                           needs: current.needs.map((candidate) =>
-                            candidate.id === need.id ? { ...candidate, quantity } : candidate,
+                            candidate.id === need.id
+                              ? { ...candidate, quantity, quantityUnit }
+                              : candidate,
                           ),
                         }))}
+                        onQuantityValidityChange={(valid) => setInvalidQuantityNeedIds(
+                          (current) => {
+                            const next = new Set(current);
+                            if (valid) next.delete(need.id);
+                            else next.add(need.id);
+                            return next;
+                          },
+                        )}
                         onRemove={() => removeNeed(need.id)}
                       />
                     );
@@ -206,18 +244,32 @@ function BasketWorkspaceClient({
             <div className="plan-card">
               <h2 id="plan-summary-title">Din handleplan</h2>
               <dl className="plan-stats">
-                <div><dt>Varer i kurv</dt><dd>{quantities} stk</dd></div>
-                <div><dt>Status på treff</dt><dd>{readiness.state === "ready" ? "Alle klare" : basket.needs.length > 0 ? "Krever ny godkjenning" : "Ingen varer"}</dd></div>
+                <div><dt>Varebehov i kurv</dt><dd>{basket.needs.length}</dd></div>
+                <div><dt>Status på treff</dt><dd>{!quantitiesAreValid
+                  ? "Korriger mengde"
+                  : readiness.state === "ready"
+                  ? "Alle klare"
+                  : readiness.state === "requires-market-selection"
+                    ? "Velg prisområde"
+                    : basket.needs.length > 0
+                      ? "Krever ny godkjenning"
+                      : "Ingen varer"}</dd></div>
               </dl>
               <a
-                className={`primary-button find-plan${readiness.state !== "ready" ? " disabled" : ""}`}
-                href={readiness.state === "ready" ? "/planlegg/resultat" : undefined}
-                aria-disabled={readiness.state !== "ready"}
+                className={`primary-button find-plan${canPlan ? "" : " disabled"}`}
+                href={canPlan ? "/planlegg/resultat" : undefined}
+                aria-disabled={!canPlan}
               >
                 Finn handleplan <span aria-hidden="true">→</span>
               </a>
               {readiness.state === "requires-reviewed-approval" ? (
                 <p role="status">Et eldre eller ufullstendig varetypevalg må fjernes og godkjennes mot den publiserte kandidatlisten på nytt.</p>
+              ) : null}
+              {readiness.state === "requires-market-selection" ? (
+                <p role="status">Handlelisten er bevart, men velg et tilgjengelig prisområde før du beregner planen.</p>
+              ) : null}
+              {!quantitiesAreValid ? (
+                <p role="alert">Korriger den ugyldige mengden i kurven før du beregner planen.</p>
               ) : null}
               <p className="plan-note">Vi sammenligner komplette kurver blant prisene vi kan verifisere, på tvers av inntil 3 butikker. Ukjent dekning vises i resultatet.</p>
             </div>

@@ -12,7 +12,11 @@ export interface Need {
   id: string;
   query: string;
   quantity: number;
-  quantityUnit: "each" | "g" | "ml";
+  /**
+   * `each` is retained for legacy request compatibility and means packages in
+   * the strict API. New browser requests use the explicit physical units.
+   */
+  quantityUnit: "each" | "g" | "ml" | "piece" | "package";
   matchRuleId: string;
   required: boolean;
 }
@@ -98,7 +102,7 @@ export const needSchema: z.ZodType<Need> = z.object({
   id: nonEmptyStringSchema,
   query: nonEmptyStringSchema,
   quantity: z.number().positive(),
-  quantityUnit: z.enum(["each", "g", "ml"]),
+  quantityUnit: z.enum(["each", "g", "ml", "piece", "package"]),
   matchRuleId: nonEmptyStringSchema,
   required: z.boolean(),
 });

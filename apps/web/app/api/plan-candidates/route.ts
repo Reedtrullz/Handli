@@ -9,11 +9,15 @@ import {
   type FamilyCandidateServiceErrorCode,
 } from "../../../lib/server/family-candidate-service";
 import {
+  publicApiRuntimeControlResponse,
+  runControlledPublicApiOperation,
+  type ControlledPublicApiRouteOptions,
+} from "../../../lib/server/public-api-route-controls";
+import {
   awaitWithinRequest,
   createRequestLifetime,
   RequestOperationAbortedError,
   resolveRequestTimeoutMs,
-  type BoundedRequestOptions,
   type RequestLifetime,
 } from "../../../lib/server/request-lifetime";
 
@@ -153,7 +157,7 @@ function hasOwnContractVersion(input: unknown): input is { contractVersion: unkn
 
 export function createPlanCandidatesHandler(
   getService: ServiceProvider,
-  options: BoundedRequestOptions = {},
+  options: ControlledPublicApiRouteOptions = {},
 ) {
   const timeoutMs = resolveRequestTimeoutMs(options);
   return async function POST(request: Request): Promise<Response> {
@@ -182,9 +186,17 @@ export function createPlanCandidatesHandler(
       if (!parsed.success) return errorResponse("INVALID_REQUEST", 400);
 
       try {
-        const service = await awaitWithinRequest(getService, lifetime.signal);
         const result = await awaitWithinRequest(
-          () => service.inspect(parsed.data, lifetime.signal),
+          () => runControlledPublicApiOperation(
+            options,
+            "plan-candidates",
+            parsed.data,
+            lifetime.signal,
+            async (operationSignal) => {
+              const service = await awaitWithinRequest(getService, operationSignal);
+              return service.inspect(parsed.data, operationSignal);
+            },
+          ),
           lifetime.signal,
         );
         const response = reviewedFamilyCandidateInspectionResponseSchemaFor(parsed.data)
@@ -194,6 +206,8 @@ export function createPlanCandidatesHandler(
       } catch (error) {
         const abortResponse = requestAbortResponse(lifetime);
         if (abortResponse !== undefined) return abortResponse;
+        const controlledResponse = publicApiRuntimeControlResponse(error);
+        if (controlledResponse !== undefined) return controlledResponse;
         if (error instanceof RequestOperationAbortedError) {
           return errorResponse("REQUEST_CANCELLED", 499);
         }
@@ -208,7 +222,11 @@ export function createPlanCandidatesHandler(
   };
 }
 
-export const POST = createPlanCandidatesHandler(async () => {
+export async function POST(request: Request): Promise<Response> {
   const { getServerContainer } = await import("../../../lib/server/container");
-  return getServerContainer().familyCandidateService;
-});
+  const container = getServerContainer();
+  return createPlanCandidatesHandler(
+    () => container.familyCandidateService,
+    { runtimeControls: container.publicApiRuntimeControls },
+  )(request);
+}

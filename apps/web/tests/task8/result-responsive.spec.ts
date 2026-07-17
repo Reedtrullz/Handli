@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 const basket = {
-  version: 3,
+  version: 4,
   needs: [
     { id: "milk", query: "Lettmelk", quantity: 1, quantityUnit: "each", matchRuleId: "milk-rule", required: true },
     { id: "cheese", query: "Norvegia", quantity: 1, quantityUnit: "each", matchRuleId: "cheese-rule", required: true },
@@ -19,6 +19,7 @@ const basket = {
   ],
   convenienceWeightBasisPoints: 5_000,
   familyConfirmations: [],
+  marketContext: { contractVersion: 1, countryCode: "NO", kind: "national" },
   travel: { enabled: false, mode: "car" },
 };
 
@@ -43,7 +44,7 @@ for (const viewport of viewports) {
   test(`${viewport.width}px result workspace is stable and keyboard operable`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: "reduce" });
-    await page.addInitScript((value) => localStorage.setItem("handleplan:basket:v3", JSON.stringify(value)), basket);
+    await page.addInitScript((value) => localStorage.setItem("handleplan:basket:v4", JSON.stringify(value)), basket);
     await page.route("**/api/plans", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(response) }));
     await page.goto("/planlegg/resultat");
     await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important}html,body,button,input{font-family:Arial,sans-serif!important}.font-mono,.result-total{font-family:monospace!important}nextjs-portal{display:none!important}" });

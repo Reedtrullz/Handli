@@ -1,7 +1,9 @@
 import {
+  deriveExactProductPlanDeltaExplanationsV1,
   exactProductPlanApiEvidenceEnvelopeSchema,
   type ExactProductPlanApiRequest,
   planResultV2Schema,
+  type PlanResultV2,
   type ReviewedFamilyPlanApiRequestV2,
 } from "@handleplan/domain";
 import { describe, expect, it, vi } from "vitest";
@@ -62,6 +64,8 @@ const body = {
 
 const exactBody: ExactProductPlanApiRequest = {
   contractVersion: 1,
+  enabledMembershipProgramIds: [],
+  marketContext: { contractVersion: 1, countryCode: "NO", kind: "national" },
   maxStores: 3,
   needs: [
     {
@@ -80,6 +84,8 @@ const exactBody: ExactProductPlanApiRequest = {
 
 const reviewedBody: ReviewedFamilyPlanApiRequestV2 = {
   contractVersion: 2,
+  enabledMembershipProgramIds: [],
+  marketContext: { contractVersion: 1, countryCode: "NO", kind: "national" },
   maxStores: 2,
   needs: [{
     id: "need:milk",
@@ -196,6 +202,20 @@ const exactEvidence = exactProductPlanApiEvidenceEnvelopeSchema.parse({
   }],
 });
 
+function exactExplanations(
+  plans: readonly PlanResultV2[],
+  evidence = exactEvidence,
+) {
+  const value = deriveExactProductPlanDeltaExplanationsV1({
+    evidence,
+    generatedAt: "2026-07-15T12:00:00.000Z",
+    marketContext: exactBody.marketContext,
+    plans,
+  });
+  if (value === undefined) throw new Error("invalid route explanation fixture");
+  return value;
+}
+
 function request(
   value: unknown = body,
   headers: HeadersInit = { "content-type": "application/json" },
@@ -249,8 +269,11 @@ describe("POST /api/plans", () => {
 
   it("routes versioned requests to the exact-product service", async () => {
     const calculateExact = vi.fn(async () => ({
+      completeCandidateSet: { evidence: exactEvidence, plans: [exactPlan] },
       evidence: exactEvidence,
       generatedAt: "2026-07-15T12:00:00.000Z",
+      marketContext: exactBody.marketContext,
+      planDeltaExplanations: exactExplanations([exactPlan]),
       plans: [exactPlan],
       priceDataSource: "cache" as const,
       products: [canonicalProduct],
@@ -267,15 +290,43 @@ describe("POST /api/plans", () => {
       caveats: [
         "Resultatet gjelder prisene Handleplan kunne verifisere; ukjent kjededekning kan påvirke sammenligningen.",
         "Kjedepris betyr ikke at varen er på lager eller har samme hyllepris i din butikk.",
-        "Medlemspriser og kundeavis-tilbud er ikke med i denne beregningen.",
+        "Verifiserte kundeavistilbud kan være med; medlemspriser brukes bare for medlemsprogrammer du selv har slått på.",
       ],
       contractVersion: 1,
+      enabledMembershipProgramIds: [],
       evidence: exactEvidence,
       generatedAt: "2026-07-15T12:00:00.000Z",
+      marketContext: exactBody.marketContext,
+      planDeltaExplanations: exactExplanations([exactPlan]),
       plans: [exactPlan],
       priceDataSource: "cache",
       products: [canonicalProduct],
     });
+  });
+
+  it("rejects a service-owned explanation that is detached from its exact snapshot", async () => {
+    const explanation = exactExplanations([exactPlan]);
+    const entry = explanation.entries[0]!;
+    const calculateExact = vi.fn(async () => ({
+      completeCandidateSet: { evidence: exactEvidence, plans: [exactPlan] },
+      evidence: exactEvidence,
+      generatedAt: "2026-07-15T12:00:00.000Z",
+      marketContext: exactBody.marketContext,
+      planDeltaExplanations: {
+        ...explanation,
+        entries: [{ ...entry, summary: "Forged client-authoritative difference." }],
+      },
+      plans: [exactPlan],
+      priceDataSource: "cache" as const,
+      products: [canonicalProduct],
+    }));
+
+    const response = await createPlansHandler(() => serviceWithExact(calculateExact))(
+      request(exactBody),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ code: "INVALID_SERVICE_RESPONSE" });
   });
 
   it("dispatches contract v2 to deterministic mixed reviewed-family planning", async () => {
@@ -339,6 +390,23 @@ describe("POST /api/plans", () => {
     expect(getService).not.toHaveBeenCalled();
   });
 
+  it("rejects a syntactically valid but unavailable launch market before planning", async () => {
+    const calculateExact = vi.fn();
+    const response = await createPlansHandler(() => serviceWithExact(calculateExact))(request({
+      ...exactBody,
+      marketContext: {
+        contractVersion: 1,
+        countryCode: "NO",
+        kind: "launch-region",
+        regionId: "no-9999-not-launched",
+      },
+    }));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({ code: "MARKET_UNAVAILABLE" });
+    expect(calculateExact).not.toHaveBeenCalled();
+  });
+
   it("rejects browser-owned reviewed product metadata before planning", async () => {
     const calculateReviewed = vi.fn();
     const familyNeed = reviewedBody.needs[0]!;
@@ -387,28 +455,32 @@ describe("POST /api/plans", () => {
   });
 
   it("counts UTF-8 response bytes and rejects an oversized strict result", async () => {
-    const wide = "ø".repeat(180);
+    const wide = "ø".repeat(190);
     const offers = Array.from({ length: 50 }, (_, index) => ({
       applicability: {
-        channels: ["in-store" as const],
+        channels: ["in-store" as const, "online" as const],
         contractVersion: 1 as const,
         endsAt: "2026-07-17T12:00:00.000Z",
-        geographicScope: { kind: "unknown" as const, reason: "ø".repeat(500) },
+        geographicScope: { countryCode: "NO" as const, kind: "national" as const },
         startsAt: "2026-07-15T12:00:00.000Z",
       },
       capturedAt: "2026-07-15T11:00:00.000Z",
-      chainId: `chain:${wide}`,
-      conditions: [{ kind: "public" as const }],
+      chainId: "extra",
+      beforePriceOre: 2_990,
+      conditions: [
+        { kind: "member" as const, programId: "ø".repeat(200) },
+        { kind: "minimum-quantity" as const, quantity: 2 },
+      ],
       contractVersion: 1 as const,
       evidenceLevel: "observed" as const,
-      id: `offer:${index}:${wide}`,
+      id: `offer:${index}:${"ø".repeat(191)}`,
       kind: "official-offer" as const,
       pricing: { kind: "unit" as const, unitPriceOre: 1_990 },
       productMatch: {
-        canonicalProductId: `product:${wide}`,
+        canonicalProductId: `product:${"ø".repeat(192)}`,
         kind: "exact" as const,
       },
-      sourceId: "kassalapp",
+      sourceId: `source:${"ø".repeat(193)}`,
       sourceRecordId: `record:${index}:${wide}`,
     }));
     const strictEvidence = exactProductPlanApiEvidenceEnvelopeSchema.parse({
@@ -419,20 +491,35 @@ describe("POST /api/plans", () => {
           ...exactEvidence.needs[0]!.comparisonScope,
           entries: [
             { chainId: "bunnpris", status: { kind: "unknown", reason: "not-checked" } },
-            { chainId: "extra", status: { kind: "unknown", reason: "not-checked" } },
+            { chainId: "extra", status: { evidenceId: "price:1", kind: "priced" } },
             { chainId: "rema-1000", status: { kind: "unknown", reason: "not-checked" } },
           ],
         },
         officialOffers: offers,
-        ordinaryPrices: [],
+        ordinaryPrices: exactEvidence.needs[0]!.ordinaryPrices.map((price) => ({
+          ...price,
+          productMatch: {
+            canonicalProductId: `product:${"ø".repeat(192)}`,
+            kind: "exact" as const,
+          },
+        })),
       }],
-      sources: exactEvidence.sources,
+      sources: [...exactEvidence.sources, {
+        contractVersion: 1,
+        displayName: wide,
+        id: `source:${"ø".repeat(193)}`,
+        sourceClass: "offer",
+        state: "approved",
+      }],
     });
     const publicPayload = {
       caveats: PLAN_CAVEATS,
       contractVersion: 1,
+      enabledMembershipProgramIds: [],
       evidence: strictEvidence,
       generatedAt: "2026-07-15T12:00:00.000Z",
+      marketContext: exactBody.marketContext,
+      planDeltaExplanations: exactExplanations([], strictEvidence),
       plans: [],
       priceDataSource: "cache",
       products: [canonicalProduct],
@@ -443,8 +530,10 @@ describe("POST /api/plans", () => {
 
     const response = await createPlansHandler(() => serviceWithExact(
       async () => ({
+        completeCandidateSet: { evidence: strictEvidence, plans: [] },
         evidence: strictEvidence,
         generatedAt: "2026-07-15T12:00:00.000Z",
+        planDeltaExplanations: exactExplanations([], strictEvidence),
         plans: [],
         priceDataSource: "cache" as const,
         products: [canonicalProduct],
@@ -758,8 +847,10 @@ describe("POST /api/plans", () => {
         async (_value, signal) => {
           seenSignal = signal;
           return {
+            completeCandidateSet: { evidence: exactEvidence, plans: [exactPlan] },
             evidence: exactEvidence,
             generatedAt: "2026-07-15T12:00:00.000Z",
+            planDeltaExplanations: exactExplanations([exactPlan]),
             plans: [exactPlan],
             priceDataSource: "cache",
             products: [canonicalProduct],

@@ -367,6 +367,56 @@ describe("calculatePlansV2", () => {
     });
   });
 
+  it("preserves approved postal-directory evidence through planner offer eligibility", () => {
+    const postal = offer({
+      applicability: {
+        ...offer().applicability,
+        geographicScope: {
+          countryCode: "NO",
+          kind: "postal-set",
+          postalCodes: ["0152", "0452"],
+        },
+      },
+      id: "offer:postal-oslo",
+      pricing: { kind: "unit", unitPriceOre: ore(3_000) },
+      sourceRecordId: "campaign:postal-oslo",
+    });
+    const base = input({ officialOffers: [postal] });
+    const withDirectory = input({
+      ...base,
+      offerEligibility: {
+        ...base.offerEligibility,
+        geographicDirectory: {
+          state: "available",
+          evaluatedAt: NOW.toISOString(),
+          directory: {
+            contractVersion: 1,
+            countryCode: "NO",
+            directoryVersionId: "postal-directory-2026-07",
+            evidenceReference: "manifest:postal-directory-2026-07",
+            publishedAt: "2026-07-16T09:30:00.000Z",
+            regions: [{
+              coverageState: "complete",
+              evidenceReference: "manifest:oslo-postal-set",
+              postalCodes: ["0152", "0452"],
+              regionCode: "NO-03",
+            }],
+            reviewedAt: "2026-07-16T09:00:00.000Z",
+            status: "approved",
+            validFrom: "2026-07-16T09:30:00.000Z",
+          },
+        },
+      },
+    });
+
+    expect(calculatePlansV2(base, NOW)[0]?.assignments[0]?.checkout.appliedOfferId)
+      .toBeUndefined();
+    expect(calculatePlansV2(withDirectory, NOW)[0]?.assignments[0]).toMatchObject({
+      checkout: { appliedOfferId: postal.id, totalOre: 6_000 },
+      costOre: 6_000,
+    });
+  });
+
   it("fails closed for incomplete baskets, incompatible measures, and unsafe money", () => {
     const secondNeed = {
       ...input().needs[0]!,

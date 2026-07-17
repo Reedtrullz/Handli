@@ -26,6 +26,7 @@ interface TestRow {
   raw_record_hash: string | null;
   record_id: number | null;
   record_type: "coverage" | "price" | "product";
+  postal_codes: string[];
   region_codes: string[];
   scope_kind: string | null;
   scope_status: string | null;
@@ -81,6 +82,7 @@ function productRow(overrides: Partial<TestRow> = {}): TestRow {
     fetched_at: null,
     gtin: GTIN,
     observed_at: null,
+    postal_codes: [],
     product_id: 42,
     raw_record_hash: null,
     record_id: null,
@@ -231,8 +233,10 @@ describe("PostgresPlanningEvidenceReader", () => {
     expect(query).toContain("po.claim_eligibility = 'historical_eligible'");
     expect(query).toContain("priceHistory");
     expect(query).toContain("geographic_scope_regions");
+    expect(query).toContain("geographic_scope_postal_codes");
     expect(query).toContain("gs.public_state_changed_at <=");
     expect(query).toContain("gsr.created_at <=");
+    expect(query).toContain("gsp.created_at <=");
     expect(query).toContain("gss.created_at <=");
     expect(query).toContain("coverage.checked_at >=");
     expect(query).toContain("limit 10001");
@@ -295,11 +299,12 @@ describe("PostgresPlanningEvidenceReader", () => {
     expect(result.coverageChecks.map(({ id }) => id)).toEqual(["coverage:201"]);
   });
 
-  it("preserves unsupported or absent geography as explicit unknown scope", async () => {
+  it("preserves absent geography and reads authorized postal-set evidence", async () => {
     const { db } = databaseWith(() => resolved([
       productRow(),
       priceRow({ country_code: null, scope_kind: null, scope_status: null }),
       priceRow({
+        postal_codes: ["0152", "0452"],
         record_id: 102,
         raw_record_hash: "b".repeat(64),
         scope_kind: "postal_set",
@@ -309,7 +314,11 @@ describe("PostgresPlanningEvidenceReader", () => {
     const result = await new PostgresPlanningEvidenceReader(db).getMany([GTIN], AT);
     expect(result.priceEvidence.map(({ geographicScope }) => geographicScope)).toEqual([
       { kind: "unknown", reason: "missing-geographic-scope" },
-      { kind: "unknown", reason: "unsupported-postal-set-scope" },
+      {
+        countryCode: "NO",
+        kind: "postal-set",
+        postalCodes: ["0152", "0452"],
+      },
     ]);
   });
 

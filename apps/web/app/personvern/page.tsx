@@ -43,9 +43,10 @@ export default function PrivacyPage() {
           <section className="trust-card">
             <h2>På enheten din</h2>
             <p>
-              Handlelisten og bekvemmelighetsvalget ligger i nettleserens lokale lagring. En
-              startet handletur og avkrysninger ligger i IndexedDB. Appskall og statiske filer
-              kan ligge i service worker-bufferen, men API-svar skal ikke bufres der.
+              Handlelisten, bekvemmelighetsvalget og medlemsprogrammene du selv slår på, ligger
+              i nettleserens lokale lagring. En startet handletur og avkrysninger ligger i
+              IndexedDB. Appskall og statiske filer kan ligge i service worker-bufferen, men
+              API-svar skal ikke bufres der.
             </p>
             <p>Du kan fjerne dette ved å tømme nettstedsdata i nettleseren.</p>
           </section>
@@ -54,9 +55,13 @@ export default function PrivacyPage() {
             <h2>Når du søker og planlegger</h2>
             <p>
               Søketekst, produktidentifikatorer, mengder og nødvendige valg sendes til serveren
-              for å beregne svaret. Appen skal ikke lage en varig serverprofil, søkehistorikk
-              eller handlekurv. Full ende-til-ende bevisføring mot logger og driftssystemer er
-              ennå ikke ferdig.
+              for å beregne svaret. Valgte medlemsprogram-ID-er sendes med planforespørselen og
+              behandles kortvarig for å avgjøre hvilke verifiserte medlemstilbud som kan brukes.
+              Funksjonen bruker ingen Handleplan-konto eller innlogging hos
+              medlemsprogramleverandøren, og sender ingen medlemsinnlogging dit. Appen skal ikke
+              lage en varig serverprofil, søkehistorikk, handlekurv eller lagre medlemsvalget på
+              serveren. Full ende-til-ende bevisføring mot logger og driftssystemer er ennå ikke
+              ferdig.
             </p>
           </section>
 
@@ -85,14 +90,19 @@ export default function PrivacyPage() {
           <section className="trust-card">
             <h2>Frivillig ruteberegning</h2>
             <p>
-              Ruting er ikke aktivert. En framtidig startadresse eller posisjon skal bare
+              Ruting er ikke aktivert. Kartverkets adresse-API og en selvbetjent
+              Valhalla-tjeneste med OpenStreetMap-data er valgt som tekniske grenser. En
+              startadresse eller posisjon skal bare
               behandles kortvarig etter et uttrykkelig valg og aldri lagres i nettleseren,
               URL-er, informasjonskapsler, logger, analyse, varig buffer, database,
-              monitorering eller sikkerhetskopi.
+              monitorering eller sikkerhetskopi. Adresseoppslaget kan vise inntil fem
+              treff kortvarig i et privat svar uten mellomlagring; koordinater og
+              leverandør-ID-er blir igjen på serveren bak nøkler som utløper etter fem minutter.
             </p>
             <p>
-              Geokoder, rutetjeneste, avtaler og personvernvurdering er ikke valgt og godkjent,
-              så funksjonen må forbli av.
+              Produksjonskonfigurasjon, kapasitet, oppdatering, gjenoppretting, attribusjon,
+              databehandlergrunnlag og ende-til-ende ikke-lagringsbevis er ikke godkjent, så
+              funksjonen må forbli av.
             </p>
           </section>
 

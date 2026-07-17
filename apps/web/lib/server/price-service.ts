@@ -1,21 +1,38 @@
 import type {
+  GeographicDirectoryReader,
+} from "@handleplan/db/geographic-directory";
+import type {
   PlanningEvidenceProductIdentity,
   PlanningEvidenceReader,
   PlanningEvidenceSnapshot,
 } from "@handleplan/db/planning-evidence-reader";
+import type {
+  PublicOfficialOfferReader,
+  PublicOfficialOfferSnapshot,
+} from "@handleplan/db/public-official-offer-reader";
 import {
   coverageCheckSchema,
   deriveHistoricalComparison,
+  EXACT_PRODUCT_OFFER_MAX_AGE_MS,
   exactProductPlanApiEvidenceEnvelopeSchema,
   exactProductPlanApiEvidenceSourceSchema,
   exactProductPlanApiRequestSchema,
+  geographicDirectoryEvidenceSchema,
   isFiniteDate,
   isValidGtin,
+  marketContextToGeographicContext,
+  marketContextV1Schema,
+  officialOfferSchema,
+  parseApplicableOfficialOffer,
   priceEvidenceSchema,
+  selectOfficialOffersAtHighestGeographicSpecificity,
   type ExactProductPlanApiEvidenceEnvelope,
   type ExactProductPlanApiNeedEvidence,
   type ExactProductPlanApiRequest,
+  type GeographicDirectoryEvidence,
   type MoneyOre,
+  type MarketContextV1,
+  type OfficialOffer,
   type PriceEvidence,
   type PriceObservation,
 } from "@handleplan/domain";
@@ -44,6 +61,7 @@ export class PriceServiceError extends Error {
 
 export interface ExactPriceServiceResult {
   evidence: ExactProductPlanApiEvidenceEnvelope;
+  geographicDirectory?: GeographicDirectoryEvidence;
   prices: PriceObservation<string>[];
   products: PlanningEvidenceProductIdentity[];
 }
@@ -55,6 +73,7 @@ export interface ProductPriceEvidence
 }
 
 export interface ProductPriceServiceResult {
+  geographicDirectory?: GeographicDirectoryEvidence;
   productEvidence: ProductPriceEvidence[];
   prices: PriceObservation<string>[];
   products: PlanningEvidenceProductIdentity[];
@@ -64,6 +83,8 @@ export interface ProductPriceServiceResult {
 export interface PriceServiceDependencies {
   reader: PlanningEvidenceReader;
   coverageService?: CoverageService;
+  geographicDirectoryReader?: GeographicDirectoryReader;
+  officialOfferReader: PublicOfficialOfferReader;
 }
 
 function compareText(left: string, right: string): number {
@@ -142,6 +163,67 @@ function validatedSnapshot(
   return snapshot;
 }
 
+function validatedOfficialOfferSnapshot(
+  snapshot: PublicOfficialOfferSnapshot,
+  canonicalProductIds: ReadonlySet<string>,
+): PublicOfficialOfferSnapshot {
+  if (
+    snapshot === null
+    || typeof snapshot !== "object"
+    || !Array.isArray(snapshot.offers)
+    || !Array.isArray(snapshot.sources)
+    || snapshot.offers.length > 500
+  ) {
+    throw new PriceServiceError("UNAVAILABLE");
+  }
+  failIfDuplicate(snapshot.offers.map(({ id }) => id));
+  failIfDuplicate(snapshot.sources.map(({ id }) => id));
+  const sourceIds = new Set<string>();
+  for (const source of snapshot.sources) {
+    const parsed = exactProductPlanApiEvidenceSourceSchema.safeParse(source);
+    if (!parsed.success || parsed.data.sourceClass !== "offer") {
+      throw new PriceServiceError("UNAVAILABLE");
+    }
+    sourceIds.add(parsed.data.id);
+  }
+  const referencedSourceIds = new Set<string>();
+  const productCounts = new Map<string, number>();
+  for (const candidate of snapshot.offers) {
+    const parsed = officialOfferSchema.safeParse(candidate);
+    if (
+      !parsed.success
+      || parsed.data.productMatch.kind !== "exact"
+      || !canonicalProductIds.has(parsed.data.productMatch.canonicalProductId)
+      || !sourceIds.has(parsed.data.sourceId)
+    ) {
+      throw new PriceServiceError("UNAVAILABLE");
+    }
+    referencedSourceIds.add(parsed.data.sourceId);
+    const productId = parsed.data.productMatch.canonicalProductId;
+    const count = (productCounts.get(productId) ?? 0) + 1;
+    if (count > 50) throw new PriceServiceError("UNAVAILABLE");
+    productCounts.set(productId, count);
+  }
+  if (
+    sourceIds.size !== referencedSourceIds.size
+    || [...sourceIds].some((id) => !referencedSourceIds.has(id))
+  ) {
+    throw new PriceServiceError("UNAVAILABLE");
+  }
+  return snapshot;
+}
+
+function mergeSource(
+  sources: Map<string, ExactProductPlanApiEvidenceEnvelope["sources"][number]>,
+  source: ExactProductPlanApiEvidenceEnvelope["sources"][number],
+): void {
+  const previous = sources.get(source.id);
+  if (previous !== undefined && JSON.stringify(previous) !== JSON.stringify(source)) {
+    throw new PriceServiceError("UNAVAILABLE");
+  }
+  sources.set(source.id, source);
+}
+
 function evidenceProductId(evidence: PriceEvidence): string | undefined {
   return evidence.productMatch.kind === "exact"
     ? evidence.productMatch.canonicalProductId
@@ -176,6 +258,7 @@ export class PriceService {
    */
   async readProducts(
     gtins: readonly string[],
+    marketContext: MarketContextV1,
     at: Date,
     signal?: AbortSignal,
   ): Promise<ProductPriceServiceResult> {
@@ -185,6 +268,7 @@ export class PriceService {
       || gtins.length > 50
       || new Set(gtins).size !== gtins.length
       || gtins.some((gtin) => typeof gtin !== "string" || !isValidGtin(gtin))
+      || !marketContextV1Schema.safeParse(marketContext).success
       || !(at instanceof Date)
       || !isFiniteDate(at)
     ) {
@@ -199,6 +283,8 @@ export class PriceService {
     );
     const request: ExactProductPlanApiRequest = {
       contractVersion: 1,
+      enabledMembershipProgramIds: [],
+      marketContext,
       maxStores: 3,
       needs: canonicalGtins.map((gtin) => ({
         id: needIdByGtin.get(gtin)!,
@@ -235,6 +321,9 @@ export class PriceService {
       };
     });
     return {
+      ...(exact.geographicDirectory === undefined
+        ? {}
+        : { geographicDirectory: exact.geographicDirectory }),
       productEvidence,
       prices: exact.prices,
       products: exact.products,
@@ -258,10 +347,53 @@ export class PriceService {
     )].sort(compareText);
 
     let snapshot: PlanningEvidenceSnapshot;
+    let geographicDirectory: GeographicDirectoryEvidence;
     try {
+      const [rawSnapshot, rawDirectory] = await Promise.all([
+        this.dependencies.reader.getMany(gtins, at, signal),
+        this.dependencies.geographicDirectoryReader?.read(
+          input.marketContext.countryCode,
+          at,
+          signal,
+        ) ?? Promise.resolve({
+          state: "unknown" as const,
+          reason: "postal-directory-unavailable",
+        }),
+      ]);
       snapshot = validatedSnapshot(
-        await this.dependencies.reader.getMany(gtins, at, signal),
+        rawSnapshot,
         gtins,
+      );
+      const parsedDirectory = geographicDirectoryEvidenceSchema.safeParse(rawDirectory);
+      geographicDirectory = parsedDirectory.success
+        ? parsedDirectory.data
+        : { state: "unknown" as const, reason: "invalid-postal-directory" };
+    } catch (error) {
+      if (
+        signal?.aborted
+        || (error !== null
+          && typeof error === "object"
+          && "code" in error
+          && error.code === "CANCELLED")
+      ) {
+        throw new PriceServiceError("CANCELLED");
+      }
+      if (error instanceof PriceServiceError) throw error;
+      throw new PriceServiceError("UNAVAILABLE");
+    }
+
+    let officialOfferSnapshot: PublicOfficialOfferSnapshot;
+    const canonicalProductIds = new Set(
+      snapshot.products.map(({ canonicalProductId }) => canonicalProductId),
+    );
+    try {
+      officialOfferSnapshot = validatedOfficialOfferSnapshot(
+        await this.dependencies.officialOfferReader.getMany(
+          [...canonicalProductIds].sort(compareText),
+          at,
+          signal,
+        ),
+        canonicalProductIds,
       );
     } catch (error) {
       if (
@@ -283,10 +415,49 @@ export class PriceService {
     const enabledSourceIds = snapshot.sources.map(({ id }) => id).sort(compareText);
     const context = {
       enabledSourceIds,
-      location: { countryCode: "NO" as const },
+      geographicDirectory,
+      location: marketContextToGeographicContext(input.marketContext),
       maxAgeMs: CURRENT_PRICE_MAX_AGE_MS,
       now: at,
     };
+    const offerSourceIds = officialOfferSnapshot.sources.map(({ id }) => id).sort(compareText);
+    const applicableOffers: OfficialOffer[] = [];
+    for (const candidate of officialOfferSnapshot.offers) {
+      const memberships = candidate.conditions.flatMap((condition) =>
+        condition.kind === "member" ? [condition.programId] : [],
+      );
+      const applicability = parseApplicableOfficialOffer(candidate, {
+        channel: "in-store",
+        enabledMembershipProgramIds: memberships,
+        enabledSourceIds: offerSourceIds,
+        geographicDirectory,
+        location: context.location,
+        maxEvidenceAgeMs: EXACT_PRODUCT_OFFER_MAX_AGE_MS,
+        now: at,
+      });
+      if (!applicability.applicable) continue;
+      const productId = applicability.offer.productMatch.kind === "exact"
+        ? applicability.offer.productMatch.canonicalProductId
+        : undefined;
+      if (productId === undefined || !canonicalProductIds.has(productId)) {
+        throw new PriceServiceError("UNAVAILABLE");
+      }
+      applicableOffers.push(applicability.offer);
+    }
+    const applicableOffersByProduct = new Map<string, OfficialOffer[]>();
+    for (const offer of selectOfficialOffersAtHighestGeographicSpecificity(
+      applicableOffers,
+      { geographicDirectory, location: context.location },
+    )) {
+      if (offer.productMatch.kind !== "exact") throw new PriceServiceError("UNAVAILABLE");
+      const offers = applicableOffersByProduct.get(offer.productMatch.canonicalProductId) ?? [];
+      offers.push(offer);
+      applicableOffersByProduct.set(offer.productMatch.canonicalProductId, offers);
+    }
+    for (const offers of applicableOffersByProduct.values()) {
+      offers.sort((left, right) => compareText(left.applicability.endsAt, right.applicability.endsAt)
+        || compareText(left.id, right.id));
+    }
     const needs: ExactProductPlanApiNeedEvidence[] = [];
     const plannerPrices = new Map<string, PriceObservation<string>>();
 
@@ -335,6 +506,7 @@ export class PriceService {
             eligibility: {
               currentMaxAgeMs: CURRENT_PRICE_MAX_AGE_MS,
               enabledSourceIds,
+              geographicDirectory,
               location: context.location,
             },
             historicalEvidence: productHistoricalEvidence,
@@ -373,7 +545,7 @@ export class PriceService {
           historicalComparisons,
           historicalPriceEvidence: [...uniqueHistory.values()],
           needId: need.id,
-          officialOffers: [],
+          officialOffers: applicableOffersByProduct.get(product.canonicalProductId) ?? [],
           ordinaryPrices,
         });
       }
@@ -385,7 +557,9 @@ export class PriceService {
 
     needs.sort((left, right) => compareText(left.needId, right.needId));
     const referencedSourceIds = sourceIdsReferencedBy(needs);
-    const sourceById = new Map(snapshot.sources.map((source) => [source.id, source]));
+    const sourceById = new Map<string, ExactProductPlanApiEvidenceEnvelope["sources"][number]>();
+    snapshot.sources.forEach((source) => mergeSource(sourceById, source));
+    officialOfferSnapshot.sources.forEach((source) => mergeSource(sourceById, source));
     const sources = [...referencedSourceIds].sort(compareText).map((sourceId) => {
       const source = sourceById.get(sourceId);
       if (source === undefined) throw new PriceServiceError("UNAVAILABLE");
@@ -400,6 +574,7 @@ export class PriceService {
 
     return {
       evidence: evidence.data,
+      geographicDirectory,
       prices: [...plannerPrices.values()].sort(
         (left, right) => compareText(left.ean, right.ean)
           || compareText(left.chain, right.chain),

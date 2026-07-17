@@ -8,16 +8,21 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  BASKET_QUANTITY_MAX,
-  BASKET_QUANTITY_MIN,
   type AddReviewedFamilyInput,
 } from "../../lib/browser-basket";
+import {
+  basketQuantityCopy,
+  basketQuantityErrorCopy,
+  parseBasketQuantityInput,
+  type BasketQuantityInputUnit,
+} from "../../lib/basket-quantity";
 import {
   inspectReviewedFamilyCandidates,
   ReviewedFamilyCandidateClientError,
   type ReviewedFamilyCandidateInspection,
 } from "../../lib/reviewed-family-candidates";
 import { REVIEWED_FAMILY_OPTIONS } from "../../lib/reviewed-family-options";
+import { QuantityControl } from "./quantity-control";
 
 type InspectionState =
   | { status: "idle" }
@@ -69,7 +74,8 @@ export function FamilyComposer({
   onApprove,
 }: FamilyComposerProps) {
   const [familyId, setFamilyId] = useState(REVIEWED_FAMILY_OPTIONS[0].id);
-  const [quantity, setQuantity] = useState(1);
+  const [quantityAmount, setQuantityAmount] = useState("1");
+  const [quantityInputUnit, setQuantityInputUnit] = useState<BasketQuantityInputUnit>("package");
   const [brandDraft, setBrandDraft] = useState("");
   const [state, setState] = useState<InspectionState>({ status: "idle" });
   const requestVersion = useRef(0);
@@ -146,6 +152,8 @@ export function FamilyComposer({
 
   function approve(): void {
     if (state.status !== "ready") return;
+    const quantity = parseBasketQuantityInput(quantityAmount, quantityInputUnit);
+    if (quantity === undefined) return;
     const candidateSet = state.response.candidateSets.find(
       (candidate) => candidate.familyId === familyId,
     );
@@ -161,12 +169,16 @@ export function FamilyComposer({
         userApproved: true,
       },
       family: candidateSet.family,
-      quantity,
+      quantity: quantity.quantity,
+      quantityUnit: quantity.quantityUnit,
     });
     setBrandDraft("");
-    setQuantity(1);
+    setQuantityAmount("1");
+    setQuantityInputUnit("package");
     setState({ status: "idle" });
   }
+
+  const parsedQuantity = parseBasketQuantityInput(quantityAmount, quantityInputUnit);
 
   return (
     <section className="family-composer" aria-labelledby="family-composer-title">
@@ -209,26 +221,17 @@ export function FamilyComposer({
             placeholder="F.eks. TINE, Q"
           />
         </label>
-        <label>
-          Antall
-          <input
-            aria-label={`Antall ${selectedFamily.labelNo}`}
-            disabled={disabled}
-            inputMode="numeric"
-            max={BASKET_QUANTITY_MAX}
-            min={BASKET_QUANTITY_MIN}
-            onChange={(event) => {
-              const next = Number(event.target.value);
-              if (
-                Number.isSafeInteger(next)
-                && next >= BASKET_QUANTITY_MIN
-                && next <= BASKET_QUANTITY_MAX
-              ) setQuantity(next);
-            }}
-            type="number"
-            value={quantity}
-          />
-        </label>
+        <QuantityControl
+          amount={quantityAmount}
+          disabled={disabled}
+          inputUnit={quantityInputUnit}
+          label={selectedFamily.labelNo}
+          onAmountChange={setQuantityAmount}
+          onInputUnitChange={(inputUnit, amount) => {
+            setQuantityInputUnit(inputUnit);
+            setQuantityAmount(amount);
+          }}
+        />
         <button
           className="secondary-button"
           disabled={disabled || alreadyAdded || state.status === "loading"}
@@ -238,6 +241,16 @@ export function FamilyComposer({
           {state.status === "loading" ? "Kontrollerer …" : "Se gjennom alternativer"}
         </button>
       </div>
+
+      {parsedQuantity === undefined ? (
+        <p className="quantity-error" role="alert">
+          {basketQuantityErrorCopy(quantityInputUnit)}
+        </p>
+      ) : (
+        <p className="quantity-guidance">
+          Behov: {basketQuantityCopy(parsedQuantity.quantity, parsedQuantity.quantityUnit)}. Enheten er et krav; kandidater med en annen fysisk enhet kan ikke dekke behovet.
+        </p>
+      )}
 
       {alreadyAdded ? (
         <p role="status">{selectedFamily.labelNo} finnes allerede i kurven. Endre antallet der.</p>
@@ -268,7 +281,12 @@ export function FamilyComposer({
             Medlemskapene er publisert med gjennomgangsbevis. Pris og lagerstatus
             avgjør ikke om et produkt får tilhøre varetypen.
           </p>
-          <button className="primary-button" onClick={approve} type="button">
+          <button
+            className="primary-button"
+            disabled={parsedQuantity === undefined}
+            onClick={approve}
+            type="button"
+          >
             Godkjenn kandidatlisten og legg til
           </button>
         </div>

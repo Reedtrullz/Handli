@@ -360,10 +360,17 @@ Deliver forward-only migrations for:
 
 Implementation:
 
-- Keep price_cache as the rollback read model.
+- Keep `price_cache` as the rollback read model for the previous immutable
+  application image only. The current public process must not be able to switch
+  back to provenance-poor legacy rows at runtime.
 - Backfill it under a synthetic legacy-import run, marked ineligible for official reference-price claims.
-- Dual-write, shadow-read, and compare privacy-safe counters.
-- Feature flag reads as legacy, shadow, or evidence.
+- Dual-write the append-only evidence mirror and retain the deterministic
+  legacy/evidence comparison harness for offline and CI proof.
+- The earlier live `legacy | shadow | evidence` web flag is superseded by an
+  image-level cutover: the current image reads evidence only, while the
+  network-disabled legacy rollback image may read `price_cache`. This prevents
+  an operator flag or stale environment value from silently weakening public
+  provenance after cutover.
 - Retain legacy storage through at least one release and restore cycle.
 
 Acceptance:
@@ -559,6 +566,14 @@ Deliver:
 - National, region, postal-set, and store-set scope normalization.
 - Deterministic overlap/border resolution.
 - Coverage/status page listing healthy chains, regions, source class, and freshness.
+
+Store sets remain a normalized ingestion/evidence scope in v1, but public
+eligibility is fail-closed until the user explicitly selects a store context
+that is independent of the transient travel origin. The initial regional v1
+may launch with national, region, and postal-set offers; it must not infer a
+store from an address or widen a store-only offer to a region. Store-context
+selection is a post-v1 product extension unless it is designed and accepted
+before launch.
 
 Acceptance:
 
@@ -829,7 +844,10 @@ Current state. Owner-only, claims narrowed, fake/live differences visible.
 
 ### Stage 1 — Evidence alpha
 
-New evidence read model runs in shadow mode. Scheduled collection builds history. No public official-offer claim until one complete vertical and review trail work.
+Offline/CI comparison runs the new evidence model against the retained legacy
+cache, while the protected current image uses evidence only. Scheduled
+collection builds history. No public official-offer claim appears until one
+complete vertical and review trail work.
 
 ### Stage 2 — Closed regional beta
 
@@ -863,7 +881,7 @@ These are owner decisions, but source-independent implementation need not wait f
 |---|---|---|
 | Offer-source commercial/licensing path | Gate A / V1-09 | Licensed structured feed first; authorized direct adapters second |
 | Launch regions | end of V1-01 | Smallest set with proven three-chain coverage; evaluate Oslo, Bergen, Trondheim |
-| Routing provider | V1-12 | Provider with Norway car/bike matrix coverage, bounded server API, acceptable public-good terms |
+| Routing provider | decided 2026-07-16; activation remains in V1-12 | Self-hosted Valhalla over OpenStreetMap data; see ADR 0003. Pinning, Norway tiles, capacity, freshness, attribution, recovery, and privacy proof remain required before runtime enablement. |
 | Code license | V1-16 | AGPL-3.0-or-later as the public-good default, subject to dependency and contributor compatibility review |
 | Funding/governance model | public beta | Transparent sponsorship/donation policy with no ranking influence |
 | Analytics | separate ADR | None in v1 unless privacy-preserving metrics are demonstrably necessary |

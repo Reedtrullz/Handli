@@ -76,6 +76,7 @@ interface PlanningEvidenceRow {
   raw_record_hash: string | null;
   record_id: number | null;
   record_type: "coverage" | "price" | "product";
+  postal_codes: string[];
   region_codes: string[];
   scope_kind: string | null;
   scope_status: string | null;
@@ -134,6 +135,8 @@ function rowHasValidIdentity(
     && typeof row.product_id === "number"
     && Number.isSafeInteger(row.product_id)
     && row.product_id > 0
+    && Array.isArray(row.postal_codes)
+    && row.postal_codes.every((value) => typeof value === "string")
     && Array.isArray(row.region_codes)
     && row.region_codes.every((value) => typeof value === "string")
     && Array.isArray(row.store_ids)
@@ -162,7 +165,13 @@ function geographicScopeFor(row: PlanningEvidenceRow): GeographicScope {
       ? { kind: "unknown", reason: "empty-store-scope" }
       : { kind: "stores", storeIds: [...new Set(row.store_ids)].sort(compareText) };
   } else if (row.scope_kind === "postal_set") {
-    candidate = { kind: "unknown", reason: "unsupported-postal-set-scope" };
+    candidate = row.postal_codes.length === 0
+      ? { kind: "unknown", reason: "empty-postal-set-scope" }
+      : {
+          kind: "postal-set",
+          countryCode: row.country_code,
+          postalCodes: [...new Set(row.postal_codes)].sort(compareText),
+        };
   } else {
     throw new PlanningEvidenceReaderError("UNAVAILABLE");
   }
@@ -388,6 +397,13 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
             order by gsr.region_code
           ), array[]::varchar[]) as region_codes,
           coalesce(array(
+            select gsp.postal_code
+            from geographic_scope_postal_codes gsp
+            where gsp.scope_id = gs.id
+              and gsp.created_at <= ${at}
+            order by gsp.postal_code
+          ), array[]::varchar[]) as postal_codes,
+          coalesce(array(
             select 'store:' || gss.store_id::text
             from geographic_scope_stores gss
             where gss.scope_id = gs.id
@@ -458,6 +474,13 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
             order by gsr.region_code
           ), array[]::varchar[]) as region_codes,
           coalesce(array(
+            select gsp.postal_code
+            from geographic_scope_postal_codes gsp
+            where gsp.scope_id = gs.id
+              and gsp.created_at <= ${at}
+            order by gsp.postal_code
+          ), array[]::varchar[]) as postal_codes,
+          coalesce(array(
             select 'store:' || gss.store_id::text
             from geographic_scope_stores gss
             where gss.scope_id = gs.id
@@ -508,6 +531,7 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
         null::char(2) as country_code,
         null::text as scope_status,
         array[]::varchar[] as region_codes,
+        array[]::varchar[] as postal_codes,
         array[]::text[] as store_ids
       from requested_products rp
       union all

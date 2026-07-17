@@ -5,6 +5,7 @@
 .env*
 !.env.example
 .next/
+.artifacts/
 playwright-report/
 test-results/
 coverage/

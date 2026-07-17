@@ -1,3 +1,5 @@
+import { isAbsolute, normalize } from "node:path";
+
 export interface WorkerRuntimeEnv {
   cycleIntervalMs: number;
   shutdownGraceMs: number;
@@ -10,11 +12,38 @@ export interface WorkerProductionEnv {
   kassalApiKey?: string;
   kassalBaseUrl: string;
   leaseTtlMs: number;
+  officialOfferFoundationEnabled: false;
+  officialOfferPrivateCaptureRoot: string;
   requestBudgetLimit: number;
   requestBudgetMaxWaitMs: number;
   requestBudgetWindowMs: number;
   sourceAccessState: WorkerSourceAccessState;
   targetLimit: number;
+}
+
+function requireDisabledOfficialOfferFoundation(value: string | undefined): false {
+  if (value !== "false") {
+    throw new TypeError(
+      "OFFICIAL_OFFER_FOUNDATION_ENABLED must be explicitly false until activation is approved",
+    );
+  }
+  return false;
+}
+
+function requirePrivateCaptureRoot(value: string | undefined): string {
+  if (
+    value === undefined
+    || value.length < 2
+    || value.length > 1_024
+    || value.includes("\u0000")
+    || !isAbsolute(value)
+    || normalize(value) !== value
+  ) {
+    throw new TypeError(
+      "OFFICIAL_OFFER_PRIVATE_CAPTURE_ROOT must be a normalized absolute path",
+    );
+  }
+  return value;
 }
 
 function boundedInteger(
@@ -139,6 +168,12 @@ export function readWorkerProductionEnv(
       30_000,
       15 * 60 * 1_000,
       "WORKER_LEASE_TTL_MS",
+    ),
+    officialOfferFoundationEnabled: requireDisabledOfficialOfferFoundation(
+      source.OFFICIAL_OFFER_FOUNDATION_ENABLED,
+    ),
+    officialOfferPrivateCaptureRoot: requirePrivateCaptureRoot(
+      source.OFFICIAL_OFFER_PRIVATE_CAPTURE_ROOT,
     ),
     requestBudgetLimit: boundedInteger(
       source.WORKER_REQUEST_BUDGET_LIMIT,

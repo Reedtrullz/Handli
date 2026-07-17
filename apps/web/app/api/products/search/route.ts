@@ -9,11 +9,15 @@ import {
 import { z } from "zod";
 
 import {
+  publicApiRuntimeControlResponse,
+  runControlledPublicApiOperation,
+  type ControlledPublicApiRouteOptions,
+} from "../../../../lib/server/public-api-route-controls";
+import {
   awaitWithinRequest,
   createRequestLifetime,
   RequestOperationAbortedError,
   resolveRequestTimeoutMs,
-  type BoundedRequestOptions,
   type RequestLifetime,
 } from "../../../../lib/server/request-lifetime";
 
@@ -57,7 +61,7 @@ function validatedResponse(value: unknown): Response {
 export function createSearchHandler(
   getCatalog: CatalogProvider,
   now: () => Date = () => new Date(),
-  options: BoundedRequestOptions = {},
+  options: ControlledPublicApiRouteOptions = {},
 ) {
   const timeoutMs = resolveRequestTimeoutMs(options);
   return async function GET(request: Request): Promise<Response> {
@@ -71,13 +75,21 @@ export function createSearchHandler(
 
     const lifetime = createRequestLifetime(request.signal, timeoutMs);
     try {
-      const catalog = await awaitWithinRequest(getCatalog, lifetime.signal);
       const products = await awaitWithinRequest(
-        () => catalog.search(
-          parsed.data.q,
-          SEARCH_LIMIT,
-          now(),
+        () => runControlledPublicApiOperation(
+          options,
+          "products-search",
+          { query: parsed.data.q },
           lifetime.signal,
+          async (operationSignal) => {
+            const catalog = await awaitWithinRequest(getCatalog, operationSignal);
+            return catalog.search(
+              parsed.data.q,
+              SEARCH_LIMIT,
+              now(),
+              operationSignal,
+            );
+          },
         ),
         lifetime.signal,
       );
@@ -88,6 +100,8 @@ export function createSearchHandler(
     } catch (error) {
       const abortResponse = requestAbortResponse(lifetime);
       if (abortResponse !== undefined) return abortResponse;
+      const controlledResponse = publicApiRuntimeControlResponse(error);
+      if (controlledResponse !== undefined) return controlledResponse;
       if (error instanceof RequestOperationAbortedError) {
         return errorResponse("REQUEST_CANCELLED", 499);
       }
@@ -102,7 +116,12 @@ export function createSearchHandler(
   };
 }
 
-export const GET = createSearchHandler(async () => {
+export async function GET(request: Request): Promise<Response> {
   const { getServerContainer } = await import("../../../../lib/server/container");
-  return getServerContainer().publicCatalogIndex;
-});
+  const container = getServerContainer();
+  return createSearchHandler(
+    () => container.publicCatalogIndex,
+    () => new Date(),
+    { runtimeControls: container.publicApiRuntimeControls },
+  )(request);
+}

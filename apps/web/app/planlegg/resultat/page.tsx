@@ -5,9 +5,11 @@ import {
   reviewedFamilyPlanApiResponseV2SchemaFor,
   type ExactProductPlanApiRequest,
   type ExactProductPlanApiResponse,
+  type OfficialOffer,
   type PlanResultV2,
   type ReviewedFamilyPlanApiRequestV2,
   type ReviewedFamilyPlanApiResponseV2,
+  type TravelCalculationState,
 } from "@handleplan/domain";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 
@@ -20,11 +22,18 @@ import { PriceProvenance } from "../../../components/planlegg/price-provenance";
 import { StartTripButton } from "../../../components/planlegg/start-trip-button";
 import { StoreAssignment } from "../../../components/planlegg/store-assignment";
 import {
+  TravelResultControls,
+  type TravelResultBinding,
+  type TravelResultUpdate,
+} from "../../../components/planlegg/travel-result-controls";
+import {
   loadBasket,
   saveBasket,
+  setBasketEnabledMembershipProgramIds,
   strictPlanRequestReadiness,
   type BrowserBasket,
 } from "../../../lib/browser-basket";
+import { membershipPreferencePresentations } from "../../../lib/membership-presentation";
 
 const MAX_RESPONSE_BYTES = 128 * 1024;
 type PlanRequest = ExactProductPlanApiRequest | ReviewedFamilyPlanApiRequestV2;
@@ -159,19 +168,6 @@ function ReviewedFamilySelections({
   );
 }
 
-function ReviewedFamilyHandlemodusNotice() {
-  return (
-    <section className="result-summary" aria-labelledby="reviewed-handlemodus-title">
-      <p className="result-eyebrow">Handlemodus</p>
-      <h2 id="reviewed-handlemodus-title">Ikke tilgjengelig for varebytter ennå</h2>
-      <p>
-        Denne planen kan brukes på skjermen, men kan ikke lagres i Handlemodus før
-        familie- og medlemskapsbevis kan følge trygt med i den lokale handleturen.
-      </p>
-    </section>
-  );
-}
-
 function reviewedProductsForPlan(
   response: ReviewedFamilyPlanApiResponseV2,
   plan: PlanResultV2,
@@ -200,11 +196,82 @@ function reviewedProductsForPlan(
   return [...productsByGtin.values()];
 }
 
+function availableMembershipProgramIds(response: PlanResponse): string[] {
+  const offers = officialOffersForResponse(response);
+  return [...new Set(offers.flatMap(({ conditions }) =>
+    conditions.flatMap((condition) =>
+      condition.kind === "member" ? [condition.programId] : []
+    )))].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+}
+
+function officialOffersForResponse(response: PlanResponse): OfficialOffer[] {
+  return response.contractVersion === 1
+    ? response.evidence.needs.flatMap(({ officialOffers }) => officialOffers)
+    : response.evidence.officialOffers;
+}
+
+function MembershipPreferences({
+  officialOffers,
+  enabledProgramIds,
+  onChange,
+}: {
+  officialOffers: readonly OfficialOffer[];
+  enabledProgramIds: readonly string[];
+  onChange: (programId: string, enabled: boolean) => void;
+}) {
+  const presentations = membershipPreferencePresentations(
+    officialOffers,
+    enabledProgramIds,
+  );
+  if (presentations.length === 0) return null;
+  return (
+    <section className="result-memberships" aria-labelledby="membership-preferences-title">
+      <fieldset aria-describedby="membership-preferences-description">
+        <legend id="membership-preferences-title">Medlemspriser</legend>
+        <p id="membership-preferences-description">
+          Slå bare på programmer du er medlem av. Ingen medlemsprogrammer er valgt automatisk.
+        </p>
+        <ul>
+          {presentations.map((presentation) => {
+            const enabled = enabledProgramIds.includes(presentation.programId);
+            return (
+            <li key={presentation.programId}>
+              <label>
+                <input
+                  checked={enabled}
+                  onChange={(event) => {
+                    const nextEnabled = event.currentTarget.checked;
+                    if (nextEnabled && !presentation.available) return;
+                    onChange(presentation.programId, nextEnabled);
+                  }}
+                  type="checkbox"
+                />
+                <span className="result-membership-copy">
+                  <span>{presentation.label}</span>
+                  <small>{presentation.detail}</small>
+                </span>
+              </label>
+            </li>
+            );
+          })}
+        </ul>
+      </fieldset>
+    </section>
+  );
+}
+
 function ResultWorkspaceClient() {
-  const [basket] = useState<BrowserBasket>(() => loadBasket());
+  const [basket, setBasket] = useState<BrowserBasket>(() => loadBasket());
   const [state, setState] = useState<ResultState>({ status: "loading" });
   const [retry, setRetry] = useState(0);
   const [selectedPlanId, setSelectedPlanId] = useState<string | undefined>();
+  const preferenceBasisPoints = useRef(basket.convenienceWeightBasisPoints);
+  const [travelPlanning, setTravelPlanning] = useState<PlanResponse | undefined>();
+  const [travelBinding, setTravelBinding] = useState<TravelResultBinding | undefined>();
+  const [travel, setTravel] = useState<TravelCalculationState>({
+    contractVersion: 1,
+    kind: "not-requested",
+  });
   const requestVersion = useRef(0);
   const readiness = useMemo(() => strictPlanRequestReadiness(basket), [basket]);
   const request = readiness.state === "ready" ? readiness.request : undefined;
@@ -218,9 +285,11 @@ function ResultWorkspaceClient() {
   }, [request]);
 
   useEffect(() => {
-    if (request === undefined || requestBody === undefined) {
-      return;
-    }
+    if (requestBody === undefined) return;
+    // requestBody is serialized only from a successfully validated local
+    // request above. Binding response validation to this immutable snapshot
+    // also keeps presentation-only preference changes from refetching.
+    const boundRequest = JSON.parse(requestBody) as PlanRequest;
     const version = ++requestVersion.current;
     const controller = new AbortController();
     void fetch("/api/plans", {
@@ -245,7 +314,7 @@ function ResultWorkspaceClient() {
         setState({ status: "invalid" });
         return;
       }
-      const safe = await readSafeResponse(response, request);
+      const safe = await readSafeResponse(response, boundRequest);
       if (controller.signal.aborted || version !== requestVersion.current) return;
       if (!safe) {
         setState({ status: "invalid" });
@@ -257,13 +326,16 @@ function ResultWorkspaceClient() {
       }
       const nextSelection = planIdForPreference(
         safe.plans,
-        basket.convenienceWeightBasisPoints,
+        preferenceBasisPoints.current,
       );
       if (!nextSelection) {
         setState({ status: "invalid" });
         return;
       }
       setSelectedPlanId(nextSelection);
+      setTravelPlanning(undefined);
+      setTravelBinding(undefined);
+      setTravel({ contractVersion: 1, kind: "not-requested" });
       setState({ status: "ready", response: safe });
     }).catch((error: unknown) => {
       if (controller.signal.aborted || version !== requestVersion.current) return;
@@ -272,9 +344,9 @@ function ResultWorkspaceClient() {
     });
 
     return () => controller.abort();
-  // The basket is intentionally snapshotted once for this calculation page.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [request, requestBody, retry]);
+  // Request values change with identity, market, quantity, or membership inputs.
+  // The presentation-only preference lives in a ref and intentionally does not refetch.
+  }, [requestBody, retry]);
 
   if (readiness.state === "empty") {
     return <ResultMessage title="Handlekurven er tom" copy="Legg til varer før du beregner en handleplan." />;
@@ -284,6 +356,14 @@ function ResultWorkspaceClient() {
       <ResultMessage
         title="Godkjenn varevalget på nytt"
         copy="Minst ett fleksibelt varevalg mangler en gyldig, kontrollert produktfamilie. Gå tilbake og kontroller kandidatene på nytt. Ingen eldre prisberegning ble brukt."
+      />
+    );
+  }
+  if (readiness.state === "requires-market-selection") {
+    return (
+      <ResultMessage
+        title="Velg prisområde på nytt"
+        copy="Det lagrede prisområdet er ikke lenger tilgjengelig. Handlelisten er bevart, men ingen prisforespørsel sendes før du velger et tilgjengelig område i Planlegg eller Oppdag."
       />
     );
   }
@@ -318,20 +398,78 @@ function ResultWorkspaceClient() {
   if (state.status === "invalid") {
     return <ResultMessage title="Kunne ikke vise handleplanen" copy="Svaret kunne ikke bekreftes som en komplett og trygg plan." />;
   }
+  if (request === undefined) {
+    return <ResultMessage title="Kunne ikke vise handleplanen" copy="Handlekurven kunne ikke bekreftes som en trygg forespørsel." />;
+  }
 
-  const ordered = state.response.plans;
+  const priceOnlyResponse = state.response;
+  const activeResponse = travelPlanning ?? priceOnlyResponse;
+  const ordered = activeResponse.plans;
   const selected = ordered.find(({ id }) => id === selectedPlanId) ?? ordered[0]!;
-  const convenience = ordered[0]!;
-  const products = state.response.contractVersion === 1
-    ? state.response.products
-    : reviewedProductsForPlan(state.response, selected);
-  if (products === undefined) {
+  const selectedExplanation = activeResponse.planDeltaExplanations.entries.find(
+    ({ planId }) => planId === selected.id,
+  );
+  const products = activeResponse.contractVersion === 1
+    ? activeResponse.products
+    : reviewedProductsForPlan(activeResponse, selected);
+  const reviewedRequest = request.contractVersion === 2 ? request : undefined;
+  if (
+    products === undefined
+    || selectedExplanation === undefined
+    || (activeResponse.contractVersion === 2 && reviewedRequest === undefined)
+  ) {
     return <ResultMessage title="Kunne ikke vise handleplanen" copy="Svaret kunne ikke bekreftes som en komplett og trygg plan." />;
   }
 
   function selectPlan(planId: string): void {
     setSelectedPlanId(planId);
   }
+
+  function applyTravelResult(update: TravelResultUpdate): void {
+    setTravel(update.travel);
+    if (update.travel.kind !== "calculated") {
+      setTravelBinding(undefined);
+      const planning = "planning" in update ? update.planning : priceOnlyResponse;
+      setTravelPlanning("planning" in update ? update.planning : undefined);
+      const nextSelection = planIdForPreference(planning.plans, preferenceBasisPoints.current);
+      if (nextSelection !== undefined) setSelectedPlanId(nextSelection);
+      return;
+    }
+    if (!("planning" in update) || !("travelBinding" in update)) return;
+    setTravelBinding(update.travelBinding);
+    setTravelPlanning(update.planning);
+    const nextSelection = planIdForPreference(
+      update.planning.plans,
+      preferenceBasisPoints.current,
+    );
+    if (nextSelection !== undefined) setSelectedPlanId(nextSelection);
+  }
+
+  function setMembershipProgram(programId: string, enabled: boolean): void {
+    const availableProgramIds = availableMembershipProgramIds(priceOnlyResponse);
+    if (
+      (enabled && !availableProgramIds.includes(programId))
+      || (!enabled && !basket.enabledMembershipProgramIds.includes(programId))
+    ) return;
+    const nextProgramIds = enabled
+      ? [...new Set([...basket.enabledMembershipProgramIds, programId])]
+        .sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
+      : basket.enabledMembershipProgramIds.filter((candidate) => candidate !== programId);
+    const nextBasket = setBasketEnabledMembershipProgramIds(basket, nextProgramIds);
+    if (nextBasket === basket) return;
+    saveBasket(nextBasket);
+    setBasket(nextBasket);
+    setSelectedPlanId(undefined);
+    setTravelPlanning(undefined);
+    setTravelBinding(undefined);
+    setTravel({ contractVersion: 1, kind: "not-requested" });
+    setState({ status: "loading" });
+  }
+
+  const calculatedTravel = travel.kind === "calculated" ? travel : undefined;
+  const routesByPlan = new Map(
+    calculatedTravel?.routes.map((route) => [route.planId, route]) ?? [],
+  );
 
   return (
     <main className="result-main" data-layout="result-workspace">
@@ -340,7 +478,10 @@ function ResultWorkspaceClient() {
           <header className="result-heading">
             <p>Handleplan</p>
             <h1>Handleliste fordelt på butikker</h1>
-            <span>Komplett kurv basert på {requiredItems} nødvendige varer.</span>
+            <span>
+              Komplett kurv basert på {requiredItems}
+              {requiredItems === 1 ? " nødvendig vare." : " nødvendige varer."}
+            </span>
           </header>
           {selected.chains.map((selectedChain, index) => (
             <StoreAssignment
@@ -348,45 +489,69 @@ function ResultWorkspaceClient() {
               chain={selectedChain}
               order={index + 1}
               assignments={selected.assignments.filter(({ chain: assignmentChain }) => assignmentChain === selectedChain)}
+              officialOffers={officialOffersForResponse(activeResponse)}
               products={products}
             />
           ))}
-          {state.response.contractVersion === 2 && (
-            <ReviewedFamilySelections plan={selected} response={state.response} />
+          {activeResponse.contractVersion === 2 && (
+            <ReviewedFamilySelections plan={selected} response={activeResponse} />
           )}
         </div>
         <aside className="result-rail">
           <PlanSummary
             plan={selected}
-            convenienceTotalOre={convenience.totalOre}
+            explanation={selectedExplanation}
+            explanationQualifier={activeResponse.planDeltaExplanations.qualifier.message}
             requiredItems={requiredItems}
+            travelRoute={routesByPlan.get(selected.id)}
           />
-          {state.response.contractVersion === 1
-            ? (
-                <StartTripButton
-                  key={`${state.response.generatedAt}:${selected.id}`}
-                  caveats={state.response.caveats}
-                  evidence={state.response.evidence}
-                  generatedAt={state.response.generatedAt}
-                  plan={selected}
-                  products={state.response.products}
-                />
-              )
-            : <ReviewedFamilyHandlemodusNotice />}
+          {activeResponse.contractVersion === 1 && request.contractVersion === 1 ? (
+            <StartTripButton
+              key={`${activeResponse.generatedAt}:${selected.id}`}
+              exactRequest={request}
+              exactResponse={activeResponse}
+              plan={selected}
+              travelBinding={travelBinding}
+            />
+          ) : activeResponse.contractVersion === 2 && reviewedRequest !== undefined ? (
+            <StartTripButton
+              key={`${activeResponse.generatedAt}:${selected.id}`}
+              kind="reviewed-family"
+              plan={selected}
+              reviewedRequest={reviewedRequest}
+              reviewedResponse={activeResponse}
+              travelBinding={travelBinding}
+            />
+          ) : null}
+          <TravelResultControls
+            planningRequest={request}
+            onTravelResult={applyTravelResult}
+          />
+          <MembershipPreferences
+            officialOffers={officialOffersForResponse(priceOnlyResponse)}
+            enabledProgramIds={basket.enabledMembershipProgramIds}
+            onChange={setMembershipProgram}
+          />
           <PlanSelector
             plans={ordered}
             selectedPlanId={selected.id}
             onSelect={selectPlan}
+            officialOffers={officialOffersForResponse(activeResponse)}
+            planDeltaExplanations={activeResponse.planDeltaExplanations}
+            travel={calculatedTravel}
             onPreferenceChange={(convenienceWeightBasisPoints) => {
-              saveBasket({ ...basket, convenienceWeightBasisPoints });
+              const nextBasket = { ...basket, convenienceWeightBasisPoints };
+              preferenceBasisPoints.current = convenienceWeightBasisPoints;
+              saveBasket(nextBasket);
+              setBasket(nextBasket);
             }}
           />
           <PriceProvenance
-            generatedAt={state.response.generatedAt}
-            caveats={state.response.caveats}
+            generatedAt={activeResponse.generatedAt}
+            caveats={activeResponse.caveats}
             assignments={selected.assignments}
-            evidence={state.response.evidence}
-            priceDataSource={state.response.priceDataSource}
+            evidence={activeResponse.evidence}
+            priceDataSource={activeResponse.priceDataSource}
           />
         </aside>
       </div>

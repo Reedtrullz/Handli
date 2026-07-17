@@ -1,10 +1,16 @@
 import {
+  attestGeographicDirectoryRegionV1,
   enumerateCompletePlanCandidatesV2,
+  DISCOVERY_IMPACT_PRODUCT_UNION_MAX,
   EXACT_PRODUCT_CATALOG_MAX_AGE_MS,
   EXACT_PRODUCT_OFFER_MAX_AGE_MS,
   exactProductPlanApiEvidenceEnvelopeSchema,
   exactProductPlanApiProductSummarySchema,
   exactProductPlanApiRequestSchema,
+  deriveExactProductPlanDeltaExplanationsV1,
+  deriveReviewedFamilyPlanDeltaExplanationsV1,
+  discoveryImpactRequestV1Schema,
+  marketContextToGeographicContext,
   paretoFrontierV2,
   projectRepresentativesV2,
   reviewedFamilyCandidateInspectionResponseSchemaFor,
@@ -14,7 +20,11 @@ import {
   type ExactProductPlanApiEvidenceSource,
   type ExactProductPlanApiProductSummary,
   type ExactProductPlanApiRequest,
+  type GeographicDirectoryRegionAttestationV1,
+  type DiscoveryImpactBaselineCandidateSetV1,
+  type DiscoveryImpactRequestV1,
   type PlanResultV2,
+  type PlanDeltaExplanationSetV1,
   type PriceEvidence,
   type ReviewedFamilyCandidateInspectionRequest,
   type ReviewedFamilyCandidateInspectionResponse,
@@ -38,17 +48,28 @@ import {
 } from "./price-service";
 
 export interface ExactProductPlanServiceResult {
+  completeCandidateSet: {
+    evidence: ExactProductPlanApiEvidenceEnvelope;
+    plans: PlanResultV2[];
+  };
   evidence: ExactProductPlanApiEvidenceEnvelope;
   generatedAt: string;
+  geographicDirectoryAttestation?: GeographicDirectoryRegionAttestationV1;
+  planDeltaExplanations: PlanDeltaExplanationSetV1;
   plans: PlanResultV2[];
   priceDataSource: "cache";
   products: ExactProductPlanApiProductSummary[];
 }
 
-export type ReviewedFamilyPlanServiceResult = Omit<
+export interface ReviewedFamilyPlanServiceResult extends Omit<
   ReviewedFamilyPlanApiResponseV2,
-  "caveats" | "contractVersion"
->;
+  "caveats" | "contractVersion" | "enabledMembershipProgramIds" | "marketContext"
+> {
+  completeCandidateSet: {
+    evidence: ReviewedFamilyPlanApiEvidenceEnvelopeV2;
+    plans: PlanResultV2[];
+  };
+}
 
 export interface ActiveCatalogReader {
   getMany(
@@ -67,6 +88,23 @@ export interface PlanServiceContract {
     request: ReviewedFamilyPlanApiRequestV2,
     signal?: AbortSignal,
   ): Promise<ReviewedFamilyPlanServiceResult>;
+}
+
+export interface DiscoveryImpactPlanningResolution {
+  baselineCandidateSets: DiscoveryImpactBaselineCandidateSetV1[];
+  comparisonCoverageByCanonicalProductId: ReadonlyMap<
+    string,
+    "complete" | "partial"
+  >;
+  evaluatedAt: Date;
+  planning: ServerPlanningInputV2;
+}
+
+export interface DiscoveryImpactPlanningResolver {
+  resolveDiscoveryImpactPlanning(
+    request: DiscoveryImpactRequestV1,
+    signal?: AbortSignal,
+  ): Promise<DiscoveryImpactPlanningResolution>;
 }
 
 export interface PlanServiceDependencies {
@@ -176,9 +214,12 @@ function exactRequestAsPlannerV2Input(
     })),
     offerEligibility: {
       channel: "in-store",
-      enabledMembershipProgramIds: [],
+      enabledMembershipProgramIds: request.enabledMembershipProgramIds,
       enabledSourceIds: priceResult.evidence.sources.map(({ id }) => id),
-      location: { countryCode: "NO" },
+      ...(priceResult.geographicDirectory === undefined
+        ? {}
+        : { geographicDirectory: priceResult.geographicDirectory }),
+      location: marketContextToGeographicContext(request.marketContext),
       maxEvidenceAgeMs: EXACT_PRODUCT_OFFER_MAX_AGE_MS,
     },
     officialOffers: [...officialOffers.values()],
@@ -573,10 +614,13 @@ function mixedPlannerInput(
     }),
     offerEligibility: {
       channel: "in-store",
-      enabledMembershipProgramIds: [],
+      enabledMembershipProgramIds: request.enabledMembershipProgramIds,
       enabledSourceIds: [...new Set(priceResult.sources.map(({ id }) => id))]
         .sort(compareText),
-      location: { countryCode: "NO" },
+      ...(priceResult.geographicDirectory === undefined
+        ? {}
+        : { geographicDirectory: priceResult.geographicDirectory }),
+      location: marketContextToGeographicContext(request.marketContext),
       maxEvidenceAgeMs: EXACT_PRODUCT_OFFER_MAX_AGE_MS,
     },
     officialOffers: [...officialOffers.values()].sort((left, right) =>
@@ -641,7 +685,6 @@ function visibleMixedEvidence(
       || compareText(left.canonicalProductId, right.canonicalProductId));
 
   const assignmentEvidence: ReviewedFamilyPlanApiEvidenceEnvelopeV2["assignmentEvidence"] = [];
-  const referencedOfferIds = new Set<string>();
   for (const plan of plans) {
     for (const assignment of plan.assignments) {
       const ordinary = [...ordinaryById.values()].find((evidence) =>
@@ -651,7 +694,6 @@ function visibleMixedEvidence(
         && priceEvidenceProductId(evidence) === assignment.canonicalProductId);
       if (ordinary === undefined) throw new PriceDataUnavailableError();
       const appliedOfferId = assignment.checkout.appliedOfferId;
-      if (appliedOfferId !== undefined) referencedOfferIds.add(appliedOfferId);
       assignmentEvidence.push({
         chainId: assignment.chain,
         conditions: appliedOfferId === undefined
@@ -668,11 +710,8 @@ function visibleMixedEvidence(
     || compareText(left.needId, right.needId)
     || compareText(left.chainId, right.chainId));
 
-  const officialOffers = [...referencedOfferIds].sort(compareText).map((offerId) => {
-    const offer = allOffersById.get(offerId);
-    if (offer === undefined) throw new PriceDataUnavailableError();
-    return offer;
-  });
+  const officialOffers = [...allOffersById.values()].sort((left, right) =>
+    compareText(left.id, right.id));
 
   const referencedSourceIds = new Set<string>();
   productClaims.forEach(({ product }) =>
@@ -710,11 +749,351 @@ function visibleMixedEvidence(
   };
 }
 
-export class PlanService implements PlanServiceContract {
+function directImpactCatalogGtins(request: DiscoveryImpactRequestV1): string[] {
+  const baselineGtins = request.planning.contractVersion === 1
+    ? requestedExactGtins(request.planning)
+    : exactCatalogGtins(request.planning);
+  return [...new Set([
+    ...baselineGtins,
+    ...request.actions.map(({ product }) => product.value),
+  ])].sort(compareText);
+}
+
+function exactImpactPlannerInput(
+  request: ExactProductPlanApiRequest,
+  catalogProducts: readonly ExactProductPlanApiProductSummary[],
+  identityByGtin: ReadonlyMap<string, ProductPriceServiceResult["products"][number]>,
+  priceResult: ProductPriceServiceResult,
+): ServerPlanningInputV2 {
+  const productByGtin = new Map(
+    catalogProducts.map((product) => [product.gtin, product]),
+  );
+  const officialOffers = new Map<
+    string,
+    ProductPriceServiceResult["productEvidence"][number]["officialOffers"][number]
+  >();
+  for (const evidence of priceResult.productEvidence) {
+    addUniqueEvidence(officialOffers, evidence.officialOffers);
+  }
+
+  return {
+    contractVersion: 2,
+    matchingRules: request.needs.map((need) => ({
+      exactEan: need.match.product.value,
+      explanation: "Eksakt produkt valgt av brukeren",
+      id: need.id,
+      mode: "exact" as const,
+      userApproved: true as const,
+    })),
+    maxStores: request.maxStores,
+    needs: request.needs.map((need) => ({
+      id: need.id,
+      matchRuleId: need.id,
+      query: productByGtin.get(need.match.product.value)?.displayName
+        ?? need.match.product.value,
+      requested: {
+        amount: need.quantity,
+        unit: need.quantityUnit === "each"
+          ? "package" as const
+          : need.quantityUnit,
+      },
+      required: true as const,
+    })),
+    offerEligibility: {
+      channel: "in-store",
+      enabledMembershipProgramIds: request.enabledMembershipProgramIds,
+      enabledSourceIds: [...new Set(priceResult.sources.map(({ id }) => id))]
+        .sort(compareText),
+      ...(priceResult.geographicDirectory === undefined
+        ? {}
+        : { geographicDirectory: priceResult.geographicDirectory }),
+      location: marketContextToGeographicContext(request.marketContext),
+      maxEvidenceAgeMs: EXACT_PRODUCT_OFFER_MAX_AGE_MS,
+    },
+    officialOffers: [...officialOffers.values()].sort((left, right) =>
+      compareText(left.id, right.id)),
+    ordinaryPrices: priceResult.prices,
+    products: catalogProducts.map((product) => {
+      const identity = identityByGtin.get(product.gtin);
+      if (identity === undefined) throw new PriceDataUnavailableError();
+      return {
+        ...(product.brand === undefined ? {} : { brand: product.brand }),
+        canonicalProductId: identity.canonicalProductId,
+        ean: product.gtin,
+        name: product.displayName,
+        packageMeasure: product.packageMeasure,
+      };
+    }),
+  };
+}
+
+function impactBaselineCandidateSets(
+  planning: ServerPlanningInputV2,
+  needMatches: readonly ReviewedFamilyNeedMatchV2[] | undefined,
+  productClaims: readonly ReviewedFamilyProductClaim[] | undefined,
+): DiscoveryImpactBaselineCandidateSetV1[] {
+  if (needMatches === undefined || productClaims === undefined) {
+    const ruleById = new Map(planning.matchingRules.map((rule) => [rule.id, rule]));
+    return planning.needs.map((need) => {
+      const rule = ruleById.get(need.matchRuleId);
+      if (rule?.mode !== "exact" || rule.exactEan === undefined) {
+        throw new PriceDataUnavailableError();
+      }
+      return { candidateGtins: [rule.exactEan], needId: need.id };
+    });
+  }
+
+  const gtinByCanonicalProductId = new Map(
+    productClaims.map(({ canonicalProductId, product }) => [
+      canonicalProductId,
+      product.gtin,
+    ]),
+  );
+  const matchByNeedId = new Map(needMatches.map((match) => [match.needId, match]));
+  return planning.needs.map((need) => {
+    const match = matchByNeedId.get(need.id);
+    if (match === undefined) throw new PriceDataUnavailableError();
+    const candidateGtins = match.candidateProductIds.map((canonicalProductId) => {
+      const gtin = gtinByCanonicalProductId.get(canonicalProductId);
+      if (gtin === undefined) throw new PriceDataUnavailableError();
+      return gtin;
+    });
+    return { candidateGtins, needId: need.id };
+  });
+}
+
+export class PlanService
+  implements PlanServiceContract, DiscoveryImpactPlanningResolver {
   private readonly now: () => Date;
 
   constructor(private readonly dependencies: PlanServiceDependencies) {
     this.now = dependencies.now ?? (() => new Date());
+  }
+
+  /**
+   * Resolves one bounded, immutable universe for Oppdag impact evaluation.
+   * The method deliberately performs no plan calculation: all variants are
+   * evaluated later from this single catalog/price/family snapshot.
+   */
+  async resolveDiscoveryImpactPlanning(
+    request: DiscoveryImpactRequestV1,
+    signal?: AbortSignal,
+  ): Promise<DiscoveryImpactPlanningResolution> {
+    if (signal?.aborted) throw new PlanRequestCancelledError();
+    const parsed = discoveryImpactRequestV1Schema.safeParse(request);
+    if (!parsed.success) throw new ReviewedFamilyPlanError("INVALID_REQUEST");
+    const input = parsed.data;
+    const evaluatedAt = this.now();
+    if (
+      !(evaluatedAt instanceof Date)
+      || !Number.isFinite(evaluatedAt.getTime())
+    ) {
+      throw new PriceDataUnavailableError();
+    }
+    if (this.dependencies.catalog === undefined) {
+      throw new CatalogUnavailableError();
+    }
+
+    let inspection: ReviewedFamilyCandidateInspectionResponse | undefined;
+    let reviewedInput: ReviewedFamilyPlanApiRequestV2 | undefined;
+    if (input.planning.contractVersion === 2) {
+      reviewedInput = input.planning;
+      const selections = uniqueFamilySelections(reviewedInput);
+      const inspectionRequest = candidateInspectionRequest(selections);
+      if (this.dependencies.familyCandidateService === undefined) {
+        throw new FamilyCandidateServiceError("EVIDENCE_UNAVAILABLE");
+      }
+      try {
+        const rawInspection = await this.dependencies.familyCandidateService.inspectAt(
+          inspectionRequest,
+          evaluatedAt,
+          signal,
+        );
+        if (signal?.aborted) throw new PlanRequestCancelledError();
+        const validatedInspection = reviewedFamilyCandidateInspectionResponseSchemaFor(
+          inspectionRequest,
+        ).safeParse(rawInspection);
+        if (
+          !validatedInspection.success
+          || validatedInspection.data.generatedAt !== evaluatedAt.toISOString()
+        ) {
+          throw new FamilyCandidateServiceError("EVIDENCE_UNAVAILABLE");
+        }
+        inspection = validatedInspection.data;
+      } catch (error) {
+        if (
+          error instanceof PlanRequestCancelledError
+          || signal?.aborted
+          || (error instanceof FamilyCandidateServiceError
+            && error.code === "REQUEST_CANCELLED")
+        ) {
+          throw new PlanRequestCancelledError();
+        }
+        if (error instanceof FamilyCandidateServiceError) throw error;
+        throw new FamilyCandidateServiceError("EVIDENCE_UNAVAILABLE");
+      }
+
+      const candidateSetByFamily = inspectedCandidateSetByFamily(inspection);
+      for (const selection of selections) {
+        const current = candidateSetByFamily.get(selection.match.familyId);
+        if (
+          current === undefined
+          || current.candidateSetId
+            !== selection.match.confirmation.candidateSetId
+          || current.taxonomyVersionId
+            !== selection.match.confirmation.taxonomyVersionId
+          || current.taxonomyVersionId !== inspection.taxonomy.versionId
+          || !sameJson(current.allowedBrands, selection.match.allowedBrands)
+        ) {
+          throw new ReviewedFamilyPlanError("CANDIDATE_CONFIRMATION_STALE");
+        }
+      }
+    }
+
+    const requestedCatalogGtins = directImpactCatalogGtins(input);
+    let directProducts: ExactProductPlanApiProductSummary[];
+    try {
+      const rawProducts = await this.dependencies.catalog.getMany(
+        requestedCatalogGtins,
+        evaluatedAt,
+        signal,
+      );
+      if (signal?.aborted) throw new PlanRequestCancelledError();
+      const parsedProducts = z.array(exactProductPlanApiProductSummarySchema)
+        .max(DISCOVERY_IMPACT_PRODUCT_UNION_MAX)
+        .safeParse(rawProducts);
+      if (!parsedProducts.success) throw new CatalogUnavailableError();
+      directProducts = [...parsedProducts.data].sort((left, right) =>
+        compareText(left.gtin, right.gtin));
+      const requested = new Set(requestedCatalogGtins);
+      if (
+        new Set(directProducts.map(({ gtin }) => gtin)).size
+          !== directProducts.length
+        || directProducts.some(({ gtin }) => !requested.has(gtin))
+      ) {
+        throw new CatalogUnavailableError();
+      }
+      validateCatalogAt(directProducts, evaluatedAt, reviewedInput !== undefined);
+    } catch (error) {
+      if (error instanceof PlanRequestCancelledError || signal?.aborted) {
+        throw new PlanRequestCancelledError();
+      }
+      if (error instanceof CatalogUnavailableError) throw error;
+      throw new CatalogUnavailableError();
+    }
+
+    const baselineExactGtins = input.planning.contractVersion === 1
+      ? requestedExactGtins(input.planning)
+      : exactCatalogGtins(input.planning);
+    const directGtinSet = new Set(directProducts.map(({ gtin }) => gtin));
+    if (baselineExactGtins.some((gtin) => !directGtinSet.has(gtin))) {
+      throw new UnknownExactProductError();
+    }
+
+    const candidateGtins = inspection?.productClaims.map(
+      ({ product }) => product.gtin,
+    ) ?? [];
+    if (new Set(candidateGtins).size !== candidateGtins.length) {
+      throw new FamilyCandidateServiceError("AMBIGUOUS_FAMILY_MEMBERSHIP");
+    }
+    const gtins = [...new Set([
+      ...candidateGtins,
+      ...directProducts.map(({ gtin }) => gtin),
+    ])].sort(compareText);
+    if (gtins.length < 1 || gtins.length > DISCOVERY_IMPACT_PRODUCT_UNION_MAX) {
+      throw new FamilyCandidateServiceError("CANDIDATE_SET_TOO_LARGE");
+    }
+    if (this.dependencies.priceService?.readProducts === undefined) {
+      throw new PriceDataUnavailableError();
+    }
+
+    let priceResult: ProductPriceServiceResult;
+    try {
+      priceResult = await this.dependencies.priceService.readProducts(
+        gtins,
+        input.planning.marketContext,
+        evaluatedAt,
+        signal,
+      );
+      if (signal?.aborted) throw new PlanRequestCancelledError();
+    } catch (error) {
+      if (
+        error instanceof PlanRequestCancelledError
+        || signal?.aborted
+        || (error instanceof PriceServiceError && error.code === "CANCELLED")
+      ) {
+        throw new PlanRequestCancelledError();
+      }
+      throw new PriceDataUnavailableError();
+    }
+
+    try {
+      const { identityByGtin } = validatePriceUnion(gtins, priceResult);
+      let planning: ServerPlanningInputV2;
+      let baselineCandidateSets: DiscoveryImpactBaselineCandidateSetV1[];
+      if (reviewedInput === undefined || inspection === undefined) {
+        planning = exactImpactPlannerInput(
+          input.planning as ExactProductPlanApiRequest,
+          directProducts,
+          identityByGtin,
+          priceResult,
+        );
+        baselineCandidateSets = impactBaselineCandidateSets(
+          planning,
+          undefined,
+          undefined,
+        );
+      } else {
+        const productClaims = productClaimsForMixedPlan(
+          directProducts,
+          inspection,
+          identityByGtin,
+        );
+        if (productClaims.length > DISCOVERY_IMPACT_PRODUCT_UNION_MAX) {
+          throw new FamilyCandidateServiceError("CANDIDATE_SET_TOO_LARGE");
+        }
+        const needMatches = needMatchesForMixedPlan(
+          reviewedInput,
+          inspection,
+          identityByGtin,
+        );
+        planning = mixedPlannerInput(
+          reviewedInput,
+          needMatches,
+          productClaims,
+          familyByCanonicalProduct(inspection),
+          priceResult,
+        );
+        baselineCandidateSets = impactBaselineCandidateSets(
+          planning,
+          needMatches,
+          productClaims,
+        );
+      }
+
+      return {
+        baselineCandidateSets,
+        comparisonCoverageByCanonicalProductId: new Map(
+          priceResult.productEvidence.map((entry) => [
+            entry.canonicalProductId,
+            entry.comparisonScope.completeness,
+          ]),
+        ),
+        evaluatedAt,
+        planning,
+      };
+    } catch (error) {
+      if (
+        error instanceof PlanRequestCancelledError
+        || error instanceof PriceDataUnavailableError
+        || error instanceof CatalogUnavailableError
+        || error instanceof ReviewedFamilyPlanError
+        || error instanceof FamilyCandidateServiceError
+      ) {
+        throw error;
+      }
+      throw new PriceDataUnavailableError();
+    }
   }
 
   async calculateExact(
@@ -767,9 +1146,37 @@ export class PlanService implements PlanServiceContract {
         paretoFrontierV2(completeCandidates),
         7,
       );
+      const completeCandidateEvidence = attachAssignmentEvidence(
+        priceResult.evidence,
+        completeCandidates,
+        products,
+      );
+      const evidence = attachAssignmentEvidence(priceResult.evidence, plans, products);
+      const generatedAt = catalogAt.toISOString();
+      const geographicDirectoryAttestation = attestGeographicDirectoryRegionV1(
+        priceResult.geographicDirectory,
+        input.marketContext.kind === "launch-region"
+          ? input.marketContext.regionId
+          : undefined,
+      );
+      const planDeltaExplanations = deriveExactProductPlanDeltaExplanationsV1({
+        evidence,
+        generatedAt,
+        marketContext: input.marketContext,
+        plans,
+      });
+      if (planDeltaExplanations === undefined) throw new PriceDataUnavailableError();
       return {
-        evidence: attachAssignmentEvidence(priceResult.evidence, plans, products),
-        generatedAt: catalogAt.toISOString(),
+        completeCandidateSet: {
+          evidence: completeCandidateEvidence,
+          plans: completeCandidates,
+        },
+        evidence,
+        generatedAt,
+        ...(geographicDirectoryAttestation === undefined
+          ? {}
+          : { geographicDirectoryAttestation }),
+        planDeltaExplanations,
         plans,
         priceDataSource: "cache",
         products,
@@ -901,6 +1308,7 @@ export class PlanService implements PlanServiceContract {
     try {
       priceResult = await this.dependencies.priceService.readProducts(
         gtins,
+        input.marketContext,
         evaluatedAt,
         signal,
       );
@@ -943,6 +1351,13 @@ export class PlanService implements PlanServiceContract {
         paretoFrontierV2(completeCandidates),
         7,
       );
+      const completeCandidateEvidence = visibleMixedEvidence(
+        needMatches,
+        productClaims,
+        inspection,
+        priceResult,
+        completeCandidates,
+      );
       const evidence = visibleMixedEvidence(
         needMatches,
         productClaims,
@@ -950,12 +1365,31 @@ export class PlanService implements PlanServiceContract {
         priceResult,
         plans,
       );
+      const planDeltaExplanations = deriveReviewedFamilyPlanDeltaExplanationsV1({
+        evidence,
+        generatedAt: evaluatedAt.toISOString(),
+        marketContext: input.marketContext,
+        plans,
+      });
+      if (planDeltaExplanations === undefined) throw new PriceDataUnavailableError();
+      const geographicDirectoryAttestation = attestGeographicDirectoryRegionV1(
+        priceResult.geographicDirectory,
+        input.marketContext.kind === "launch-region"
+          ? input.marketContext.regionId
+          : undefined,
+      );
       const fullResponse = reviewedFamilyPlanApiResponseV2SchemaFor(input).safeParse({
         caveats: [],
         contractVersion: 2,
         evidence,
+        enabledMembershipProgramIds: input.enabledMembershipProgramIds,
         generatedAt: evaluatedAt.toISOString(),
+        ...(geographicDirectoryAttestation === undefined
+          ? {}
+          : { geographicDirectoryAttestation }),
+        marketContext: input.marketContext,
         needMatches,
+        planDeltaExplanations,
         plans,
         priceDataSource: "cache",
         productClaims,
@@ -963,9 +1397,20 @@ export class PlanService implements PlanServiceContract {
       });
       if (!fullResponse.success) throw new PriceDataUnavailableError();
       return {
+        completeCandidateSet: {
+          evidence: completeCandidateEvidence,
+          plans: completeCandidates,
+        },
         evidence: fullResponse.data.evidence,
         generatedAt: fullResponse.data.generatedAt,
+        ...(fullResponse.data.geographicDirectoryAttestation === undefined
+          ? {}
+          : {
+              geographicDirectoryAttestation:
+                fullResponse.data.geographicDirectoryAttestation,
+            }),
         needMatches: fullResponse.data.needMatches,
+        planDeltaExplanations: fullResponse.data.planDeltaExplanations,
         plans: fullResponse.data.plans,
         priceDataSource: fullResponse.data.priceDataSource,
         productClaims: fullResponse.data.productClaims,

@@ -4,6 +4,7 @@ import {
   historicalComparisonSchema,
   officialOfferSchema,
   parseApplicableOfficialOffer,
+  selectOfficialOffersAtHighestGeographicSpecificity,
 } from "./index";
 
 const offer = {
@@ -119,6 +120,178 @@ describe("official offer and historical comparison contracts", () => {
         reason: testCase.expected,
       });
     }
+  });
+
+  it("treats the exclusive validity end instant as expired", () => {
+    const endsAt = "2026-07-16T12:00:00.000Z";
+
+    expect(parseApplicableOfficialOffer({
+      ...offer,
+      applicability: { ...offer.applicability, endsAt },
+    }, {
+      ...context,
+      now: new Date(endsAt),
+    })).toEqual({ applicable: false, reason: "expired" });
+  });
+
+  it("shadows national, region, and postal editions before price or ID tie-breaks", () => {
+    const national = {
+      ...offer,
+      id: "offer:00-cheap-national",
+      pricing: { kind: "unit" as const, unitPriceOre: 1_000 },
+      applicability: {
+        ...offer.applicability,
+        geographicScope: { kind: "national" as const, countryCode: "NO" },
+      },
+    };
+    const regional = {
+      ...offer,
+      id: "offer:90-expensive-region",
+      pricing: { kind: "unit" as const, unitPriceOre: 5_000 },
+    };
+    const postal = {
+      ...offer,
+      id: "offer:99-expensive-postal",
+      pricing: { kind: "unit" as const, unitPriceOre: 6_000 },
+      applicability: {
+        ...offer.applicability,
+        geographicScope: {
+          kind: "postal-set" as const,
+          countryCode: "NO",
+          postalCodes: ["0152"],
+        },
+      },
+    };
+
+    expect(selectOfficialOffersAtHighestGeographicSpecificity(
+      [postal, national, regional],
+      { location: { countryCode: "NO", regionCode: "NO-03" } },
+    ).map(({ id }) => id)).toEqual([regional.id]);
+    expect(selectOfficialOffersAtHighestGeographicSpecificity(
+      [postal, national, regional],
+      {
+        location: {
+          countryCode: "NO",
+          postalCode: "0152",
+          regionCode: "NO-03",
+        },
+      },
+    ).map(({ id }) => id)).toEqual([postal.id]);
+  });
+
+  it("uses store precedence only at that store and keeps border editions isolated", () => {
+    const national = {
+      ...offer,
+      id: "offer:national",
+      applicability: {
+        ...offer.applicability,
+        geographicScope: { kind: "national" as const, countryCode: "NO" },
+      },
+    };
+    const osloRegion = { ...offer, id: "offer:oslo-region" };
+    const bergenRegion = {
+      ...offer,
+      id: "offer:bergen-region",
+      applicability: {
+        ...offer.applicability,
+        geographicScope: {
+          kind: "regions" as const,
+          countryCode: "NO",
+          regionCodes: ["NO-46"],
+        },
+      },
+    };
+    const bergenPostal = {
+      ...offer,
+      id: "offer:bergen-postal",
+      applicability: {
+        ...offer.applicability,
+        geographicScope: {
+          kind: "postal-set" as const,
+          countryCode: "NO",
+          postalCodes: ["5003"],
+        },
+      },
+    };
+    const osloStore = {
+      ...offer,
+      id: "offer:oslo-store",
+      applicability: {
+        ...offer.applicability,
+        geographicScope: { kind: "stores" as const, storeIds: ["store:oslo"] },
+      },
+    };
+    const bergenStore = {
+      ...offer,
+      id: "offer:bergen-store",
+      applicability: {
+        ...offer.applicability,
+        geographicScope: { kind: "stores" as const, storeIds: ["store:bergen"] },
+      },
+    };
+
+    const candidates = [
+      bergenStore,
+      bergenPostal,
+      bergenRegion,
+      national,
+      osloStore,
+      osloRegion,
+    ];
+    expect(selectOfficialOffersAtHighestGeographicSpecificity(candidates, {
+      location: {
+        countryCode: "NO",
+        postalCode: "0152",
+        regionCode: "NO-03",
+        storeId: "store:oslo",
+      },
+    }).map(({ id }) => id)).toEqual([osloStore.id]);
+    expect(selectOfficialOffersAtHighestGeographicSpecificity(candidates, {
+      location: {
+        countryCode: "NO",
+        postalCode: "5003",
+        regionCode: "NO-46",
+        storeId: "store:bergen",
+      },
+    }).map(({ id }) => id)).toEqual([bergenStore.id]);
+  });
+
+  it("keeps equally specific offers and applies precedence per product and chain", () => {
+    const national = {
+      ...offer,
+      id: "offer:national",
+      applicability: {
+        ...offer.applicability,
+        geographicScope: { kind: "national" as const, countryCode: "NO" },
+      },
+    };
+    const regionalA = { ...offer, id: "offer:region:a" };
+    const regionalB = { ...offer, id: "offer:region:b" };
+    const otherChain = {
+      ...national,
+      chainId: "bunnpris",
+      id: "offer:other-chain",
+    };
+    const otherProduct = {
+      ...national,
+      id: "offer:other-product",
+      productMatch: { kind: "exact" as const, canonicalProductId: "product:tea" },
+    };
+
+    expect(selectOfficialOffersAtHighestGeographicSpecificity([
+      regionalB,
+      otherProduct,
+      national,
+      otherChain,
+      regionalA,
+    ], {
+      location: { countryCode: "NO", regionCode: "NO-03" },
+    }).map(({ id }) => id)).toEqual([
+      otherChain.id,
+      regionalA.id,
+      regionalB.id,
+      otherProduct.id,
+    ]);
   });
 
   it("rejects unsafe offer arithmetic and contradictory history arithmetic", () => {

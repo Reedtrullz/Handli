@@ -16,7 +16,11 @@ import {
   type KassalappRequestScope,
 } from "@handleplan/kassalapp";
 
-import type { WorkerJobRequest, WorkerRunResult } from "./contracts";
+import type {
+  KassalappWorkerJobKind,
+  WorkerJobRequest,
+  WorkerRunResult,
+} from "./contracts";
 import type {
   KassalappIngestionRepository,
   KassalappSourceAccessPolicy,
@@ -91,7 +95,7 @@ export interface SourceAccessReader {
   getSourceAccess(sourceId: string, signal?: AbortSignal): Promise<SourceAccessSnapshot | undefined>;
 }
 
-const PERMISSION_SCOPE_BY_JOB: Readonly<Record<WorkerJobRequest["kind"], string>> = {
+const PERMISSION_SCOPE_BY_JOB: Readonly<Record<KassalappWorkerJobKind, string>> = {
   "benchmark-price-refresh": "ordinaryPrice",
   "catalog-refresh": "catalog",
   "historical-observation-collection": "priceHistory",
@@ -99,7 +103,7 @@ const PERMISSION_SCOPE_BY_JOB: Readonly<Record<WorkerJobRequest["kind"], string>
 };
 
 const JOB_KIND_BY_REQUEST_SCOPE: Readonly<
-  Record<KassalappRequestScope, WorkerJobRequest["kind"]>
+  Record<KassalappRequestScope, KassalappWorkerJobKind>
 > = {
   catalog: "catalog-refresh",
   "ordinary-price": "benchmark-price-refresh",
@@ -132,7 +136,7 @@ export class GovernedKassalappSourceAccessPolicy implements KassalappSourceAcces
   }
 
   async getAccessState(
-    context: Readonly<{ jobKind: WorkerJobRequest["kind"]; sourceId: "kassalapp" }>,
+    context: Readonly<{ jobKind: KassalappWorkerJobKind; sourceId: "kassalapp" }>,
     signal: AbortSignal,
   ): Promise<KassalappSourceAccessState> {
     if (this.deploymentState !== "approved") return this.deploymentState;

@@ -2,9 +2,16 @@ import type {
   PlanningEvidenceReader,
   PlanningEvidenceSnapshot,
 } from "@handleplan/db/planning-evidence-reader";
+import type {
+  PublicOfficialOfferReader,
+  PublicOfficialOfferSnapshot,
+} from "@handleplan/db/public-official-offer-reader";
+import { EmptyPublicOfficialOfferReader } from "@handleplan/db/public-official-offer-reader";
 import {
   exactProductPlanApiEvidenceEnvelopeSchema,
   type ExactProductPlanApiRequest,
+  type MoneyOre,
+  type OfficialOffer,
   type PriceEvidence,
 } from "@handleplan/domain";
 import { describe, expect, it, vi } from "vitest";
@@ -14,8 +21,15 @@ import { PriceService, PriceServiceError } from "./price-service";
 const NOW = new Date("2026-07-16T12:00:00.000Z");
 const GTIN = "7038010000010";
 const GTIN_ALIAS = "7038010000027";
+const MARKET_CONTEXT = {
+  contractVersion: 1,
+  countryCode: "NO",
+  kind: "national",
+} as const;
 const REQUEST: ExactProductPlanApiRequest = {
   contractVersion: 1,
+  enabledMembershipProgramIds: [],
+  marketContext: MARKET_CONTEXT,
   maxStores: 3,
   needs: [{
     id: "need:milk",
@@ -113,6 +127,62 @@ function readerWith(value: PlanningEvidenceSnapshot): PlanningEvidenceReader & {
   };
 }
 
+function officialOffer(overrides: Partial<OfficialOffer> = {}): OfficialOffer {
+  return {
+    applicability: {
+      channels: ["in-store"],
+      contractVersion: 1,
+      endsAt: "2026-07-20T00:00:00.000Z",
+      geographicScope: { countryCode: "NO", kind: "national" },
+      startsAt: "2026-07-16T00:00:00.000Z",
+    },
+    beforePriceOre: 3_000 as MoneyOre,
+    capturedAt: "2026-07-16T10:00:00.000Z",
+    chainId: "extra",
+    conditions: [{ kind: "public" }],
+    contractVersion: 1,
+    evidenceLevel: "reviewed",
+    id: "official-offer:7",
+    kind: "official-offer",
+    pricing: { kind: "unit", unitPriceOre: 2_000 as MoneyOre },
+    productMatch: { canonicalProductId: "product:42", kind: "exact" },
+    sourceId: "extra-offers",
+    sourceRecordId: `official-source-record:${"a".repeat(64)}`,
+    ...overrides,
+  };
+}
+
+function officialSnapshot(
+  offers: OfficialOffer[] = [officialOffer()],
+): PublicOfficialOfferSnapshot {
+  return {
+    offers,
+    sources: offers.length === 0 ? [] : [{
+      contractVersion: 1,
+      displayName: "Reviewed weekly offers",
+      id: "extra-offers",
+      sourceClass: "offer",
+      state: "approved",
+    }],
+  };
+}
+
+function officialReaderWith(value: PublicOfficialOfferSnapshot): PublicOfficialOfferReader & {
+  getMany: ReturnType<typeof vi.fn<PublicOfficialOfferReader["getMany"]>>;
+} {
+  return { getMany: vi.fn(async () => value) };
+}
+
+function priceService(
+  dependencies: Omit<ConstructorParameters<typeof PriceService>[0], "officialOfferReader">
+    & { officialOfferReader?: PublicOfficialOfferReader },
+): PriceService {
+  return new PriceService({
+    officialOfferReader: new EmptyPublicOfficialOfferReader(),
+    ...dependencies,
+  });
+}
+
 describe("PriceService", () => {
   it("reads one canonical product union for flexible server planning", async () => {
     const second = snapshot();
@@ -121,8 +191,9 @@ describe("PriceService", () => {
       { canonicalProductId: "product:42", gtin: GTIN_ALIAS },
     ];
     const reader = readerWith(second);
-    const result = await new PriceService({ reader }).readProducts(
+    const result = await priceService({ reader }).readProducts(
       [GTIN_ALIAS, GTIN],
+      MARKET_CONTEXT,
       NOW,
     );
 
@@ -139,10 +210,161 @@ describe("PriceService", () => {
     expect(result.prices.map(({ ean }) => ean)).toEqual([GTIN, GTIN_ALIAS]);
   });
 
+  it("attaches current official offers and exact-merges their approved source metadata", async () => {
+    const officialOfferReader = officialReaderWith(officialSnapshot());
+    const result = await priceService({
+      officialOfferReader,
+      reader: readerWith(snapshot()),
+    }).readExact(REQUEST, NOW);
+
+    expect(officialOfferReader.getMany).toHaveBeenCalledWith(["product:42"], NOW, undefined);
+    expect(result.evidence.needs[0]!.officialOffers).toEqual([
+      expect.objectContaining({
+        id: "official-offer:7",
+        pricing: { kind: "unit", unitPriceOre: 2_000 },
+        sourceId: "extra-offers",
+      }),
+    ]);
+    expect(result.evidence.sources).toEqual(expect.arrayContaining([
+      {
+        contractVersion: 1,
+        displayName: "Reviewed weekly offers",
+        id: "extra-offers",
+        sourceClass: "offer",
+        state: "approved",
+      },
+    ]));
+  });
+
+  it("shadows cheaper national offers with an applicable regional edition before planning or discovery", async () => {
+    const national = officialOffer({
+      applicability: {
+        ...officialOffer().applicability,
+        geographicScope: { countryCode: "NO", kind: "national" },
+      },
+      id: "official-offer:00-cheap-national",
+      pricing: { kind: "unit", unitPriceOre: 1_000 as MoneyOre },
+    });
+    const oslo = officialOffer({
+      applicability: {
+        ...officialOffer().applicability,
+        geographicScope: {
+          countryCode: "NO",
+          kind: "regions",
+          regionCodes: ["no-0301-oslo"],
+        },
+      },
+      id: "official-offer:99-expensive-oslo",
+      pricing: { kind: "unit", unitPriceOre: 2_500 as MoneyOre },
+    });
+    const bergen = officialOffer({
+      applicability: {
+        ...officialOffer().applicability,
+        geographicScope: {
+          countryCode: "NO",
+          kind: "regions",
+          regionCodes: ["no-4601-bergen"],
+        },
+      },
+      id: "official-offer:01-cheap-bergen",
+      pricing: { kind: "unit", unitPriceOre: 1_100 as MoneyOre },
+    });
+    const osloMarket = {
+      contractVersion: 1 as const,
+      countryCode: "NO" as const,
+      kind: "launch-region" as const,
+      regionId: "no-0301-oslo",
+    };
+
+    const result = await priceService({
+      officialOfferReader: officialReaderWith(officialSnapshot([
+        national,
+        bergen,
+        oslo,
+      ])),
+      reader: readerWith(snapshot()),
+    }).readExact({ ...REQUEST, marketContext: osloMarket }, NOW);
+
+    expect(result.evidence.needs[0]?.officialOffers.map(({ id }) => id)).toEqual([
+      oslo.id,
+    ]);
+    expect(result.evidence.sources.map(({ id }) => id)).toContain("extra-offers");
+  });
+
+  it("keeps explicit member conditions visible while filtering stale, wrong-channel and wrong-region offers", async () => {
+    const member = officialOffer({
+      conditions: [{ kind: "member", programId: "extra-medlem" }],
+      id: "official-offer:member",
+    });
+    const stale = officialOffer({
+      capturedAt: "2026-07-02T11:59:59.999Z",
+      id: "official-offer:stale",
+    });
+    const online = officialOffer({
+      applicability: { ...officialOffer().applicability, channels: ["online"] },
+      id: "official-offer:online",
+    });
+    const wrongRegion = officialOffer({
+      applicability: {
+        ...officialOffer().applicability,
+        geographicScope: {
+          countryCode: "NO",
+          kind: "regions",
+          regionCodes: ["no-11-rogaland"],
+        },
+      },
+      id: "official-offer:wrong-region",
+    });
+    const result = await priceService({
+      officialOfferReader: officialReaderWith(officialSnapshot([
+        member,
+        stale,
+        online,
+        wrongRegion,
+      ])),
+      reader: readerWith(snapshot()),
+    }).readExact(REQUEST, NOW);
+
+    expect(result.evidence.needs[0]!.officialOffers).toEqual([member]);
+    expect(result.evidence.sources.map(({ id }) => id)).toContain("extra-offers");
+  });
+
+  it("fails closed on unrequested offer products, source conflicts and offer overflows", async () => {
+    const cases: PublicOfficialOfferSnapshot[] = [
+      officialSnapshot([officialOffer({
+        productMatch: { canonicalProductId: "product:43", kind: "exact" },
+      })]),
+      {
+        ...officialSnapshot(),
+        sources: [{
+          contractVersion: 1,
+          displayName: "Conflicting ordinary source identity",
+          id: "licensed-price",
+          sourceClass: "offer",
+          state: "approved",
+        }],
+        offers: [officialOffer({ sourceId: "licensed-price" })],
+      },
+      officialSnapshot(Array.from({ length: 51 }, (_, index) => officialOffer({
+        id: `official-offer:${index + 1}`,
+      }))),
+    ];
+
+    for (const value of cases) {
+      await expect(priceService({
+        officialOfferReader: officialReaderWith(value),
+        reader: readerWith(snapshot()),
+      }).readExact(REQUEST, NOW)).rejects.toEqual(expect.objectContaining({
+        code: "UNAVAILABLE",
+        name: "PriceServiceError",
+      }));
+    }
+  });
+
   it("separates one selected current price per chain from its traceable historical baseline", async () => {
     const reader = readerWith(snapshot());
     const signal = new AbortController().signal;
-    const result = await new PriceService({ reader }).readExact(REQUEST, NOW, signal);
+    const result = await priceService({ reader }).readExact(REQUEST, NOW, signal);
 
     expect(reader.getMany).toHaveBeenCalledWith([GTIN], NOW, signal);
     expect(result.prices).toEqual([{
@@ -175,8 +397,107 @@ describe("PriceService", () => {
     });
   });
 
+  it("selects the matching regional price while the national market keeps national evidence", async () => {
+    const persisted = snapshot();
+    persisted.priceEvidence.push(
+      {
+        ...evidence("price:oslo", "extra", "2026-07-16T10:00:00.000Z", 2_190),
+        geographicScope: {
+          countryCode: "NO" as const,
+          kind: "regions",
+          regionCodes: ["no-0301-oslo"],
+        },
+      },
+      {
+        ...evidence("price:bergen", "extra", "2026-07-16T11:30:00.000Z", 1_990),
+        geographicScope: {
+          countryCode: "NO",
+          kind: "regions",
+          regionCodes: ["no-4601-bergen"],
+        },
+      },
+      {
+        ...evidence("price:one-store", "extra", "2026-07-16T11:45:00.000Z", 1_490),
+        geographicScope: { kind: "stores", storeIds: ["store:extra:oslo-1"] },
+      },
+    );
+    const osloMarket = {
+      contractVersion: 1 as const,
+      countryCode: "NO" as const,
+      kind: "launch-region" as const,
+      regionId: "no-0301-oslo",
+    };
+    const regional = await priceService({ reader: readerWith(persisted) }).readExact({
+      ...REQUEST,
+      marketContext: osloMarket,
+    }, NOW);
+    const national = await priceService({ reader: readerWith(persisted) })
+      .readExact(REQUEST, NOW);
+
+    expect(regional.evidence.needs[0]?.ordinaryPrices.map(({ id }) => id))
+      .toEqual(["price:oslo"]);
+    expect(regional.evidence.needs[0]?.comparisonScope.entries.find(
+      ({ chainId }) => chainId === "extra",
+    )?.status).toEqual({ evidenceId: "price:oslo", kind: "priced" });
+    expect(national.evidence.needs[0]?.ordinaryPrices.map(({ id }) => id))
+      .toEqual(["price:current"]);
+  });
+
+  it("admits a postal-set price for a launch region only with current directory evidence", async () => {
+    const persisted = snapshot();
+    persisted.priceEvidence.push({
+      ...evidence("price:postal-oslo", "extra", "2026-07-16T10:00:00.000Z", 2_090),
+      geographicScope: {
+        countryCode: "NO",
+        kind: "postal-set",
+        postalCodes: ["0152", "0452"],
+      },
+    });
+    const osloMarket = {
+      contractVersion: 1 as const,
+      countryCode: "NO" as const,
+      kind: "launch-region" as const,
+      regionId: "no-0301-oslo",
+    };
+    const geographicDirectoryReader = {
+      read: vi.fn(async () => ({
+        state: "available" as const,
+        evaluatedAt: NOW.toISOString(),
+        directory: {
+          contractVersion: 1 as const,
+          countryCode: "NO",
+          directoryVersionId: "postal-directory-2026-07",
+          evidenceReference: "manifest:directory",
+          publishedAt: "2026-07-16T09:30:00.000Z",
+          regions: [{
+            coverageState: "complete" as const,
+            evidenceReference: "manifest:oslo",
+            postalCodes: ["0152", "0452"],
+            regionCode: "no-0301-oslo",
+          }],
+          reviewedAt: "2026-07-16T09:00:00.000Z",
+          status: "approved" as const,
+          validFrom: "2026-07-16T09:30:00.000Z",
+        },
+      })),
+    };
+
+    const withDirectory = await priceService({
+      geographicDirectoryReader,
+      reader: readerWith(persisted),
+    }).readExact({ ...REQUEST, marketContext: osloMarket }, NOW);
+    const withoutDirectory = await priceService({ reader: readerWith(persisted) })
+      .readExact({ ...REQUEST, marketContext: osloMarket }, NOW);
+
+    expect(withDirectory.evidence.needs[0]?.ordinaryPrices.map(({ id }) => id))
+      .toEqual(["price:postal-oslo"]);
+    expect(withoutDirectory.evidence.needs[0]?.ordinaryPrices.map(({ id }) => id))
+      .not.toContain("price:postal-oslo");
+    expect(geographicDirectoryReader.read).toHaveBeenCalledWith("NO", NOW, undefined);
+  });
+
   it("declares every referenced evidence source exactly once and drops unused approvals", async () => {
-    const result = await new PriceService({ reader: readerWith(snapshot()) })
+    const result = await priceService({ reader: readerWith(snapshot()) })
       .readExact(REQUEST, NOW);
     const referencedSourceIds = new Set<string>();
     for (const need of result.evidence.needs) {
@@ -201,7 +522,7 @@ describe("PriceService", () => {
   });
 
   it("returns explicit unknown coverage when approved persisted evidence is absent", async () => {
-    const result = await new PriceService({
+    const result = await priceService({
       reader: readerWith({
         coverageChecks: [],
         historicalEligibleEvidenceIds: [],
@@ -253,7 +574,7 @@ describe("PriceService", () => {
       gtin: GTIN_ALIAS,
     });
 
-    const result = await new PriceService({ reader: readerWith(aliasedSnapshot) })
+    const result = await priceService({ reader: readerWith(aliasedSnapshot) })
       .readExact(aliasedRequest, NOW);
 
     expect(result.products).toEqual([
@@ -274,7 +595,7 @@ describe("PriceService", () => {
       "2026-07-12T11:59:59.999Z",
       1_000,
     );
-    const result = await new PriceService({
+    const result = await priceService({
       reader: readerWith({
         coverageChecks: [],
         historicalEligibleEvidenceIds: [],
@@ -316,7 +637,7 @@ describe("PriceService", () => {
       evidence("price:current:conflict", "extra", "2026-07-16T11:00:00.000Z", 2_590),
     );
 
-    const result = await new PriceService({ reader: readerWith(conflicting) })
+    const result = await priceService({ reader: readerWith(conflicting) })
       .readExact(REQUEST, NOW);
 
     expect(result.prices).toEqual([]);
@@ -336,7 +657,7 @@ describe("PriceService", () => {
     const ordinaryOnly = snapshot();
     ordinaryOnly.historicalEligibleEvidenceIds = [];
 
-    const result = await new PriceService({ reader: readerWith(ordinaryOnly) })
+    const result = await priceService({ reader: readerWith(ordinaryOnly) })
       .readExact(REQUEST, NOW);
 
     expect(result.evidence.needs[0]).toMatchObject({
@@ -349,18 +670,18 @@ describe("PriceService", () => {
   it("fails closed for inconsistent product/source snapshots and preserves cancellation", async () => {
     const missingProduct = snapshot();
     missingProduct.products = [];
-    await expect(new PriceService({ reader: readerWith(missingProduct) }).readExact(REQUEST, NOW))
+    await expect(priceService({ reader: readerWith(missingProduct) }).readExact(REQUEST, NOW))
       .rejects.toEqual(new PriceServiceError("UNAVAILABLE"));
 
     const missingSource = snapshot();
     missingSource.sources = missingSource.sources.filter(({ id }) => id !== "licensed-price");
-    await expect(new PriceService({ reader: readerWith(missingSource) }).readExact(REQUEST, NOW))
+    await expect(priceService({ reader: readerWith(missingSource) }).readExact(REQUEST, NOW))
       .rejects.toEqual(new PriceServiceError("UNAVAILABLE"));
 
     const unknownHistoricalIdentity = snapshot();
     unknownHistoricalIdentity.historicalEligibleEvidenceIds.push("price:missing");
     await expect(
-      new PriceService({ reader: readerWith(unknownHistoricalIdentity) }).readExact(REQUEST, NOW),
+      priceService({ reader: readerWith(unknownHistoricalIdentity) }).readExact(REQUEST, NOW),
     ).rejects.toEqual(new PriceServiceError("UNAVAILABLE"));
 
     const duplicateHistoricalIdentity = snapshot();
@@ -368,13 +689,13 @@ describe("PriceService", () => {
       duplicateHistoricalIdentity.historicalEligibleEvidenceIds[0]!,
     );
     await expect(
-      new PriceService({ reader: readerWith(duplicateHistoricalIdentity) }).readExact(REQUEST, NOW),
+      priceService({ reader: readerWith(duplicateHistoricalIdentity) }).readExact(REQUEST, NOW),
     ).rejects.toEqual(new PriceServiceError("UNAVAILABLE"));
 
     const controller = new AbortController();
     controller.abort();
     const reader: PlanningEvidenceReader = { getMany: vi.fn() };
-    await expect(new PriceService({ reader }).readExact(REQUEST, NOW, controller.signal))
+    await expect(priceService({ reader }).readExact(REQUEST, NOW, controller.signal))
       .rejects.toEqual(new PriceServiceError("CANCELLED"));
     expect(reader.getMany).not.toHaveBeenCalled();
   });

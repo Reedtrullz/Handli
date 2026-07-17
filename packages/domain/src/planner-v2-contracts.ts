@@ -15,7 +15,10 @@ import {
   sourceNeutralPriceObservationSchema,
 } from "./contracts";
 import { fulfilmentV2Schema } from "./fulfilment";
-import { geographicContextSchema } from "./geography";
+import {
+  geographicContextSchema,
+  geographicDirectoryEvidenceSchema,
+} from "./geography";
 import { officialOfferSchema } from "./offers";
 
 const chainSchema = z.enum(["bunnpris", "rema-1000", "extra"]);
@@ -47,8 +50,9 @@ export const offerEligibilityV2Schema = z
     maxEvidenceAgeMs: nonNegativeSafeIntegerSchema,
     location: geographicContextSchema,
     channel: z.enum(["in-store", "online"]),
-    enabledSourceIds: z.array(sourceIdSchema).max(100),
-    enabledMembershipProgramIds: z.array(identifierSchema).max(100),
+      enabledSourceIds: z.array(sourceIdSchema).max(100),
+      enabledMembershipProgramIds: z.array(identifierSchema).max(100),
+      geographicDirectory: geographicDirectoryEvidenceSchema.optional(),
   })
   .strict()
   .superRefine((context, refinement) => {

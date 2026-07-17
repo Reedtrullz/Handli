@@ -1,0 +1,12 @@
+# Example only. A .example unit is not loadable by systemd and is disabled.
+[Unit]
+Description=Run the Handleplan backup twice daily after operational approval
+
+[Timer]
+OnCalendar=*-*-* 02,14:17:00 UTC
+Persistent=true
+AccuracySec=1m
+Unit=handleplan-backup.service
+
+[Install]
+WantedBy=timers.target

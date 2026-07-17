@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalizeReviewedFamilyCandidateSetFingerprintInput,
   exactProductPlanApiRequestSchema,
+  deriveReviewedFamilyPlanDeltaExplanationsV1,
   normalizeReviewedFamilyAllowedBrand,
+  planResultV2Schema,
+  priceEvidenceSchema,
   reviewedFamilyCandidateInspectionRequestSchema,
   reviewedFamilyCandidateInspectionResponseSchemaFor,
   reviewedFamilyPlanApiRequestV2Schema,
@@ -126,6 +129,8 @@ const candidateResponse = {
 
 const rawPlanRequest = {
   contractVersion: 2,
+  enabledMembershipProgramIds: [],
+  marketContext: { contractVersion: 1, countryCode: "NO", kind: "national" },
   maxStores: 2,
   needs: [
     {
@@ -167,7 +172,7 @@ function priceEvidence(
   canonicalProductId: string,
   amountOre: number,
 ) {
-  return {
+  return priceEvidenceSchema.parse({
     amountOre,
     chainId: "extra" as const,
     contractVersion: 1 as const,
@@ -180,7 +185,7 @@ function priceEvidence(
     productMatch: { canonicalProductId, kind: "exact" as const },
     sourceId: priceSource.id,
     sourceRecordId: `source-record:${id}`,
-  };
+  });
 }
 
 const coffeePrice = priceEvidence("price:coffee", "product:coffee", 5_000);
@@ -239,9 +244,20 @@ function assignment(
 const coffeeAssignment = assignment("need:coffee", "product:coffee", GTIN_COFFEE, 5_000);
 const milkAssignment = assignment("need:milk", "product:milk", GTIN_MILK, 2_500);
 
-const planResponse = {
+const mixedPlan = planResultV2Schema.parse({
+  assignments: [coffeeAssignment, milkAssignment],
+  chains: ["extra"],
+  coverage: 1,
+  freshness: { "need:coffee": "eligible", "need:milk": "eligible" },
+  id: "plan-v2:mixed",
+  substitutions: ["need:milk"],
+  totalOre: 7_500,
+});
+
+const planResponseBase = {
   caveats: ["Kjedepris dokumenterer ikke lagerstatus."],
   contractVersion: 2 as const,
+  enabledMembershipProgramIds: [],
   evidence: {
     assignmentEvidence: [
       {
@@ -278,6 +294,7 @@ const planResponse = {
     sources: [catalogSource, priceSource],
   },
   generatedAt: GENERATED_AT,
+  marketContext: parsedPlanRequest.marketContext,
   needMatches: [
     {
       candidateProductIds: ["product:coffee"],
@@ -295,19 +312,35 @@ const planResponse = {
       taxonomyVersionId: taxonomy.versionId,
     },
   ],
-  plans: [{
-    assignments: [coffeeAssignment, milkAssignment],
-    chains: ["extra" as const],
-    coverage: 1 as const,
-    freshness: { "need:coffee": "eligible" as const, "need:milk": "eligible" as const },
-    id: "plan-v2:mixed",
-    substitutions: ["need:milk"],
-    totalOre: 7_500,
-  }],
+  plans: [mixedPlan],
   priceDataSource: "cache" as const,
   productClaims: [coffeeClaim, milkClaim],
   taxonomy,
 };
+
+const planDeltaExplanations = deriveReviewedFamilyPlanDeltaExplanationsV1(planResponseBase);
+if (planDeltaExplanations === undefined) throw new Error("invalid reviewed explanation fixture");
+const planResponse = { ...planResponseBase, planDeltaExplanations };
+
+function completeCandidateCoverage(checkedAt: string) {
+  return planResponseBase.evidence.candidateCoverage.map((candidate) => ({
+    ...candidate,
+    comparisonScope: {
+      ...candidate.comparisonScope,
+      completeness: "complete" as const,
+      entries: candidate.comparisonScope.entries.map((entry) => entry.chainId === "extra"
+        ? entry
+        : {
+            chainId: entry.chainId,
+            status: {
+              checkedAt,
+              kind: "known-not-carried" as const,
+              sourceId: priceSource.id,
+            },
+          }),
+    },
+  }));
+}
 
 describe("reviewed-family candidate inspection contract v2", () => {
   it("normalizes, deduplicates, and canonically orders browser-provided brand filters", () => {
@@ -435,6 +468,33 @@ describe("reviewed-family candidate inspection contract v2", () => {
 });
 
 describe("reviewed-family planning contract v2", () => {
+  it("requires a bounded canonical membership selection and binds the response echo", () => {
+    expect(reviewedFamilyPlanApiRequestV2Schema.safeParse({
+      ...rawPlanRequest,
+      enabledMembershipProgramIds: ["coop-medlem", "trumf"],
+    }).success).toBe(true);
+    const { enabledMembershipProgramIds: _omitted, ...missingSelection } = rawPlanRequest;
+    expect(reviewedFamilyPlanApiRequestV2Schema.safeParse(missingSelection).success).toBe(false);
+    for (const enabledMembershipProgramIds of [
+      ["trumf", "coop-medlem"],
+      ["trumf", "trumf"],
+      ["trumf "],
+      ["trumf\u0000"],
+      ["e\u0301"],
+      Array.from({ length: 101 }, (_, index) => `program:${String(index).padStart(3, "0")}`),
+    ]) {
+      expect(reviewedFamilyPlanApiRequestV2Schema.safeParse({
+        ...rawPlanRequest,
+        enabledMembershipProgramIds,
+      }).success).toBe(false);
+    }
+
+    expect(reviewedFamilyPlanApiResponseV2SchemaFor(parsedPlanRequest).safeParse({
+      ...planResponse,
+      enabledMembershipProgramIds: ["trumf"],
+    }).success).toBe(false);
+  });
+
   it("accepts mixed exact and reviewed-family needs with at most three stores", () => {
     expect(parsedPlanRequest.needs[1]?.match).toMatchObject({ allowedBrands: ["tine"] });
     expect(reviewedFamilyPlanApiRequestV2Schema.safeParse({
@@ -475,6 +535,143 @@ describe("reviewed-family planning contract v2", () => {
     const parsed = reviewedFamilyPlanApiResponseV2SchemaFor(parsedPlanRequest)
       .safeParse(planResponse);
     expect(parsed.success ? undefined : parsed.error.issues).toBeUndefined();
+  });
+
+  it("revalidates reviewed postal evidence from one bound regional directory attestation", () => {
+    const marketContext = {
+      contractVersion: 1 as const,
+      countryCode: "NO" as const,
+      kind: "launch-region" as const,
+      regionId: "no-0301-oslo",
+    };
+    const request = { ...parsedPlanRequest, marketContext };
+    const geographicDirectoryAttestation = {
+      contractVersion: 1 as const,
+      countryCode: "NO",
+      directoryVersionId: "postal-directory-2026-07",
+      evaluatedAt: GENERATED_AT,
+      evidenceReference: "manifest:postal-directory-2026-07",
+      publishedAt: "2026-07-17T10:00:00.000Z",
+      region: {
+        coverageState: "complete" as const,
+        evidenceReference: "manifest:oslo-postal-set",
+        postalCodes: ["0152", "0452"],
+        regionCode: marketContext.regionId,
+      },
+      reviewedAt: "2026-07-17T09:00:00.000Z",
+      status: "approved" as const,
+      validFrom: "2026-07-17T00:00:00.000Z",
+    };
+    const responseBase = {
+      ...planResponseBase,
+      evidence: {
+        ...planResponseBase.evidence,
+        ordinaryPrices: planResponseBase.evidence.ordinaryPrices.map((price) => ({
+          ...price,
+          geographicScope: {
+            countryCode: "NO" as const,
+            kind: "postal-set" as const,
+            postalCodes: ["0152", "0452"],
+          },
+        })),
+      },
+      geographicDirectoryAttestation,
+      marketContext,
+    };
+    const explanations = deriveReviewedFamilyPlanDeltaExplanationsV1(responseBase);
+    if (explanations === undefined) throw new Error("invalid regional explanation fixture");
+    const response = { ...responseBase, planDeltaExplanations: explanations };
+    const schema = reviewedFamilyPlanApiResponseV2SchemaFor(request);
+
+    expect(schema.safeParse(response).success).toBe(true);
+    const { geographicDirectoryAttestation: _missing, ...withoutAttestation } = response;
+    expect(schema.safeParse(withoutAttestation).success).toBe(false);
+    expect(schema.safeParse({
+      ...response,
+      geographicDirectoryAttestation: {
+        ...geographicDirectoryAttestation,
+        region: {
+          ...geographicDirectoryAttestation.region,
+          regionCode: "no-4601-bergen",
+        },
+      },
+    }).success).toBe(false);
+  });
+
+  it("requires exact canonical reviewed plan bytes when travel participates in projection", () => {
+    const route = {
+      aggregate: {
+        calculatedAt: GENERATED_AT,
+        distanceMeters: 2_000,
+        durationSeconds: 300,
+        mode: "car" as const,
+        providerSourceId: "fixture-router",
+        routeFingerprint: "route:reviewed-canonical",
+      },
+      planId: mixedPlan.id,
+      stops: [{
+        branchId: "branch:extra:reviewed-canonical",
+        chainId: "extra" as const,
+        name: "Extra testbutikk",
+        sequence: 1,
+      }],
+    };
+    const explanations = deriveReviewedFamilyPlanDeltaExplanationsV1({
+      ...planResponseBase,
+      travelRoutes: [route],
+    });
+    if (explanations === undefined) throw new Error("invalid reviewed travel fixture");
+    const response = { ...planResponseBase, planDeltaExplanations: explanations };
+    const schema = reviewedFamilyPlanApiResponseV2SchemaFor(parsedPlanRequest, {
+      travelRoutes: [route],
+    });
+    expect(schema.safeParse(response).success).toBe(true);
+    expect(schema.safeParse({
+      ...response,
+      plans: [{ ...mixedPlan, assignments: [...mixedPlan.assignments].reverse() }],
+    }).success).toBe(false);
+  });
+
+  it("rejects reviewed-family explanation copy detached from the exact response evidence", () => {
+    const entry = planResponse.planDeltaExplanations.entries[0]!;
+    const forged = {
+      ...planResponse,
+      planDeltaExplanations: {
+        ...planResponse.planDeltaExplanations,
+        entries: [{ ...entry, summary: "Forged client-authoritative difference." }],
+      },
+    };
+
+    expect(reviewedFamilyPlanApiResponseV2SchemaFor(parsedPlanRequest).safeParse(forged).success)
+      .toBe(false);
+  });
+
+  it("rejects stale or future known-not-carried proof after a complete reviewed response is signed", () => {
+    const completeBase = {
+      ...planResponseBase,
+      evidence: {
+        ...planResponseBase.evidence,
+        candidateCoverage: completeCandidateCoverage("2026-07-14T12:00:00.000Z"),
+      },
+    };
+    const completeExplanations = deriveReviewedFamilyPlanDeltaExplanationsV1(completeBase);
+    if (completeExplanations === undefined) throw new Error("invalid complete coverage fixture");
+    const complete = { ...completeBase, planDeltaExplanations: completeExplanations };
+    const schema = reviewedFamilyPlanApiResponseV2SchemaFor(parsedPlanRequest);
+    expect(schema.safeParse(complete).success).toBe(true);
+
+    for (const checkedAt of [
+      "2026-07-14T11:59:59.999Z",
+      "2026-07-17T12:00:00.001Z",
+    ]) {
+      expect(schema.safeParse({
+        ...complete,
+        evidence: {
+          ...complete.evidence,
+          candidateCoverage: completeCandidateCoverage(checkedAt),
+        },
+      }).success).toBe(false);
+    }
   });
 
   it("binds response family details to the exact confirmation and taxonomy", () => {
@@ -521,9 +718,11 @@ describe("reviewed-family planning contract v2", () => {
     }
   });
 
-  it("leaves the exact-product v1 request contract unchanged", () => {
+  it("keeps the exact-product v1 request narrow and explicitly market-bound", () => {
     const v1 = {
       contractVersion: 1,
+      enabledMembershipProgramIds: [],
+      marketContext: { contractVersion: 1, countryCode: "NO", kind: "national" },
       maxStores: 2,
       needs: [{
         id: "need:milk",

@@ -154,6 +154,44 @@ describe("Planlegg basket workspace", () => {
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
+  it("stores an exact 1,5 l need canonically as 1 500 ml without changing its meaning", async () => {
+    const user = userEvent.setup();
+    render(
+      <BasketWorkspace
+        createId={idFactory()}
+        searchProducts={async () => [milk]}
+        searchDelayMs={0}
+      />,
+    );
+
+    const amount = screen.getByRole("textbox", { name: "Mengde for eksakt produkt" });
+    await user.clear(amount);
+    await user.type(amount, "1,5");
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Enhet for eksakt produkt" }),
+      "l",
+    );
+    await user.type(screen.getByLabelText("Hva skal du handle?"), "melk");
+    await user.click(await screen.findByRole("option", { name: /TINE Lettmelk/ }));
+
+    expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}")).toMatchObject({
+      needs: [{ quantity: 1_500, quantityUnit: "ml" }],
+    });
+    const row = screen.getByRole("listitem", { name: /TINE Lettmelk/ });
+    expect(within(row).getByText("Behov: 1,5 l")).toBeVisible();
+    const rowAmount = within(row).getByRole("textbox", { name: /Mengde/ });
+    const rowUnit = within(row).getByRole("combobox", { name: /Enhet/ });
+    await user.selectOptions(rowUnit, "ml");
+    expect(rowAmount).toHaveValue("1500");
+    expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}")).toMatchObject({
+      needs: [{ quantity: 1_500, quantityUnit: "ml" }],
+    });
+    await user.selectOptions(rowUnit, "l");
+    expect(rowAmount).toHaveValue("1,5");
+    expect(screen.getByText("Din kurv (1 varebehov)")).toBeVisible();
+    expect(screen.queryByText(/1500 varer/i)).not.toBeInTheDocument();
+  });
+
   it("requires server inspection and explicit approval before adding a reviewed family", async () => {
     const user = userEvent.setup();
     const inspect = vi.fn(async () => familyResponse());
@@ -196,6 +234,37 @@ describe("Planlegg basket workspace", () => {
         productFamily: "family:melk",
         userApproved: true,
       }],
+    });
+  });
+
+  it("binds an approved flexible 1 kg need to canonical 1 000 g", async () => {
+    const user = userEvent.setup();
+    render(
+      <BasketWorkspace
+        createId={idFactory()}
+        inspectFamilyCandidates={async () => familyResponse()}
+        searchProducts={async () => []}
+        searchDelayMs={0}
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText("Varetype"), "family:melk");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Enhet for Melk" }), "kg");
+    await user.click(screen.getByRole("button", { name: "Se gjennom alternativer" }));
+    const approval = await screen.findByRole("group", { name: "Godkjenn alternativer for Melk" });
+    await user.click(within(approval).getByRole("button", {
+      name: "Godkjenn kandidatlisten og legg til",
+    }));
+
+    expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}")).toMatchObject({
+      needs: [{ quantity: 1_000, quantityUnit: "g" }],
+    });
+    const row = screen.getByRole("listitem", { name: /Melk/i });
+    expect(within(row).getByText("Behov: 1 kg")).toBeVisible();
+    await user.selectOptions(within(row).getByRole("combobox", { name: /Enhet/ }), "g");
+    expect(within(row).getByRole("textbox", { name: /Mengde/ })).toHaveValue("1000");
+    expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}")).toMatchObject({
+      needs: [{ quantity: 1_000, quantityUnit: "g" }],
     });
   });
 
@@ -474,7 +543,13 @@ describe("Planlegg basket workspace", () => {
     await user.type(input, "melk");
     expect(await screen.findByRole("option", { name: /TINE Lettmelk/ })).toBeVisible();
     await user.tab();
-    expect(screen.getByRole("button", { name: "Øk antall" })).toHaveFocus();
+    expect(screen.getByRole("textbox", { name: "Mengde for eksakt produkt" })).toHaveFocus();
+    expect(input).toHaveAttribute("aria-expanded", "true");
+    await user.tab();
+    expect(screen.getByRole("combobox", { name: "Enhet for eksakt produkt" })).toHaveFocus();
+    expect(input).toHaveAttribute("aria-expanded", "true");
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Øk mengde for eksakt produkt" })).toHaveFocus();
     expect(input).toHaveAttribute("aria-expanded", "true");
     await user.tab();
     expect(screen.getByRole("combobox", { name: "Varetype" })).toHaveFocus();
@@ -579,16 +654,15 @@ describe("Planlegg basket workspace", () => {
         searchDelayMs={0}
       />,
     );
-    const increment = screen.getByRole("button", { name: "Øk antall" });
+    const amount = screen.getByRole("textbox", { name: "Mengde for eksakt produkt" });
+    const increment = screen.getByRole("button", { name: "Øk mengde for eksakt produkt" });
+    await user.clear(amount);
+    await user.type(amount, String(BASKET_QUANTITY_MAX));
 
-    for (let quantity = 1; quantity < BASKET_QUANTITY_MAX; quantity += 1) {
-      fireEvent.click(increment);
-    }
-
-    expect(screen.getByText(String(BASKET_QUANTITY_MAX), { selector: "output" })).toBeVisible();
+    expect(amount).toHaveValue(String(BASKET_QUANTITY_MAX));
     expect(increment).toBeDisabled();
     await user.click(increment);
-    expect(screen.getByText(String(BASKET_QUANTITY_MAX), { selector: "output" })).toBeVisible();
+    expect(amount).toHaveValue(String(BASKET_QUANTITY_MAX));
   });
 
   it("disables creation visibly when the basket already has 50 needs", () => {
@@ -596,12 +670,17 @@ describe("Planlegg basket workspace", () => {
       id: `need-${index}`, query: milk.name, quantity: 1, quantityUnit: "each", matchRuleId: `rule-${index}`, required: true,
     }));
     localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify({
-      version: 3,
+      version: 4,
       needs,
       matchingRules: needs.map((_, index) => ({ id: `rule-${index}`, mode: "exact", exactEan: milk.ean, userApproved: true, explanation: "Eksakt produkt" })),
       products: [milk],
       convenienceWeightBasisPoints: 5_000,
       familyConfirmations: [],
+      marketContext: {
+        contractVersion: 1,
+        countryCode: "NO",
+        kind: "national",
+      },
       travel: { enabled: false, mode: "car" },
     }));
 
@@ -622,18 +701,51 @@ describe("Planlegg basket workspace", () => {
 
     await user.type(screen.getByLabelText("Hva skal du handle?"), "melk");
     await user.click(await screen.findByRole("option", { name: /TINE Lettmelk/ }));
-    const quantity = screen.getByRole("spinbutton", { name: /Antall TINE Lettmelk/ });
+    const quantity = screen.getByRole("textbox", { name: /Mengde for TINE Lettmelk/ });
+    const unit = screen.getByRole("combobox", { name: /Enhet for TINE Lettmelk/ });
     await user.clear(quantity);
     await user.type(quantity, "3");
-    await user.tab();
-    expect(quantity).toHaveValue(3);
+    await user.selectOptions(unit, "piece");
+    expect(quantity).toHaveValue("3");
     first.unmount();
 
     render(<BasketWorkspace {...props} />);
     const restored = screen.getByRole("listitem", { name: /TINE Lettmelk/ });
-    expect(within(restored).getByRole("spinbutton")).toHaveValue(3);
+    expect(within(restored).getByRole("textbox", { name: /Mengde/ })).toHaveValue("3");
+    expect(within(restored).getByRole("combobox", { name: /Enhet/ })).toHaveValue("piece");
     await user.click(within(restored).getByRole("button", { name: /Fjern TINE Lettmelk/ }));
     expect(screen.queryByRole("listitem", { name: /TINE Lettmelk/ })).not.toBeInTheDocument();
+  });
+
+  it("never plans the previously saved amount while a row contains an invalid draft", async () => {
+    const user = userEvent.setup();
+    render(
+      <BasketWorkspace
+        createId={idFactory()}
+        searchProducts={async () => [milk]}
+        searchDelayMs={0}
+      />,
+    );
+    await user.type(screen.getByLabelText("Hva skal du handle?"), "melk");
+    await user.click(await screen.findByRole("option", { name: /TINE Lettmelk/ }));
+    const amount = screen.getByRole("textbox", { name: /Mengde for TINE Lettmelk/ });
+
+    await user.clear(amount);
+
+    expect(screen.getByText("Finn handleplan").closest("a")).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByText(/Korriger den ugyldige mengden/i)).toBeVisible();
+    expect(JSON.parse(localStorage.getItem(BASKET_STORAGE_KEY) ?? "{}")).toMatchObject({
+      needs: [{ quantity: 1, quantityUnit: "package" }],
+    });
+
+    await user.type(amount, "2");
+    expect(screen.getByText("Finn handleplan").closest("a")).toHaveAttribute(
+      "aria-disabled",
+      "false",
+    );
   });
 
   it("has usable loading, empty, and error states without an account prompt", async () => {

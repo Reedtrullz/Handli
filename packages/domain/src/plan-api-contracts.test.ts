@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  deriveExactProductPlanDeltaExplanationsV1,
   exactProductPlanApiEvidenceEnvelopeSchema,
   exactProductPlanApiNeedEvidenceSchema,
   exactProductPlanApiRequestSchema,
   exactProductPlanApiResponseSchema,
   exactProductPlanApiResponseSchemaFor,
+  officialOfferSchema,
+  planResultV2Schema,
   priceEvidenceSchema,
+  type ExactProductPlanApiEvidenceEnvelope,
+  type ExactProductPlanDeltaExplanationInputV1,
   type ExactProductPlanApiRequest,
 } from "./index";
 
@@ -33,6 +38,8 @@ function exactNeed(
 
 const validRequest: ExactProductPlanApiRequest = {
   contractVersion: 1,
+  enabledMembershipProgramIds: [],
+  marketContext: { contractVersion: 1, countryCode: "NO", kind: "national" },
   maxStores: 2,
   needs: [exactNeed("need:milk")],
 };
@@ -83,7 +90,7 @@ const breadSummary = productSummary(
   { amount: 1, unit: "piece" },
 );
 
-const validPlan = {
+const validPlan = planResultV2Schema.parse({
   assignments: [
     {
       canonicalProductId: "product:fixture:milk",
@@ -117,7 +124,7 @@ const validPlan = {
   id: "plan-v2:fixture",
   substitutions: [],
   totalOre: 4_980,
-};
+});
 
 const EXPECTED_CHAINS = ["bunnpris", "extra", "rema-1000"] as const;
 
@@ -142,7 +149,7 @@ function emptyNeedEvidence(needId: string) {
   };
 }
 
-const milkPriceEvidence = {
+const milkPriceEvidence = priceEvidenceSchema.parse({
   amountOre: 2_490,
   chainId: "extra",
   contractVersion: 1,
@@ -155,7 +162,7 @@ const milkPriceEvidence = {
   productMatch: { canonicalProductId: "product:fixture:milk", kind: "exact" },
   sourceId: "fixture-source",
   sourceRecordId: "source-record:fixture:1",
-} as const;
+});
 
 function responseEvidence(
   request: ExactProductPlanApiRequest,
@@ -166,7 +173,7 @@ function responseEvidence(
       needId: string;
     }>;
   }> = [],
-) {
+): ExactProductPlanApiEvidenceEnvelope {
   const needs = request.needs
     .map(({ id }) => id === "need:milk" && plans.length > 0
       ? {
@@ -199,18 +206,61 @@ function responseEvidence(
       sourceClass: "ordinary-price",
       state: "approved",
     }],
+  } as ExactProductPlanApiEvidenceEnvelope;
+}
+
+function completeResponseEvidence(checkedAt: string): ExactProductPlanApiEvidenceEnvelope {
+  const evidence = responseEvidence(validRequest, [validPlan]);
+  return {
+    ...evidence,
+    needs: evidence.needs.map((need) => ({
+      ...need,
+      comparisonScope: {
+        ...need.comparisonScope,
+        completeness: "complete" as const,
+        entries: [
+          {
+            chainId: "bunnpris",
+            status: {
+              checkedAt,
+              kind: "known-not-carried" as const,
+              sourceId: "fixture-source",
+            },
+          },
+          { chainId: "extra", status: { evidenceId: milkPriceEvidence.id, kind: "priced" as const } },
+          {
+            chainId: "rema-1000",
+            status: {
+              checkedAt,
+              kind: "known-not-carried" as const,
+              sourceId: "fixture-source",
+            },
+          },
+        ],
+      },
+    })),
   };
 }
 
-const validResponse = {
+function withExplanations<T extends ExactProductPlanDeltaExplanationInputV1>(response: T): T & {
+  planDeltaExplanations: NonNullable<ReturnType<typeof deriveExactProductPlanDeltaExplanationsV1>>;
+} {
+  const planDeltaExplanations = deriveExactProductPlanDeltaExplanationsV1(response);
+  if (planDeltaExplanations === undefined) throw new Error("invalid explanation fixture");
+  return { ...response, planDeltaExplanations };
+}
+
+const validResponse = withExplanations({
   caveats: ["Kjedepris dokumenterer ikke lagerstatus."],
   contractVersion: 1,
+  enabledMembershipProgramIds: [],
   evidence: responseEvidence(validRequest, [validPlan]),
   generatedAt: "2026-07-16T12:00:00.000Z",
+  marketContext: validRequest.marketContext,
   plans: [validPlan],
   priceDataSource: "cache",
   products: [milkSummary],
-};
+});
 
 function requestParses(input: unknown): boolean {
   return exactProductPlanApiRequestSchema.safeParse(input).success;
@@ -221,6 +271,30 @@ function responseParses(request: ExactProductPlanApiRequest, response: unknown):
 }
 
 describe("V1 exact-product plan API contracts", () => {
+  it("requires a bounded canonical membership selection and binds the response echo", () => {
+    expect(requestParses({
+      ...validRequest,
+      enabledMembershipProgramIds: ["coop-medlem", "trumf"],
+    })).toBe(true);
+    const { enabledMembershipProgramIds: _omitted, ...missingSelection } = validRequest;
+    expect(requestParses(missingSelection)).toBe(false);
+    for (const enabledMembershipProgramIds of [
+      ["trumf", "coop-medlem"],
+      ["trumf", "trumf"],
+      [" trumf"],
+      ["trumf\u0000"],
+      ["e\u0301"],
+      Array.from({ length: 101 }, (_, index) => `program:${String(index).padStart(3, "0")}`),
+    ]) {
+      expect(requestParses({ ...validRequest, enabledMembershipProgramIds })).toBe(false);
+    }
+
+    expect(responseParses(validRequest, {
+      ...validResponse,
+      enabledMembershipProgramIds: ["trumf"],
+    })).toBe(false);
+  });
+
   it("accepts only versioned, required exact-product package or compatible measure needs", () => {
     expect(requestParses(validRequest)).toBe(true);
     expect(requestParses({ ...validRequest, contractVersion: 2 })).toBe(false);
@@ -321,6 +395,88 @@ describe("V1 exact-product plan API contracts", () => {
     }).success).toBe(false);
   });
 
+  it("requires the bound directory attestation for launch-region postal evidence", () => {
+    const marketContext = {
+      contractVersion: 1 as const,
+      countryCode: "NO" as const,
+      kind: "launch-region" as const,
+      regionId: "no-0301-oslo",
+    };
+    const request = { ...validRequest, marketContext };
+    const evidence = responseEvidence(request, [validPlan]);
+    const postalEvidence = {
+      ...evidence,
+      needs: evidence.needs.map((need) => ({
+        ...need,
+        ordinaryPrices: need.ordinaryPrices.map((price) => ({
+          ...price,
+          geographicScope: {
+            countryCode: "NO" as const,
+            kind: "postal-set" as const,
+            postalCodes: ["0152", "0452"],
+          },
+        })),
+      })),
+    };
+    const geographicDirectoryAttestation = {
+      contractVersion: 1 as const,
+      countryCode: "NO",
+      directoryVersionId: "postal-directory-2026-07",
+      evaluatedAt: validResponse.generatedAt,
+      evidenceReference: "manifest:postal-directory-2026-07",
+      publishedAt: "2026-07-16T10:00:00.000Z",
+      region: {
+        coverageState: "complete" as const,
+        evidenceReference: "manifest:oslo-postal-set",
+        postalCodes: ["0152", "0452"],
+        regionCode: marketContext.regionId,
+      },
+      reviewedAt: "2026-07-16T09:00:00.000Z",
+      status: "approved" as const,
+      validFrom: "2026-07-16T00:00:00.000Z",
+    };
+    const response = withExplanations({
+      ...validResponse,
+      evidence: postalEvidence,
+      geographicDirectoryAttestation,
+      marketContext,
+    });
+
+    expect(responseParses(request, response)).toBe(true);
+    const { geographicDirectoryAttestation: _missing, ...withoutAttestation } = response;
+    expect(responseParses(request, withoutAttestation)).toBe(false);
+    expect(responseParses(request, {
+      ...response,
+      geographicDirectoryAttestation: {
+        ...geographicDirectoryAttestation,
+        evaluatedAt: "2026-07-16T11:59:59.999Z",
+      },
+    })).toBe(false);
+    expect(responseParses(request, {
+      ...response,
+      geographicDirectoryAttestation: {
+        ...geographicDirectoryAttestation,
+        region: {
+          ...geographicDirectoryAttestation.region,
+          postalCodes: ["0152", "9999"],
+        },
+      },
+    })).toBe(false);
+  });
+
+  it("rejects server explanation copy that is not exactly derived from the bound snapshot", () => {
+    const entry = validResponse.planDeltaExplanations.entries[0]!;
+    const forged = {
+      ...validResponse,
+      planDeltaExplanations: {
+        ...validResponse.planDeltaExplanations,
+        entries: [{ ...entry, summary: "Forged client-authoritative difference." }],
+      },
+    };
+
+    expect(responseParses(validRequest, forged)).toBe(false);
+  });
+
   it("requires fresh immutable catalog provenance and its exact declared public source", () => {
     expect(responseParses(validRequest, validResponse)).toBe(true);
     expect(responseParses(validRequest, {
@@ -376,7 +532,7 @@ describe("V1 exact-product plan API contracts", () => {
       ...validResponse,
       evidence: {
         ...validResponse.evidence,
-        sources: [{
+        sources: [...validResponse.evidence.sources, {
           ...validResponse.evidence.sources[0]!,
           displayName: "Mismatched descriptor",
         }],
@@ -406,6 +562,24 @@ describe("V1 exact-product plan API contracts", () => {
         })),
       },
     })).toBe(false);
+  });
+
+  it("rejects stale or future known-not-carried proof after a complete exact response is signed", () => {
+    const complete = withExplanations({
+      ...validResponse,
+      evidence: completeResponseEvidence("2026-07-13T12:00:00.000Z"),
+    });
+    expect(responseParses(validRequest, complete)).toBe(true);
+
+    for (const checkedAt of [
+      "2026-07-13T11:59:59.999Z",
+      "2026-07-16T12:00:00.001Z",
+    ]) {
+      expect(responseParses(validRequest, {
+        ...complete,
+        evidence: completeResponseEvidence(checkedAt),
+      })).toBe(false);
+    }
   });
 
   it("cross-checks ordinary observation time and package-count checkout arithmetic", () => {
@@ -439,7 +613,7 @@ describe("V1 exact-product plan API contracts", () => {
   });
 
   it("recomputes applied offers from immutable offer provenance", () => {
-    const offer = {
+    const offer = officialOfferSchema.parse({
       applicability: {
         channels: ["in-store" as const],
         contractVersion: 1 as const,
@@ -458,8 +632,8 @@ describe("V1 exact-product plan API contracts", () => {
       productMatch: { canonicalProductId: "product:fixture:milk", kind: "exact" as const },
       sourceId: "fixture-source",
       sourceRecordId: "source-record:offer:milk",
-    };
-    const offerPlan = {
+    });
+    const offerPlan = planResultV2Schema.parse({
       ...validPlan,
       assignments: [{
         ...validPlan.assignments[0]!,
@@ -479,8 +653,8 @@ describe("V1 exact-product plan API contracts", () => {
       }],
       id: "plan-v2:fixture:offer",
       totalOre: 3_980,
-    };
-    const offerResponse = {
+    });
+    const offerResponse = withExplanations({
       ...validResponse,
       evidence: {
         ...responseEvidence(validRequest, [offerPlan]),
@@ -497,7 +671,7 @@ describe("V1 exact-product plan API contracts", () => {
         })),
       },
       plans: [offerPlan],
-    };
+    });
     expect(responseParses(validRequest, offerResponse)).toBe(true);
 
     expect(responseParses(validRequest, {
@@ -510,6 +684,16 @@ describe("V1 exact-product plan API contracts", () => {
             ...offer,
             productMatch: { canonicalProductId: "product:fixture:other", kind: "exact" as const },
           }],
+        })),
+      },
+    })).toBe(false);
+    expect(responseParses(validRequest, {
+      ...offerResponse,
+      evidence: {
+        ...offerResponse.evidence,
+        needs: offerResponse.evidence.needs.map((entry) => ({
+          ...entry,
+          officialOffers: [{ ...offer, chainId: "bunnpris" }],
         })),
       },
     })).toBe(false);
@@ -818,6 +1002,45 @@ describe("V1 exact-product plan API contracts", () => {
       historicalPriceEvidence,
     };
     expect(exactProductPlanApiNeedEvidenceSchema.safeParse(evidence).success).toBe(true);
+    expect(responseParses(validRequest, {
+      ...validResponse,
+      evidence: { ...validResponse.evidence, needs: [evidence] },
+    })).toBe(true);
+
+    const wrongRegionHistory = historicalPriceEvidence.map((row) => ({
+      ...row,
+      geographicScope: {
+        countryCode: "NO" as const,
+        kind: "regions" as const,
+        regionCodes: ["NO-03"],
+      },
+    }));
+    expect(responseParses(validRequest, {
+      ...validResponse,
+      evidence: {
+        ...validResponse.evidence,
+        needs: [{ ...evidence, historicalPriceEvidence: wrongRegionHistory }],
+      },
+    })).toBe(false);
+
+    const wrongSourceHistory = historicalPriceEvidence.map((row) => ({
+      ...row,
+      sourceId: "history-only-source",
+    }));
+    expect(responseParses(validRequest, {
+      ...validResponse,
+      evidence: {
+        ...validResponse.evidence,
+        needs: [{ ...evidence, historicalPriceEvidence: wrongSourceHistory }],
+        sources: [{
+          contractVersion: 1,
+          displayName: "History-only source",
+          id: "history-only-source",
+          sourceClass: "ordinary-price",
+          state: "approved",
+        }],
+      },
+    })).toBe(false);
 
     expect(exactProductPlanApiNeedEvidenceSchema.safeParse({
       ...evidence,
@@ -858,12 +1081,12 @@ describe("V1 exact-product plan API contracts", () => {
       ...validRequest,
       needs: [exactNeed("need:milk"), exactNeed("need:coffee", GTIN_COFFEE)],
     };
-    const response = {
+    const response = withExplanations({
       ...validResponse,
       evidence: responseEvidence(request),
       plans: [],
       products: [milkSummary, coffeeSummary],
-    };
+    });
 
     expect(responseParses(request, response)).toBe(true);
     expect(responseParses(request, { ...response, products: [milkSummary] })).toBe(false);
@@ -880,12 +1103,12 @@ describe("V1 exact-product plan API contracts", () => {
       ...validRequest,
       needs: [exactNeed("need:milk"), exactNeed("need:milk-again")],
     };
-    expect(responseParses(repeatedProductRequest, {
+    expect(responseParses(repeatedProductRequest, withExplanations({
       ...validResponse,
       evidence: responseEvidence(repeatedProductRequest),
       plans: [],
       products: [milkSummary],
-    })).toBe(true);
+    }))).toBe(true);
   });
 
   it("requires product summaries in canonical GTIN order", () => {
@@ -893,12 +1116,12 @@ describe("V1 exact-product plan API contracts", () => {
       ...validRequest,
       needs: [exactNeed("need:coffee", GTIN_COFFEE), exactNeed("need:milk")],
     };
-    const response = {
+    const response = withExplanations({
       ...validResponse,
       evidence: responseEvidence(request),
       plans: [],
       products: [milkSummary, coffeeSummary],
-    };
+    });
 
     expect(responseParses(request, response)).toBe(true);
     expect(responseParses(request, { ...response, products: [coffeeSummary, milkSummary] }))

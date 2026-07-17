@@ -11,8 +11,9 @@ import {
 } from "./contract-primitives";
 import {
   geographicContextSchema,
-  geographicScopeIncludes,
+  geographicScopeSpecificity,
   geographicScopeSchema,
+  resolveGeographicApplicability,
 } from "./geography";
 import {
   parseEligiblePriceEvidence,
@@ -20,6 +21,8 @@ import {
   type PriceEvidence,
   type PriceEvidenceEligibilityContext,
 } from "./evidence";
+
+export const KNOWN_NOT_CARRIED_MAX_AGE_MS = 72 * 60 * 60 * 1_000;
 
 const pricedCoverageSchema = z
   .object({
@@ -56,7 +59,9 @@ const ineligibleCoverageSchema = z
     reason: z.enum([
       "source-disabled",
       "ambiguous-product",
+      "ambiguous-scope",
       "wrong-scope",
+      "unknown-scope",
       "not-yet-valid",
       "expired",
       "membership-disabled",
@@ -109,7 +114,7 @@ export const comparisonScopeSchema = z
       .min(1),
   })
   .strict()
-  .superRefine(({ completeness, entries, expectedChainIds }, context) => {
+  .superRefine(({ completeness, entries, evaluatedAt, expectedChainIds }, context) => {
     if (!hasUniqueStrings(expectedChainIds)) {
       context.addIssue({
         code: "custom",
@@ -145,6 +150,21 @@ export const comparisonScopeSchema = z
         path: ["completeness"],
       });
     }
+    const evaluatedAtMs = Date.parse(evaluatedAt);
+    entries.forEach(({ status }, index) => {
+      if (status.kind !== "known-not-carried") return;
+      const checkedAtMs = Date.parse(status.checkedAt);
+      if (
+        checkedAtMs > evaluatedAtMs
+        || evaluatedAtMs - checkedAtMs > KNOWN_NOT_CARRIED_MAX_AGE_MS
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Known-not-carried evidence must be current and no later than the comparison snapshot",
+          path: ["entries", index, "status", "checkedAt"],
+        });
+      }
+    });
   });
 
 export type ComparisonScope = z.infer<typeof comparisonScopeSchema>;
@@ -207,7 +227,9 @@ function mapIneligibleReason(
   switch (reason) {
     case "source-disabled": return "source-disabled";
     case "ambiguous": return "ambiguous-product";
+    case "ambiguous-scope": return "ambiguous-scope";
     case "wrong-scope": return "wrong-scope";
+    case "unknown-scope": return "unknown-scope";
     case "not-yet-valid": return "not-yet-valid";
     case "expired": return "expired";
     case "future":
@@ -242,14 +264,42 @@ function evidenceStatus(
   };
 }
 
-function compareEligibleEvidence(left: PriceEvidence, right: PriceEvidence): number {
-  return compareText(right.observedAt, left.observedAt)
+function compareEligibleEvidence(
+  left: PriceEvidence,
+  right: PriceEvidence,
+  context: PriceEvidenceEligibilityContext,
+): number {
+  return (geographicScopeSpecificity(
+    right.geographicScope,
+    context.location,
+    context.geographicDirectory,
+  ) ?? -1)
+      - (geographicScopeSpecificity(
+        left.geographicScope,
+        context.location,
+        context.geographicDirectory,
+      ) ?? -1)
+    || compareText(right.observedAt, left.observedAt)
     || left.amountOre - right.amountOre
     || compareText(left.id, right.id);
 }
 
-function compareCoverageChecks(left: CoverageCheck, right: CoverageCheck): number {
-  return compareText(right.checkedAt, left.checkedAt)
+function compareCoverageChecks(
+  left: CoverageCheck,
+  right: CoverageCheck,
+  context: PriceEvidenceEligibilityContext,
+): number {
+  return (geographicScopeSpecificity(
+    right.geographicScope,
+    context.location,
+    context.geographicDirectory,
+  ) ?? -1)
+      - (geographicScopeSpecificity(
+        left.geographicScope,
+        context.location,
+        context.geographicDirectory,
+      ) ?? -1)
+    || compareText(right.checkedAt, left.checkedAt)
     || (left.state === right.state ? 0 : left.state === "source-unavailable" ? -1 : 1)
     || compareText(left.id, right.id);
 }
@@ -269,7 +319,11 @@ function checkIsCurrentAndApplicable(
     && input.context.enabledSourceIds.includes(check.sourceId)
     && checkedAtMs <= nowMs
     && nowMs - checkedAtMs <= input.context.maxAgeMs
-    && geographicScopeIncludes(check.geographicScope, input.context.location);
+    && resolveGeographicApplicability(
+      check.geographicScope,
+      input.context.location,
+      input.context.geographicDirectory,
+    ).state === "applicable";
 }
 
 export function deriveComparisonScope(
@@ -315,11 +369,25 @@ export function deriveComparisonScope(
       && evidenceConcernsProduct(candidate, product.data));
     const eligibleCandidates = candidates
       .filter((candidate) => parseEligiblePriceEvidence(candidate, input.context).eligible)
-      .sort(compareEligibleEvidence);
+      .sort((left, right) => compareEligibleEvidence(left, right, input.context));
+    const selectedSpecificity = eligibleCandidates[0] === undefined
+      ? undefined
+      : geographicScopeSpecificity(
+          eligibleCandidates[0].geographicScope,
+          input.context.location,
+          input.context.geographicDirectory,
+        );
     const latestObservedAt = eligibleCandidates[0]?.observedAt;
     const equallyCurrent = latestObservedAt === undefined
       ? []
-      : eligibleCandidates.filter(({ observedAt }) => observedAt === latestObservedAt);
+      : eligibleCandidates.filter((candidate) =>
+          candidate.observedAt === latestObservedAt
+          && geographicScopeSpecificity(
+            candidate.geographicScope,
+            input.context.location,
+            input.context.geographicDirectory,
+          )
+            === selectedSpecificity);
     if (new Set(equallyCurrent.map(({ amountOre }) => amountOre)).size > 1) {
       const evidenceId = [...equallyCurrent].sort((left, right) =>
         compareText(left.id, right.id))[0]?.id;
@@ -340,8 +408,35 @@ export function deriveComparisonScope(
 
     const applicableChecks = checks
       .filter((check) => check.chainId === chainId && checkIsCurrentAndApplicable(check, input))
-      .sort(compareCoverageChecks);
+      .sort((left, right) => compareCoverageChecks(left, right, input.context));
     const selectedCheck = applicableChecks[0];
+    const selectedCheckSpecificity = selectedCheck === undefined
+      ? undefined
+      : geographicScopeSpecificity(
+          selectedCheck.geographicScope,
+          input.context.location,
+          input.context.geographicDirectory,
+        );
+    const equallyCurrentChecks = selectedCheck === undefined
+      ? []
+      : applicableChecks.filter((check) =>
+          check.checkedAt === selectedCheck.checkedAt
+          && geographicScopeSpecificity(
+            check.geographicScope,
+            input.context.location,
+            input.context.geographicDirectory,
+          )
+            === selectedCheckSpecificity);
+    if (new Set(equallyCurrentChecks.map(({ state }) => state)).size > 1) {
+      return {
+        chainId,
+        status: {
+          kind: "unknown" as const,
+          reason: "source-unavailable" as const,
+          checkedAt: selectedCheck?.checkedAt,
+        },
+      };
+    }
     if (selectedCheck?.state === "known-not-carried") {
       return {
         chainId,

@@ -9,7 +9,7 @@ import {
   sourceIdSchema,
 } from "./contract-primitives";
 import { comparisonScopeSchema } from "./coverage";
-import { priceEvidenceSchema } from "./evidence";
+import { parseEligiblePriceEvidence, priceEvidenceSchema } from "./evidence";
 import {
   familyIdentifierSchema,
   familyTaxonomyIdSchema,
@@ -17,17 +17,37 @@ import {
   reviewedFamilyDescriptorSchema,
 } from "./family-taxonomy";
 import { calculateCheckoutCost } from "./fulfilment";
-import { officialOfferSchema } from "./offers";
+import {
+  geographicDirectoryEvidenceFromRegionAttestationV1,
+  geographicDirectoryRegionAttestationV1Schema,
+} from "./geography";
+import {
+  marketContextsEqual,
+  marketContextToGeographicContext,
+  marketContextV1Schema,
+} from "./market-context";
+import {
+  enabledMembershipProgramIdsSchema,
+  officialOfferSchema,
+  parseApplicableOfficialOffer,
+} from "./offers";
+import {
+  derivePlanDeltaExplanationsV1,
+  planDeltaExplanationSetV1Schema,
+  type PlanDeltaExplanationSetV1,
+} from "./plan-delta-explanations";
 import {
   EXACT_PRODUCT_CATALOG_MAX_AGE_MS,
   EXACT_PRODUCT_OFFER_MAX_AGE_MS,
+  EXACT_PRODUCT_PRICE_MAX_AGE_MS,
   exactProductPlanApiAssignmentEvidenceSchema,
   exactProductPlanApiEvidenceSourceSchema,
   exactProductPlanApiNeedSchema,
   exactProductPlanApiProductSummarySchema,
 } from "./plan-api-contracts";
-import { projectRepresentativesV2 } from "./frontier-v2";
-import { planResultV2Schema } from "./planner-v2-contracts";
+import { canonicalProjectedPlanResultsV2 } from "./frontier-v2";
+import { planResultV2Schema, type PlanResultV2 } from "./planner-v2-contracts";
+import type { TravelRouteEvidence } from "./travel-contracts";
 
 export const REVIEWED_FAMILY_PLAN_API_CONTRACT_VERSION = 2 as const;
 export const REVIEWED_FAMILY_CANDIDATE_UNION_LIMIT = 50 as const;
@@ -621,6 +641,8 @@ export const reviewedFamilyPlanApiNeedSchema = z
 export const reviewedFamilyPlanApiRequestV2Schema = z
   .object({
     contractVersion: reviewedFamilyContractVersionSchema,
+    enabledMembershipProgramIds: enabledMembershipProgramIdsSchema,
+    marketContext: marketContextV1Schema,
     maxStores: reviewedFamilyMaxStoresSchema,
     needs: z
       .array(z.union([exactProductPlanApiNeedSchema, reviewedFamilyPlanApiNeedSchema]))
@@ -801,14 +823,67 @@ export type ReviewedFamilyPlanApiEvidenceEnvelopeV2 = z.infer<
   typeof reviewedFamilyPlanApiEvidenceEnvelopeV2Schema
 >;
 
+export interface ReviewedFamilyPlanDeltaExplanationInputV1 {
+  evidence: ReviewedFamilyPlanApiEvidenceEnvelopeV2;
+  generatedAt: string;
+  marketContext: ReviewedFamilyPlanApiRequestV2["marketContext"];
+  plans: readonly PlanResultV2[];
+  travelRoutes?: readonly TravelRouteEvidence[];
+}
+
+export function deriveReviewedFamilyPlanDeltaExplanationsV1(
+  input: ReviewedFamilyPlanDeltaExplanationInputV1,
+): PlanDeltaExplanationSetV1 | undefined {
+  const assignmentEvidence = new Map(input.evidence.assignmentEvidence.map((entry) => [
+    `${entry.planId}\u0000${entry.needId}\u0000${entry.chainId}`,
+    entry,
+  ]));
+  const coverage = new Map(input.evidence.candidateCoverage.map((entry) => [
+    `${entry.needId}\u0000${entry.canonicalProductId}`,
+    entry,
+  ]));
+  const bindings = input.plans.flatMap((plan) => plan.assignments.map((assignment) => {
+    const reference = assignmentEvidence.get(
+      `${plan.id}\u0000${assignment.needId}\u0000${assignment.chain}`,
+    );
+    const candidateCoverage = coverage.get(
+      `${assignment.needId}\u0000${assignment.canonicalProductId}`,
+    );
+    if (reference === undefined || candidateCoverage === undefined) return undefined;
+    return {
+      planId: plan.id,
+      needId: assignment.needId,
+      canonicalProductId: assignment.canonicalProductId,
+      chainId: assignment.chain,
+      evidenceId: reference.evidenceId,
+      ...(reference.conditions.kind === "official-offer"
+        ? { offerId: reference.conditions.offerId }
+        : {}),
+      comparisonScope: candidateCoverage.comparisonScope,
+    };
+  }));
+  if (bindings.some((binding) => binding === undefined)) return undefined;
+  return derivePlanDeltaExplanationsV1({
+    plans: input.plans,
+    generatedAt: input.generatedAt,
+    marketContext: input.marketContext,
+    assignmentEvidence: bindings.filter((binding) => binding !== undefined),
+    ...(input.travelRoutes === undefined ? {} : { travelRoutes: input.travelRoutes }),
+  });
+}
+
 export const reviewedFamilyPlanApiResponseV2Schema = z
   .object({
     caveats: z.array(nonEmptyStringSchema).max(10),
     contractVersion: reviewedFamilyContractVersionSchema,
+    enabledMembershipProgramIds: enabledMembershipProgramIdsSchema,
     evidence: reviewedFamilyPlanApiEvidenceEnvelopeV2Schema,
     generatedAt: canonicalTimestampSchema,
+    geographicDirectoryAttestation: geographicDirectoryRegionAttestationV1Schema.optional(),
+    marketContext: marketContextV1Schema,
     needMatches: z.array(reviewedFamilyNeedMatchV2Schema).min(1).max(50),
     plans: z.array(planResultV2Schema).max(7),
+    planDeltaExplanations: planDeltaExplanationSetV1Schema,
     priceDataSource: z.literal("cache"),
     productClaims: z
       .array(reviewedFamilyProductClaimSchema)
@@ -835,7 +910,10 @@ function planAssignmentFingerprint(
   );
 }
 
-export function reviewedFamilyPlanApiResponseV2SchemaFor(request: unknown) {
+export function reviewedFamilyPlanApiResponseV2SchemaFor(
+  request: unknown,
+  options: { travelRoutes?: readonly TravelRouteEvidence[] } = {},
+) {
   const parsedRequest = reviewedFamilyPlanApiRequestV2Schema.parse(request);
   const requestedNeeds = [...parsedRequest.needs].sort((left, right) =>
     compareText(left.id, right.id)
@@ -843,6 +921,75 @@ export function reviewedFamilyPlanApiResponseV2SchemaFor(request: unknown) {
   const requestedById = new Map(requestedNeeds.map((need) => [need.id, need]));
 
   return reviewedFamilyPlanApiResponseV2Schema.superRefine((response, context) => {
+    if (!marketContextsEqual(response.marketContext, parsedRequest.marketContext)) {
+      context.addIssue({
+        code: "custom",
+        message: "Reviewed-family planning output must preserve the requested market",
+        path: ["marketContext"],
+      });
+    }
+    if (!sameStrings(
+      response.enabledMembershipProgramIds,
+      parsedRequest.enabledMembershipProgramIds,
+    )) {
+      context.addIssue({
+        code: "custom",
+        message: "Reviewed-family output must preserve enabled membership programs",
+        path: ["enabledMembershipProgramIds"],
+      });
+    }
+    const expectedExplanations = deriveReviewedFamilyPlanDeltaExplanationsV1({
+      evidence: response.evidence,
+      generatedAt: response.generatedAt,
+      marketContext: response.marketContext,
+      plans: response.plans,
+      ...(options.travelRoutes === undefined ? {} : { travelRoutes: options.travelRoutes }),
+    });
+    if (
+      expectedExplanations === undefined
+      || JSON.stringify(response.planDeltaExplanations) !== JSON.stringify(expectedExplanations)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Plan explanations must re-derive from the same planning snapshot and evidence",
+        path: ["planDeltaExplanations"],
+      });
+    }
+    const marketLocation = marketContextToGeographicContext(parsedRequest.marketContext);
+    const geographicDirectory = response.geographicDirectoryAttestation === undefined
+      ? undefined
+      : geographicDirectoryEvidenceFromRegionAttestationV1(
+          response.geographicDirectoryAttestation,
+          marketLocation,
+          response.generatedAt,
+        );
+    if (
+      response.geographicDirectoryAttestation !== undefined
+      && geographicDirectory === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Directory attestation must bind the selected market and evaluation clock",
+        path: ["geographicDirectoryAttestation"],
+      });
+    }
+    const responseSourceIds = response.evidence.sources.map(({ id }) => id);
+    for (const [priceIndex, price] of response.evidence.ordinaryPrices.entries()) {
+      const eligible = parseEligiblePriceEvidence(price, {
+        enabledSourceIds: responseSourceIds,
+        ...(geographicDirectory === undefined ? {} : { geographicDirectory }),
+        location: marketLocation,
+        maxAgeMs: EXACT_PRODUCT_PRICE_MAX_AGE_MS,
+        now: new Date(response.generatedAt),
+      });
+      if (!eligible.eligible) {
+        context.addIssue({
+          code: "custom",
+          message: "Visible ordinary prices must be eligible in the requested market",
+          path: ["evidence", "ordinaryPrices", priceIndex],
+        });
+      }
+    }
     validateTaxonomyTime(response.taxonomy, response.generatedAt, context);
     const matchNeedIds = response.needMatches.map(({ needId }) => needId);
     const requestedNeedIds = requestedNeeds.map(({ id }) => id);
@@ -992,6 +1139,38 @@ export function reviewedFamilyPlanApiResponseV2SchemaFor(request: unknown) {
     const officialOfferById = new Map(
       response.evidence.officialOffers.map((offer) => [offer.id, offer]),
     );
+    const expectedOfferCells = new Set(response.evidence.ordinaryPrices.flatMap((price) =>
+      price.productMatch.kind === "exact"
+        ? [`${price.chainId}\u0000${price.productMatch.canonicalProductId}`]
+        : []
+    ));
+    for (const [offerIndex, offer] of response.evidence.officialOffers.entries()) {
+      const offerMemberships = offer.conditions.flatMap((condition) =>
+        condition.kind === "member" ? [condition.programId] : []
+      );
+      const eligibility = parseApplicableOfficialOffer(offer, {
+        channel: "in-store",
+        enabledMembershipProgramIds: offerMemberships,
+        enabledSourceIds: responseSourceIds,
+        ...(geographicDirectory === undefined ? {} : { geographicDirectory }),
+        location: marketLocation,
+        maxEvidenceAgeMs: EXACT_PRODUCT_OFFER_MAX_AGE_MS,
+        now: new Date(response.generatedAt),
+      });
+      if (
+        !eligibility.applicable
+        || offer.productMatch.kind !== "exact"
+        || !expectedOfferCells.has(
+          `${offer.chainId}\u0000${offer.productMatch.canonicalProductId}`,
+        )
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Visible official offers must be current, in-market candidate evidence",
+          path: ["evidence", "officialOffers", offerIndex],
+        });
+      }
+    }
     const expectedCoverageKeys = response.needMatches.flatMap((match) =>
       match.candidateProductIds.map((productId) =>
         `${match.needId}\u0000${productId}`
@@ -1103,9 +1282,22 @@ export function reviewedFamilyPlanApiResponseV2SchemaFor(request: unknown) {
         path: ["plans"],
       });
     }
-    const projectedPlans = projectRepresentativesV2(plans, 7);
+    const travelEvidence = options.travelRoutes?.map(({ planId, aggregate }) => ({
+      planId,
+      travel: {
+        contractVersion: 1 as const,
+        kind: "calculated" as const,
+        durationSeconds: aggregate.durationSeconds,
+        distanceMeters: aggregate.distanceMeters,
+        providerSourceId: aggregate.providerSourceId,
+        calculatedAt: aggregate.calculatedAt,
+        routeFingerprint: aggregate.routeFingerprint,
+      },
+    }));
+    const projectedPlans = canonicalProjectedPlanResultsV2(plans, 7, travelEvidence);
     if (
-      projectedPlans.length !== plans.length
+      projectedPlans === undefined
+      || projectedPlans.length !== plans.length
       || plans.some((plan, index) =>
         JSON.stringify(plan) !== JSON.stringify(projectedPlans[index])
       )
@@ -1244,9 +1436,10 @@ export function reviewedFamilyPlanApiResponseV2SchemaFor(request: unknown) {
             offer,
             offerContext: {
               channel: "in-store",
-              enabledMembershipProgramIds: [],
+              enabledMembershipProgramIds: parsedRequest.enabledMembershipProgramIds,
               enabledSourceIds: [offer.sourceId],
-              location: { countryCode: "NO" },
+              ...(geographicDirectory === undefined ? {} : { geographicDirectory }),
+              location: marketLocation,
               maxEvidenceAgeMs: EXACT_PRODUCT_OFFER_MAX_AGE_MS,
               now: new Date(response.generatedAt),
             },
@@ -1274,13 +1467,10 @@ export function reviewedFamilyPlanApiResponseV2SchemaFor(request: unknown) {
         });
       }
     }
-    if (!sameStrings(
-      [...referencedOfferIds].sort(compareText),
-      [...officialOfferById.keys()].sort(compareText),
-    )) {
+    if ([...referencedOfferIds].some((offerId) => !officialOfferById.has(offerId))) {
       context.addIssue({
         code: "custom",
-        message: "Every visible official offer must support an assignment",
+        message: "Every applied official offer must be present in visible evidence",
         path: ["evidence", "officialOffers"],
       });
     }

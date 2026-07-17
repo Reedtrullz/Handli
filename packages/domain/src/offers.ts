@@ -13,16 +13,54 @@ import { moneyOreSchema } from "./contracts";
 import { evidenceLevelSchema, evidenceProductMatchSchema } from "./evidence";
 import {
   geographicContextSchema,
-  geographicScopeIncludes,
+  geographicScopeSpecificity,
   offerApplicabilitySchema,
+  resolveGeographicApplicability,
+  type GeographicDirectoryEvidence,
   type GeographicContext,
 } from "./geography";
 
 const publicOfferConditionSchema = z.object({ kind: z.literal("public") }).strict();
+
+/**
+ * Source-neutral membership program identity. Program IDs are opaque and
+ * case-sensitive, but every public boundary requires their NFC-normalized,
+ * whitespace-free representation so one program cannot acquire aliases.
+ */
+export const membershipProgramIdSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine(
+    (value) => value === value.trim() && value === value.normalize("NFC"),
+    { message: "Membership program IDs must be canonical NFC text without outer whitespace" },
+  )
+  .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value), {
+    message: "Membership program IDs cannot contain control or formatting characters",
+  });
+
+export const enabledMembershipProgramIdsSchema = z
+  .array(membershipProgramIdSchema)
+  .max(100)
+  .superRefine((programIds, context) => {
+    if (!hasUniqueStrings(programIds)) {
+      context.addIssue({
+        code: "custom",
+        message: "Enabled membership program IDs must be unique",
+      });
+    }
+    if (programIds.some((programId, index) => index > 0 && programIds[index - 1]! >= programId)) {
+      context.addIssue({
+        code: "custom",
+        message: "Enabled membership program IDs must use canonical code-point order",
+      });
+    }
+  });
+
 const memberOfferConditionSchema = z
   .object({
     kind: z.literal("member"),
-    programId: identifierSchema,
+    programId: membershipProgramIdSchema,
   })
   .strict();
 const minimumQuantityOfferConditionSchema = z
@@ -135,6 +173,55 @@ export const officialOfferSchema = z
 
 export type OfficialOffer = z.infer<typeof officialOfferSchema>;
 
+export interface OfficialOfferGeographicPrecedenceContext {
+  geographicDirectory?: GeographicDirectoryEvidence;
+  location: GeographicContext;
+}
+
+/**
+ * Applies retailer-edition shadowing before any price or identifier tie-break.
+ *
+ * For one exact product at one chain, an applicable store edition shadows a
+ * postal edition, which shadows a region edition, which shadows a national
+ * edition. Equally specific offers remain available for the checkout rules to
+ * compare. A narrower edition for another store, postal code, or region never
+ * shadows an applicable broader edition.
+ */
+export function selectOfficialOffersAtHighestGeographicSpecificity(
+  input: readonly unknown[],
+  context: OfficialOfferGeographicPrecedenceContext,
+): OfficialOffer[] {
+  const parsedLocation = geographicContextSchema.safeParse(context.location);
+  if (!parsedLocation.success || !Array.isArray(input)) return [];
+
+  const groups = new Map<string, { offers: OfficialOffer[]; specificity: 0 | 1 | 2 | 3 }>();
+  for (const candidate of input) {
+    const parsedOffer = officialOfferSchema.safeParse(candidate);
+    if (!parsedOffer.success) continue;
+    const offer = parsedOffer.data;
+    if (offer.productMatch.kind !== "exact") continue;
+    const specificity = geographicScopeSpecificity(
+      offer.applicability.geographicScope,
+      parsedLocation.data,
+      context.geographicDirectory,
+    );
+    if (specificity === undefined) continue;
+
+    const key = `${offer.productMatch.canonicalProductId}\u0000${offer.chainId}`;
+    const current = groups.get(key);
+    if (current === undefined || specificity > current.specificity) {
+      groups.set(key, { offers: [offer], specificity });
+    } else if (specificity === current.specificity) {
+      current.offers.push(offer);
+    }
+  }
+
+  return [...groups.entries()]
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .flatMap(([, group]) => [...group.offers].sort((left, right) =>
+      left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+}
+
 export interface OfficialOfferEvaluationContext {
   now: Date;
   maxEvidenceAgeMs: number;
@@ -142,6 +229,7 @@ export interface OfficialOfferEvaluationContext {
   channel: "in-store" | "online";
   enabledSourceIds: readonly string[];
   enabledMembershipProgramIds: readonly string[];
+  geographicDirectory?: GeographicDirectoryEvidence;
 }
 
 export type OfficialOfferEvaluationResult =
@@ -156,6 +244,8 @@ export type OfficialOfferEvaluationResult =
         | "stale"
         | "not-yet-active"
         | "expired"
+        | "unknown-scope"
+        | "ambiguous-scope"
         | "wrong-scope"
         | "wrong-channel"
         | "membership-disabled";
@@ -196,11 +286,23 @@ export function parseApplicableOfficialOffer(
   if (nowMs < Date.parse(offer.applicability.startsAt)) {
     return { applicable: false, reason: "not-yet-active" };
   }
-  if (nowMs > Date.parse(offer.applicability.endsAt)) {
+  if (nowMs >= Date.parse(offer.applicability.endsAt)) {
     return { applicable: false, reason: "expired" };
   }
-  if (!geographicScopeIncludes(offer.applicability.geographicScope, parsedLocation.data)) {
-    return { applicable: false, reason: "wrong-scope" };
+  const applicability = resolveGeographicApplicability(
+    offer.applicability.geographicScope,
+    parsedLocation.data,
+    context.geographicDirectory,
+  );
+  if (applicability.state !== "applicable") {
+    return {
+      applicable: false,
+      reason: applicability.state === "unknown"
+        ? "unknown-scope"
+        : applicability.state === "ambiguous"
+          ? "ambiguous-scope"
+          : "wrong-scope",
+    };
   }
   if (!offer.applicability.channels.includes(context.channel)) {
     return { applicable: false, reason: "wrong-channel" };

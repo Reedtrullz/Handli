@@ -26,5 +26,20 @@ describe("global response security headers", () => {
     expect(policy).toContain("frame-ancestors 'none'");
     expect(policy).toContain("form-action 'self'");
     expect(policy).not.toContain("default-src *");
+    expect(policy).not.toContain("img-src 'self' data: blob:");
+    expect(policy).not.toContain("frame-src blob:");
+  });
+
+  it("allows ephemeral evidence object URLs only on the private review UI", async () => {
+    const rules = await nextConfig.headers();
+    const reviewRule = rules.find(({ source }) => source === "/review/:path*");
+    const headers = new Map(reviewRule?.headers.map(({ key, value }) => [key, value]));
+    const policy = headers.get("Content-Security-Policy");
+
+    expect(reviewRule).toBeDefined();
+    expect(policy).toContain("img-src 'self' data: blob:");
+    expect(policy).toContain("frame-src blob:");
+    expect(policy).toContain("frame-ancestors 'none'");
+    expect(policy).toContain("object-src 'none'");
   });
 });

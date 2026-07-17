@@ -22,6 +22,11 @@ in [`docs/data/source-registry.md`](../docs/data/source-registry.md). A source
 must fail closed when the required permission is absent, expired, revoked, or
 unclear.
 
+The repository's machine-readable dependency policy and reviewed installed
+inventory live under [`docs/security/`](../docs/security/). Their automated
+compatibility allowlist is a change-control boundary, not legal advice or a
+waiver of notice, source-offer, attribution, or redistribution obligations.
+
 No licence or permission to use the Handleplan name or third-party marks is
 granted merely because the code is available. A dependency, attribution,
 marks, and imagery review is still a public-launch blocker.

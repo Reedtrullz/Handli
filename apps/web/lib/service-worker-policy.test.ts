@@ -12,6 +12,12 @@ interface FetchEventLike {
   respondWith(promise: Promise<Response>): void;
 }
 
+interface MessageEventLike {
+  data: unknown;
+  ports: Array<{ postMessage(value: unknown): void }>;
+  waitUntil(promise: Promise<unknown>): void;
+}
+
 class MemoryCache {
   readonly entries = new Map<string, Response>();
 
@@ -44,14 +50,17 @@ describe("static Handlemodus service-worker policy", () => {
     expect(source).toContain("url.pathname.startsWith(\"/provider/\")");
     expect(source).toContain("url.pathname.startsWith(\"/_next/static/\")");
     expect(source).toContain("APP_SHELL_PATHS.includes(url.pathname)");
-    expect(source).toContain("keys.slice(0, overflow)");
+    expect(source).toContain("removable.slice(0, overflow)");
+    expect(source).toContain("APP_SHELL_PATHS.includes(url.pathname)");
     expect(source).not.toContain("indexedDB");
     expect(source).not.toMatch(/localStorage|sessionStorage|latitude|longitude|originAddress/);
   });
 
   it("purges only superseded Handlemodus caches", async () => {
     const source = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
-    expect(source).toContain("name.startsWith(CACHE_PREFIX) && name !== CACHE_NAME");
+    expect(source).toContain(
+      "name.startsWith(CACHE_PREFIX) && !ACTIVE_CACHE_NAMES.includes(name)",
+    );
     expect(source).toContain("caches.delete(name)");
   });
 
@@ -111,6 +120,62 @@ describe("static Handlemodus service-worker policy", () => {
     await expect(shellResponse).resolves.toHaveProperty("status", 200);
     expect(fetchMock).toHaveBeenCalledWith(shell);
     expect(cache.entries.has(shell.url)).toBe(true);
+  });
+
+  it("evicts immutable entries before the offline shell when the cache reaches its bound", async () => {
+    const source = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
+    const listeners = new Map<string, (event: FetchEventLike) => void>();
+    const shellCache = new MemoryCache();
+    const runtimeCache = new MemoryCache();
+    const shellPaths = [
+      "/",
+      "/planlegg",
+      "/planlegg/handle",
+      "/manifest.webmanifest",
+      "/icons/handleplan.svg",
+      "/icons/handleplan-maskable.svg",
+    ];
+    for (const path of shellPaths) {
+      await shellCache.put(path, new Response("shell"));
+    }
+    await shellCache.put("/_next/static/chunks/handle-required.js", new Response("required"));
+    for (let index = 0; index < 64; index += 1) {
+      await runtimeCache.put(`/_next/static/chunks/existing-${index}.js`, new Response("asset"));
+    }
+    expect(runtimeCache.entries.size).toBe(64);
+
+    const context = vm.createContext({
+      URL,
+      Request,
+      Response,
+      caches: {
+        delete: vi.fn(async () => true),
+        keys: vi.fn(async () => []),
+        open: vi.fn(async (name: string) =>
+          name.endsWith("-shell") ? shellCache : runtimeCache),
+      },
+      fetch: vi.fn(async () => new Response("new asset", { status: 200 })),
+      self: {
+        addEventListener: (name: string, listener: (event: FetchEventLike) => void) => {
+          listeners.set(name, listener);
+        },
+        clients: { claim: vi.fn(async () => undefined) },
+        location: { origin: "https://handle.test" },
+        skipWaiting: vi.fn(async () => undefined),
+      },
+    });
+    vm.runInContext(source, context);
+
+    const request = new Request("https://handle.test/_next/static/chunks/new.js");
+    let response: Promise<Response> | undefined;
+    listeners.get("fetch")?.({ request, respondWith: (promise) => { response = promise; } });
+    await response;
+
+    expect(runtimeCache.entries.size).toBe(64);
+    expect(runtimeCache.entries.has(request.url)).toBe(true);
+    expect(runtimeCache.entries.has("/_next/static/chunks/existing-0.js")).toBe(false);
+    for (const path of shellPaths) expect(shellCache.entries.has(path)).toBe(true);
+    expect(shellCache.entries.has("/_next/static/chunks/handle-required.js")).toBe(true);
   });
 
   it("warms the Handlemodus route's same-origin hashed assets during install", async () => {
@@ -185,5 +250,78 @@ describe("static Handlemodus service-worker policy", () => {
     expect([...cache.entries.keys()].filter((key) => key.includes("/home-")).length)
       .toBeLessThan(60);
     expect(cache.entries.size).toBeLessThanOrEqual(64);
+  });
+
+  it("proves the Handlemodus document and each referenced static asset before start", async () => {
+    const source = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
+    const listeners = new Map<string, (event: MessageEventLike) => void>();
+    const cache = new MemoryCache();
+    const currentDocument = `<!doctype html>
+      <script src="/_next/static/chunks/handle-ready.js"></script>
+      <link href="/_next/static/css/handle-ready.css" rel="stylesheet">`;
+    await cache.put("/planlegg/handle", new Response(currentDocument, {
+      headers: { "content-type": "text/html; charset=utf-8" },
+      status: 200,
+    }));
+    await cache.put("/_next/static/chunks/handle-ready.js", new Response("js", { status: 200 }));
+    await cache.put("/_next/static/css/handle-ready.css", new Response("css", { status: 200 }));
+    let failCss = false;
+    const context = vm.createContext({
+      URL,
+      Request,
+      Response,
+      caches: {
+        delete: vi.fn(async () => true),
+        keys: vi.fn(async () => []),
+        open: vi.fn(async () => cache),
+      },
+      fetch: vi.fn(async (input: string | Request) => {
+        const value = typeof input === "string" ? input : new URL(input.url).pathname;
+        if (failCss && value === "/_next/static/css/handle-ready.css") {
+          return new Response("unavailable", { status: 503 });
+        }
+        return value === "/planlegg/handle"
+          ? new Response(currentDocument, {
+              headers: { "content-type": "text/html; charset=utf-8" },
+              status: 200,
+            })
+          : new Response("asset", { status: 200 });
+      }),
+      self: {
+        addEventListener: (name: string, listener: (event: MessageEventLike) => void) => {
+          listeners.set(name, listener);
+        },
+        clients: { claim: vi.fn(async () => undefined) },
+        location: { origin: "https://handle.test" },
+        skipWaiting: vi.fn(async () => undefined),
+      },
+    });
+    vm.runInContext(source, context);
+
+    const responses: unknown[] = [];
+    let proof: Promise<unknown> | undefined;
+    listeners.get("message")?.({
+      data: { kind: "handleplan:handle-mode-offline-ready:v1" },
+      ports: [{ postMessage: (value) => responses.push(value) }],
+      waitUntil: (promise) => { proof = promise; },
+    });
+    await proof;
+    expect(responses).toEqual([{
+      kind: "handleplan:handle-mode-offline-ready-result:v1",
+      ready: true,
+    }]);
+
+    await cache.delete("/_next/static/css/handle-ready.css");
+    failCss = true;
+    listeners.get("message")?.({
+      data: { kind: "handleplan:handle-mode-offline-ready:v1" },
+      ports: [{ postMessage: (value) => responses.push(value) }],
+      waitUntil: (promise) => { proof = promise; },
+    });
+    await proof;
+    expect(responses.at(-1)).toEqual({
+      kind: "handleplan:handle-mode-offline-ready-result:v1",
+      ready: false,
+    });
   });
 });

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   coverageCheckSchema,
+  comparisonScopeSchema,
   deriveComparisonScope,
+  KNOWN_NOT_CARRIED_MAX_AGE_MS,
   type PriceEvidenceEligibilityContext,
 } from "./index";
 
@@ -61,13 +63,14 @@ function derive(
   priceEvidence: readonly unknown[],
   coverageChecks: readonly unknown[] = [],
   expectedChainIds = ["bunnpris", "extra", "rema-1000"],
+  context: PriceEvidenceEligibilityContext = CONTEXT,
 ) {
   return deriveComparisonScope({
     canonicalProductId: "product:milk",
     expectedChainIds,
     priceEvidence,
     coverageChecks,
-    context: CONTEXT,
+    context,
   });
 }
 
@@ -154,6 +157,140 @@ describe("deriveComparisonScope", () => {
     expect(result?.completeness).toBe("partial");
   });
 
+  it("prefers matching regional evidence over newer national evidence and excludes narrower stores", () => {
+    const result = derive([
+      evidence("price:national-newer", "extra", 800, "2026-07-16T11:00:00.000Z"),
+      evidence("price:oslo", "extra", 1_100, "2026-07-16T09:00:00.000Z", {
+        geographicScope: {
+          kind: "regions",
+          countryCode: "NO",
+          regionCodes: ["NO-03"],
+        },
+      }),
+      evidence("price:bergen", "extra", 700, "2026-07-16T11:30:00.000Z", {
+        geographicScope: {
+          kind: "regions",
+          countryCode: "NO",
+          regionCodes: ["NO-46"],
+        },
+      }),
+      evidence("price:one-store", "extra", 600, "2026-07-16T11:45:00.000Z", {
+        geographicScope: { kind: "stores", storeIds: ["store:extra:1"] },
+      }),
+    ]);
+
+    expect(result?.entries.find(({ chainId }) => chainId === "extra")).toEqual({
+      chainId: "extra",
+      status: { evidenceId: "price:oslo", kind: "priced" },
+    });
+  });
+
+  it("applies national-region-postal-store precedence before ordinary-price tie-breaks", () => {
+    const result = derive([
+      evidence("price:00-cheap-national", "extra", 100, undefined, {
+        geographicScope: { kind: "national", countryCode: "NO" },
+      }),
+      evidence("price:10-cheap-region", "extra", 200, undefined, {
+        geographicScope: {
+          kind: "regions",
+          countryCode: "NO",
+          regionCodes: ["NO-03"],
+        },
+      }),
+      evidence("price:20-cheap-postal", "extra", 300, undefined, {
+        geographicScope: {
+          kind: "postal-set",
+          countryCode: "NO",
+          postalCodes: ["0152"],
+        },
+      }),
+      evidence("price:99-expensive-store", "extra", 1_500, "2026-07-16T09:00:00.000Z", {
+        geographicScope: { kind: "stores", storeIds: ["store:extra:oslo"] },
+      }),
+    ], [], ["extra"], {
+      ...CONTEXT,
+      location: {
+        countryCode: "NO",
+        postalCode: "0152",
+        regionCode: "NO-03",
+        storeId: "store:extra:oslo",
+      },
+    });
+
+    expect(result?.entries).toEqual([{
+      chainId: "extra",
+      status: { evidenceId: "price:99-expensive-store", kind: "priced" },
+    }]);
+  });
+
+  it("does not let editions across a region, postal, or store border shadow local evidence", () => {
+    const result = derive([
+      evidence("price:national", "extra", 1_000),
+      evidence("price:oslo-region", "extra", 1_200, undefined, {
+        geographicScope: {
+          kind: "regions",
+          countryCode: "NO",
+          regionCodes: ["NO-03"],
+        },
+      }),
+      evidence("price:bergen-region", "extra", 100, undefined, {
+        geographicScope: {
+          kind: "regions",
+          countryCode: "NO",
+          regionCodes: ["NO-46"],
+        },
+      }),
+      evidence("price:bergen-postal", "extra", 100, undefined, {
+        geographicScope: {
+          kind: "postal-set",
+          countryCode: "NO",
+          postalCodes: ["5003"],
+        },
+      }),
+      evidence("price:bergen-store", "extra", 100, undefined, {
+        geographicScope: { kind: "stores", storeIds: ["store:extra:bergen"] },
+      }),
+    ], [], ["extra"], {
+      ...CONTEXT,
+      location: {
+        countryCode: "NO",
+        postalCode: "0152",
+        regionCode: "NO-03",
+        storeId: "store:extra:oslo",
+      },
+    });
+
+    expect(result?.entries).toEqual([{
+      chainId: "extra",
+      status: { evidenceId: "price:oslo-region", kind: "priced" },
+    }]);
+  });
+
+  it("prefers a matching regional coverage check over a newer national check", () => {
+    const result = derive([], [
+      check("check:national", "extra", "source-unavailable", {
+        checkedAt: "2026-07-16T11:30:00.000Z",
+      }),
+      check("check:oslo", "extra", "known-not-carried", {
+        checkedAt: "2026-07-16T10:00:00.000Z",
+        geographicScope: {
+          kind: "regions",
+          countryCode: "NO",
+          regionCodes: ["NO-03"],
+        },
+      }),
+    ]);
+
+    expect(result?.entries.find(({ chainId }) => chainId === "extra")).toEqual({
+      chainId: "extra",
+      status: {
+        checkedAt: "2026-07-16T10:00:00.000Z",
+        kind: "known-not-carried",
+        sourceId: "licensed-feed",
+      },
+    });
+  });
+
   it("reports stale and bounded ineligible reasons without turning them into prices", () => {
     const result = derive([
       evidence("price:stale", "bunnpris", 500, "2026-07-13T11:59:59.999Z"),
@@ -235,5 +372,28 @@ describe("coverageCheckSchema", () => {
       ...check("check:extra", "extra", "known-not-carried"),
       origin: { latitude: 59.9, longitude: 10.7 },
     }).success).toBe(false);
+  });
+});
+
+describe("serialized known-not-carried freshness", () => {
+  const scope = (checkedAt: string) => ({
+    contractVersion: 1,
+    completeness: "complete",
+    evaluatedAt: NOW.toISOString(),
+    expectedChainIds: ["extra"],
+    entries: [{
+      chainId: "extra",
+      status: { kind: "known-not-carried", sourceId: "licensed-feed", checkedAt },
+    }],
+  });
+
+  it("accepts the exact max age but rejects older and future absence proofs", () => {
+    const boundary = new Date(NOW.getTime() - KNOWN_NOT_CARRIED_MAX_AGE_MS).toISOString();
+    const stale = new Date(NOW.getTime() - KNOWN_NOT_CARRIED_MAX_AGE_MS - 1).toISOString();
+    const future = new Date(NOW.getTime() + 1).toISOString();
+
+    expect(comparisonScopeSchema.safeParse(scope(boundary)).success).toBe(true);
+    expect(comparisonScopeSchema.safeParse(scope(stale)).success).toBe(false);
+    expect(comparisonScopeSchema.safeParse(scope(future)).success).toBe(false);
   });
 });

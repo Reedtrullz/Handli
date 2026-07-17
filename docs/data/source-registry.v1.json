@@ -398,6 +398,65 @@
         }
       ],
       "revocationDisposition": "Disable travel calculation and recompute coherent price-only plans; never serve stale route results as current."
+    },
+    {
+      "id": "valhalla-openstreetmap-self-hosted",
+      "owner": "Valhalla contributors / OpenStreetMap contributors",
+      "runtimeState": "approved",
+      "runtimeDefaultEnabled": false,
+      "publicRankingEligible": false,
+      "intendedUse": "Self-hosted opt-in directed route estimates among one temporary origin and up to nine nearby branch candidates",
+      "dataClasses": [
+        "route_duration",
+        "route_distance",
+        "routing_graph"
+      ],
+      "rights": {
+        "access": "permitted",
+        "processing": "permitted",
+        "retention": "permitted",
+        "derivedDisplay": "permitted",
+        "redistribution": "permitted",
+        "imagery": "not_applicable",
+        "marks": "not_applicable",
+        "attribution": "required"
+      },
+      "rateLimit": "Self-hosted capacity is server-owned; Handleplan still caps each request at ten points, one matrix call, four seconds, and 128 KiB.",
+      "terminationRisk": "The engine, OpenStreetMap licence, extract distribution, or source data may change; runtime must remain kill-switchable and tile freshness visible.",
+      "killSwitchKey": "source.valhalla-openstreetmap-self-hosted.enabled",
+      "requiredActions": [
+        "Display OpenStreetMap contributor attribution wherever travel estimates are shown.",
+        "Pin and review the Valhalla image and build a reproducible Norway routing graph.",
+        "Prove tile freshness, VPS capacity, monitoring, clean-host recovery, and rollback before enabling runtime.",
+        "Keep HANDLEPLAN_SOURCE_VALHALLA_OPENSTREETMAP_SELF_HOSTED_ENABLED absent until every activation gate passes.",
+        "Keep the volunteered origin and provider coordinates out of persistence, URLs, caches, logs, analytics, monitoring, and public responses."
+      ],
+      "knownUnknowns": [
+        "Exact reviewed production image digest",
+        "Measured Norway tile disk, memory, build, startup, and matrix latency on the VPS",
+        "Operational tile update and stale-data thresholds"
+      ],
+      "evidence": [
+        {
+          "url": "https://github.com/valhalla/valhalla",
+          "kind": "official_repository_and_licence",
+          "accessedAt": "2026-07-16",
+          "finding": "The official repository describes Valhalla as a self-hostable OpenStreetMap routing engine and licenses the project under MIT."
+        },
+        {
+          "url": "https://valhalla.github.io/valhalla/api/matrix/api-reference/",
+          "kind": "official_api_guide",
+          "accessedAt": "2026-07-16",
+          "finding": "Documents directed source-to-target time and distance matrices with automobile and bicycle costing models."
+        },
+        {
+          "url": "https://www.openstreetmap.org/copyright",
+          "kind": "official_data_licence",
+          "accessedAt": "2026-07-16",
+          "finding": "OpenStreetMap data is available under ODbL and requires credit to OpenStreetMap contributors."
+        }
+      ],
+      "revocationDisposition": "Disable travel, stop tile updates, and recompute a coherent price-only frontier; preserve no volunteered origin or stale route result."
     }
   ]
 }

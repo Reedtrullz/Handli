@@ -2,13 +2,31 @@
 
 import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
-import type { MoneyOre, PlanResultV2 } from "@handleplan/domain";
+import type {
+  MoneyOre,
+  PlanDeltaExplanationV1,
+  PlanResultV2,
+  TravelRouteEvidence,
+} from "@handleplan/domain";
 import { describe, expect, it } from "vitest";
 import { PlanSummary } from "./plan-summary";
 
 const money = (value: number) => value as MoneyOre;
 
-function summary(totalOre: number, offerSavingOre = 0) {
+function summary(totalOre: number, options: {
+  offerSavingOre?: number;
+  offerMessage?: string;
+  priceMessage?: string;
+  travelRoute?: TravelRouteEvidence;
+  travelMessage?: string;
+} = {}) {
+  const {
+    offerSavingOre = 0,
+    offerMessage = "Serveren fant ingen dokumentert tilbudssparing.",
+    priceMessage = "Serverens sammenligningsgrunnlag.",
+    travelRoute,
+    travelMessage,
+  } = options;
   const ordinaryTotalOre = totalOre + offerSavingOre;
   const plan: PlanResultV2 = {
     id: "plan",
@@ -52,19 +70,81 @@ function summary(totalOre: number, offerSavingOre = 0) {
     coverage: 1,
     freshness: { milk: "eligible" },
   };
-  return <PlanSummary plan={plan} convenienceTotalOre={10_000} requiredItems={1} />;
+  const explanation: PlanDeltaExplanationV1 = {
+    planId: plan.id,
+    referencePlanId: plan.id,
+    presentation: { role: "only", label: "Eneste komplette plan" },
+    price: { kind: "reference", message: priceMessage },
+    offerSaving: { kind: "none", message: offerMessage },
+    stores: {
+      count: 1,
+      chainIds: ["extra"],
+      referenceCount: 1,
+      referenceChainIds: ["extra"],
+      addedChainIds: [],
+      removedChainIds: [],
+      message: "Samme butikksett.",
+    },
+    needs: [],
+    ...(travelMessage === undefined
+      ? {}
+      : { travel: { kind: "reference" as const, message: travelMessage } }),
+    summary: priceMessage,
+  };
+  return (
+    <PlanSummary
+      plan={plan}
+      explanation={explanation}
+      explanationQualifier="Serverkvalifisert mot samme prisøyeblikk."
+      requiredItems={1}
+      travelRoute={travelRoute}
+    />
+  );
 }
 
 describe("PlanSummary price comparison", () => {
-  it("describes representative and official-offer savings separately", () => {
-    const view = render(summary(9_000, 500));
+  it("renders server-provided representative and offer explanations without deriving deltas", () => {
+    const view = render(summary(9_000, {
+      offerSavingOre: 500,
+      offerMessage: "Server: 5,00 kr dokumentert tilbudssparing.",
+      priceMessage: "Server: 10,00 kr lavere.",
+    }));
     expect(screen.getByText("Komplett handlekurv")).toBeVisible();
-    expect(screen.getByText("10,00 kr spart")).toBeVisible();
-    expect(screen.getByText("5,00 kr")).toBeVisible();
-    view.rerender(summary(10_000));
-    expect(screen.getByText("Samme pris")).toBeVisible();
-    expect(screen.getByText("Ingen tilbud brukt")).toBeVisible();
-    view.rerender(summary(11_000));
-    expect(screen.getByText("10,00 kr dyrere")).toBeVisible();
+    expect(screen.getByText("1 nødvendig vare er med")).toBeVisible();
+    expect(screen.queryByText(/1 nødvendige varer/u)).not.toBeInTheDocument();
+    expect(screen.getByText("Server: 10,00 kr lavere.")).toBeVisible();
+    expect(screen.getByText("Server: 5,00 kr dokumentert tilbudssparing.")).toBeVisible();
+    view.rerender(summary(11_000, {
+      priceMessage: "Serveren holder tilbake prisforskjellen.",
+    }));
+    expect(screen.getByText("Serveren holder tilbake prisforskjellen.")).toBeVisible();
+    expect(screen.queryByText("10,00 kr dyrere")).not.toBeInTheDocument();
+  });
+
+  it("labels displayed route duration as estimated", () => {
+    const route: TravelRouteEvidence = {
+      aggregate: {
+        calculatedAt: "2026-07-17T10:00:00.000Z",
+        distanceMeters: 4_200,
+        durationSeconds: 720,
+        mode: "car",
+        providerSourceId: "valhalla-openstreetmap-self-hosted",
+        routeFingerprint: `route:${"a".repeat(32)}`,
+      },
+      planId: "plan",
+      stops: [{
+        branchId: "branch:extra:majorstuen",
+        chainId: "extra",
+        name: "Extra Majorstuen",
+        sequence: 1,
+      }],
+    };
+
+    render(summary(9_000, { travelRoute: route, travelMessage: "Serverberegnet reiseforskjell." }));
+
+    const label = screen.getByText("Estimert reisetid", { selector: "dt" });
+    expect(label).toBeVisible();
+    expect(label.nextElementSibling).toHaveTextContent("12 min");
+    expect(screen.getByText("Serverberegnet reiseforskjell.")).toBeVisible();
   });
 });

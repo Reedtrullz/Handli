@@ -18,7 +18,8 @@ const root = resolve(here, "../..");
 const migrationRunner = resolve(root, "deploy/migrate.mjs");
 const sourceDatabase = "handleplan_ci_v1_03_source";
 const restoreDatabase = "handleplan_ci_v1_03_restore";
-const proofDatabases = [sourceDatabase, restoreDatabase];
+const completionClockDatabase = "handleplan_ci_v1_03_completion_clock";
+const proofDatabases = [sourceDatabase, restoreDatabase, completionClockDatabase];
 const postgresImage =
   "postgres:16.10-alpine@sha256:ab8380566c3ea09690a9ecaa85a59d82bfc6eb86744151a2a54335866c83a3e9";
 const expectedMigrations = [
@@ -34,6 +35,20 @@ const expectedMigrations = [
   "010_worker_job_results.sql",
   "011_catalog_observations.sql",
   "012_reviewed_family_taxonomy.sql",
+  "013_physical_store_directory.sql",
+  "014_ingestion_completion_clock.sql",
+  "015_catalog_category_path.sql",
+  "016_worker_source_health.sql",
+  "017_geographic_directory_region_proof.sql",
+  "018_review_candidate_immutability.sql",
+  "019_public_api_request_budget.sql",
+  "020_official_offer_trust_fences.sql",
+  "021_private_review_decision_boundary.sql",
+  "022_public_official_offer_projection.sql",
+  "023_official_offer_worker_jobs.sql",
+  "024_operations_runtime_boundary.sql",
+  "025_private_review_evidence_renderer.sql",
+  "026_official_offer_publication_runtime.sql",
 ];
 
 assert.equal(process.env.CI, "true", "database proof requires CI=true");
@@ -48,11 +63,42 @@ assert.match(
   /^[A-Za-z0-9_-]{32,128}$/,
   "WEB_DATABASE_PASSWORD must be a 32-128 character URL-safe secret",
 );
+assert.match(
+  process.env.REVIEW_DATABASE_PASSWORD ?? "",
+  /^[A-Za-z0-9_-]{32,128}$/,
+  "REVIEW_DATABASE_PASSWORD must be a 32-128 character URL-safe secret",
+);
+assert.match(
+  process.env.OPERATIONS_DATABASE_PASSWORD ?? "",
+  /^[A-Za-z0-9_-]{32,128}$/,
+  "OPERATIONS_DATABASE_PASSWORD must be a 32-128 character URL-safe secret",
+);
 assert.notEqual(
   process.env.APP_DATABASE_PASSWORD,
   process.env.WEB_DATABASE_PASSWORD,
   "worker and web database credentials must differ",
 );
+assert.notEqual(
+  process.env.APP_DATABASE_PASSWORD,
+  process.env.REVIEW_DATABASE_PASSWORD,
+  "worker and review database credentials must differ",
+);
+assert.notEqual(
+  process.env.WEB_DATABASE_PASSWORD,
+  process.env.REVIEW_DATABASE_PASSWORD,
+  "web and review database credentials must differ",
+);
+for (const [otherName, otherPassword] of [
+  ["worker", process.env.APP_DATABASE_PASSWORD],
+  ["web", process.env.WEB_DATABASE_PASSWORD],
+  ["review", process.env.REVIEW_DATABASE_PASSWORD],
+]) {
+  assert.notEqual(
+    process.env.OPERATIONS_DATABASE_PASSWORD,
+    otherPassword,
+    `operations and ${otherName} database credentials must differ`,
+  );
+}
 assert.ok(process.env.MIGRATIONS_DIR, "MIGRATIONS_DIR is required");
 assert.ok(isAbsolute(process.env.MIGRATIONS_DIR), "MIGRATIONS_DIR must be absolute");
 
@@ -81,6 +127,16 @@ assert.notEqual(
   decodeURIComponent(adminUrl.password),
   process.env.WEB_DATABASE_PASSWORD,
   "migration and web database credentials must differ",
+);
+assert.notEqual(
+  decodeURIComponent(adminUrl.password),
+  process.env.REVIEW_DATABASE_PASSWORD,
+  "migration and review database credentials must differ",
+);
+assert.notEqual(
+  decodeURIComponent(adminUrl.password),
+  process.env.OPERATIONS_DATABASE_PASSWORD,
+  "migration and operations database credentials must differ",
 );
 
 const postgresClientHost = process.env.POSTGRES_CLIENT_HOST;
@@ -151,6 +207,132 @@ async function runMigrations(database, maxMigrationId) {
   await run(process.execPath, [migrationRunner], { env });
 }
 
+async function seedLegacyReviewRolePrivileges(sql) {
+  await sql.unsafe(`
+    do $legacy_review_role$
+    begin
+      if not exists (
+        select 1 from pg_catalog.pg_roles where rolname = 'handleplan_review'
+      ) then
+        create role handleplan_review
+          nologin nosuperuser nocreatedb nocreaterole noinherit
+          noreplication nobypassrls;
+      end if;
+    end
+    $legacy_review_role$;
+
+    revoke all privileges on all tables in schema public from public;
+    revoke all privileges on all sequences in schema public from public;
+    revoke all privileges on all functions in schema public from public;
+    grant usage on schema public to handleplan_review;
+    grant select on table
+      approved_offers, canonical_products, extracted_offer_candidates,
+      extraction_runs, handleplan_schema_migrations, offer_conditions,
+      offer_targets, product_families, product_identifiers,
+      publication_captures, publications, review_actions
+      to handleplan_review;
+    grant insert on table
+      approved_offers, offer_conditions, offer_targets, review_actions
+      to handleplan_review;
+    grant usage on sequence
+      approved_offers_id_seq, offer_conditions_id_seq, review_actions_id_seq
+      to handleplan_review;
+    grant select (
+      id, display_name, source_kind, runtime_state, public_reference_url,
+      permission_reviewed_at, permission_expires_at, created_at, updated_at,
+      public_state_changed_at
+    ) on table data_sources to handleplan_review;
+    grant select (
+      id, source_id, decision, reviewed_at, valid_until, permissions, created_at
+    ) on table source_permissions to handleplan_review;
+    grant select (
+      id, scope_kind, label, country_code, status, created_at,
+      public_state_changed_at
+    ) on table geographic_scopes to handleplan_review;
+    grant execute on function reject_append_only_mutation()
+      to handleplan_review;
+  `);
+}
+
+async function verifyPrivateReviewUpgradeCrashBoundary(sql) {
+  const tableGrants = await sql`
+    select table_name, privilege_type
+    from information_schema.role_table_grants
+    where grantee = 'handleplan_review'
+      and table_schema = 'public'
+    order by table_name, privilege_type
+  `;
+  assert.deepEqual(
+    [...tableGrants],
+    [],
+    "021 commit must erase historical review table privileges before role reconciliation",
+  );
+
+  const columnGrants = await sql`
+    select table_name, column_name, privilege_type
+    from information_schema.role_column_grants
+    where grantee = 'handleplan_review'
+      and table_schema = 'public'
+    order by table_name, column_name, privilege_type
+  `;
+  assert.deepEqual(
+    [...columnGrants],
+    [],
+    "021 commit must erase historical review column grants before role reconciliation",
+  );
+
+  const sequenceGrants = await sql`
+    select relation.relname as sequence_name, privilege.privilege_type
+    from pg_catalog.pg_class relation
+    inner join pg_catalog.pg_namespace namespace
+      on namespace.oid = relation.relnamespace
+    cross join lateral pg_catalog.aclexplode(
+      coalesce(
+        relation.relacl,
+        pg_catalog.acldefault('s', relation.relowner)
+      )
+    ) privilege
+    inner join pg_catalog.pg_roles grantee on grantee.oid = privilege.grantee
+    where namespace.nspname = 'public'
+      and relation.relkind = 'S'
+      and grantee.rolname = 'handleplan_review'
+    order by relation.relname, privilege.privilege_type
+  `;
+  assert.deepEqual(
+    [...sequenceGrants],
+    [],
+    "021 commit must erase historical review sequence grants before role reconciliation",
+  );
+
+  const functionGrants = await sql`
+    select routine.proname as function_name,
+      pg_catalog.pg_get_function_identity_arguments(routine.oid) as identity_arguments,
+      privilege.privilege_type
+    from pg_catalog.pg_proc routine
+    inner join pg_catalog.pg_namespace namespace
+      on namespace.oid = routine.pronamespace
+    cross join lateral pg_catalog.aclexplode(
+      coalesce(
+        routine.proacl,
+        pg_catalog.acldefault('f', routine.proowner)
+      )
+    ) privilege
+    inner join pg_catalog.pg_roles grantee on grantee.oid = privilege.grantee
+    where namespace.nspname = 'public'
+      and grantee.rolname = 'handleplan_review'
+    order by routine.proname, identity_arguments, privilege.privilege_type
+  `;
+  assert.deepEqual(
+    functionGrants.map(({ function_name: name, identity_arguments: args, privilege_type: privilege }) =>
+      `${name}(${args}):${privilege}`),
+    [
+      "private_review_candidate_rows_v1(p_candidate_id bigint, p_evaluation_as_of timestamp with time zone, p_chain text, p_scope_kind text, p_min_confidence integer, p_max_confidence integer, p_min_age_hours integer, p_max_age_hours integer, p_anomaly text, p_cursor_created_at timestamp with time zone, p_cursor_id bigint, p_result_limit integer):EXECUTE",
+      "private_review_decide_v1(p_candidate_id bigint, p_expected_version integer, p_action text, p_actor_id text, p_reason text, p_target_kind text, p_target_gtin text, p_target_family_slug text, p_pricing_kind text, p_offer_price_ore integer, p_before_price_ore integer, p_multibuy_quantity integer, p_multibuy_total_ore integer, p_eligibility_kind text, p_membership_program_id text, p_valid_from timestamp with time zone, p_valid_until timestamp with time zone, p_channels text[]):EXECUTE",
+    ],
+    "a crash after 021 commit may leave only the two exact procedure grants",
+  );
+}
+
 function postgresClientArgs(command, database, extraArgs) {
   assert.ok(proofDatabases.includes(database), "refusing an unapproved client database name");
   return [
@@ -203,6 +385,55 @@ async function readMigrationLedger(sql) {
 }
 
 async function verifyLegacyUpgrade(sql) {
+  const [conditionClock] = await sql`
+    select is_nullable, column_default
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'offer_conditions'
+      and column_name = 'created_at'
+  `;
+  assert.equal(conditionClock?.is_nullable, "NO");
+  assert.match(
+    conditionClock?.column_default ?? "",
+    /(?:transaction_timestamp|now)\(\)/,
+    "offer condition persistence clock must retain a database default",
+  );
+  const conditionTriggers = await sql`
+    select trigger.tgname
+    from pg_catalog.pg_trigger trigger
+    inner join pg_catalog.pg_class relation on relation.oid = trigger.tgrelid
+    inner join pg_catalog.pg_namespace namespace on namespace.oid = relation.relnamespace
+    where namespace.nspname = 'public'
+      and relation.relname = 'offer_conditions'
+      and not trigger.tgisinternal
+    order by trigger.tgname
+  `;
+  assert.deepEqual(
+    conditionTriggers.map(({ tgname: name }) => name),
+    ["offer_conditions_creation_clock", "offer_conditions_mutation_fence"],
+  );
+  const [reviewBoundaryVersion] = await sql`
+    select is_nullable, column_default
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'review_actions'
+      and column_name = 'decision_boundary_version'
+  `;
+  assert.equal(reviewBoundaryVersion?.is_nullable, "YES");
+  assert.match(
+    reviewBoundaryVersion?.column_default ?? "",
+    /\b1\b/,
+    "post-022 review decisions must receive the trusted boundary marker",
+  );
+  const [payloadBoundary] = await sql`
+    select public.assert_public_official_offer_payload_v1(8388608) as accepted
+  `;
+  assert.equal(payloadBoundary?.accepted, true);
+  await assert.rejects(
+    sql`select public.assert_public_official_offer_payload_v1(8388609)`,
+    /exceeds the 8 MiB payload bound/i,
+  );
+
   const rows = await sql`
     select
       price_cache.ean,
@@ -339,28 +570,30 @@ async function verifyRestoreEvidence(sql) {
       publication_captures.mime_type,
       publication_captures.byte_length,
       publication_captures.rights_classification,
-      publication_captures.retrieved_at
+      publication_captures.retrieved_at,
+      publication_captures.created_at,
+      publication_captures.capture_permission_id,
+      publication_captures.capture_permission_capabilities
     from publication_captures
     join publications on publications.id = publication_captures.publication_id
     where publications.external_id = 'ci-proof-publication-v1-03'
   `;
   assert.equal(captures.length, 1, "publication capture metadata must be present");
+  assert.equal(captures[0].external_id, "ci-proof-publication-v1-03");
+  assert.equal(captures[0].source_id, "ci-proof-offer-source-v1-03");
+  assert.equal(captures[0].blob_key, "ci-proof/private/v1-03/publication.pdf");
+  assert.equal(captures[0].checksum, "a".repeat(64));
+  assert.equal(captures[0].mime_type, "application/pdf");
+  assert.equal(captures[0].byte_length, 321);
+  assert.equal(captures[0].rights_classification, "private_review");
+  assert.ok(captures[0].retrieved_at >= captures[0].created_at);
+  assert.ok(captures[0].capture_permission_id > 0);
   assert.deepEqual(
-    {
-      ...captures[0],
-      retrieved_at: captures[0].retrieved_at.toISOString(),
-    },
-    {
-      external_id: "ci-proof-publication-v1-03",
-      source_id: "kassalapp",
-      blob_key: "ci-proof/private/v1-03/publication.pdf",
-      checksum: "a".repeat(64),
-      mime_type: "application/pdf",
-      byte_length: 321,
-      rights_classification: "private_review",
-      retrieved_at: "2026-07-16T08:06:00.000Z",
-    },
+    captures[0].capture_permission_capabilities,
+    ["capture", "discover", "extract"],
   );
+  persistenceClockFingerprint.offer_capture_retrieved_at =
+    captures[0].retrieved_at.toISOString();
 
   const reviews = await sql`
     select actor_id, action, expected_version, previous_values, new_values, reason, acted_at
@@ -377,6 +610,34 @@ async function verifyRestoreEvidence(sql) {
     "Deterministic audit fixture for backup and restore proof",
   );
   assert.equal(reviews[0].acted_at.toISOString(), "2026-07-16T08:09:00.000Z");
+
+  await assert.rejects(
+    sql`
+      update extracted_offer_candidates
+      set normalized_fields = '{"title":"rewritten"}'::jsonb
+      where candidate_key = 'ci-proof-candidate-v1-03'
+    `,
+    /extracted_offer_candidates is append-only/i,
+    "review corrections must not rewrite the original extracted candidate",
+  );
+  await assert.rejects(
+    sql`
+      delete from extracted_offer_candidates
+      where candidate_key = 'ci-proof-candidate-v1-03'
+    `,
+    /extracted_offer_candidates is append-only/i,
+    "review rejection must not delete the original extracted candidate",
+  );
+  const [unchangedCandidate] = await sql`
+    select normalized_fields, status
+    from extracted_offer_candidates
+    where candidate_key = 'ci-proof-candidate-v1-03'
+  `;
+  assert.deepEqual(
+    unchangedCandidate,
+    { normalized_fields: { title: "CI proof only" }, status: "rejected" },
+    "candidate evidence must survive review and restore unchanged",
+  );
 
   const workerResults = await sql`
     select job_id, source_id, job_kind, scheduled_at, status, counts, result_hash
@@ -419,6 +680,7 @@ async function verifyRestoreEvidence(sql) {
       observation.retrieved_at,
       observation.source_updated_at,
       observation.raw_record_hash,
+      observation.category_path,
       observation.created_at as observation_created_at,
       run.source_id,
       run.run_type,
@@ -452,6 +714,7 @@ async function verifyRestoreEvidence(sql) {
       retrieved_at: "2026-07-16T08:10:30.000Z",
       source_updated_at: "2026-07-16T08:00:30.000Z",
       raw_record_hash: "e".repeat(64),
+      category_path: null,
       source_id: "kassalapp",
       run_type: "catalog",
       status: "completed",
@@ -834,6 +1097,21 @@ async function verifyRuntimeRolePolicy(sql) {
         'provider_request_budget_events',
         'UPDATE'
       ) as budget_update,
+      has_table_privilege(
+        'handleplan_app',
+        'public_api_request_budget_events',
+        'SELECT, INSERT, UPDATE, DELETE'
+      ) as public_api_budget_worker_table_access,
+      has_function_privilege(
+        'handleplan_app',
+        'claim_public_api_request_budget(text)',
+        'EXECUTE'
+      ) as public_api_budget_worker_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'official_offer_lifecycle_reconcile_v1(text,text,text,timestamptz,text,integer,boolean)',
+        'EXECUTE'
+      ) as worker_offer_lifecycle_execute,
       has_function_privilege(
         'handleplan_app',
         'reject_append_only_mutation()',
@@ -928,6 +1206,21 @@ async function verifyRuntimeRolePolicy(sql) {
         'provider_request_budget_events',
         'SELECT'
       ) as web_budget_read,
+      has_table_privilege(
+        'handleplan_web',
+        'public_api_request_budget_events',
+        'SELECT, INSERT, UPDATE, DELETE'
+      ) as web_public_api_budget_table_access,
+      has_function_privilege(
+        'handleplan_web',
+        'claim_public_api_request_budget(text)',
+        'EXECUTE'
+      ) as web_public_api_budget_execute,
+      has_function_privilege(
+        'handleplan_web',
+        'public_official_offer_rows_v1(bigint[],timestamptz)',
+        'EXECUTE'
+      ) as web_public_official_offer_execute,
       has_sequence_privilege(
         'handleplan_web',
         'canonical_products_id_seq',
@@ -939,7 +1232,184 @@ async function verifyRuntimeRolePolicy(sql) {
         'EXECUTE'
       ) as web_guard_execute,
       pg_has_role('handleplan_web', 'handleplan', 'MEMBER') as web_owner_member,
-      pg_has_role('handleplan_web', 'handleplan_app', 'MEMBER') as web_worker_member
+      pg_has_role('handleplan_web', 'handleplan_app', 'MEMBER') as web_worker_member,
+      has_database_privilege(
+        'handleplan_review',
+        current_database(),
+        'CREATE'
+      ) as review_database_create,
+      has_schema_privilege('handleplan_review', 'public', 'CREATE')
+        as review_schema_create,
+      has_table_privilege(
+        'handleplan_review',
+        'publication_captures',
+        'SELECT'
+      ) as review_capture_read,
+      has_table_privilege(
+        'handleplan_review',
+        'extracted_offer_candidates',
+        'SELECT'
+      ) as review_candidate_read,
+      has_table_privilege(
+        'handleplan_review',
+        'extracted_offer_candidates',
+        'INSERT, UPDATE, DELETE'
+      ) as review_candidate_write,
+      has_table_privilege(
+        'handleplan_review',
+        'review_actions',
+        'SELECT, INSERT'
+      ) as review_action_append,
+      has_table_privilege(
+        'handleplan_review',
+        'review_actions',
+        'UPDATE, DELETE'
+      ) as review_action_rewrite,
+      has_table_privilege(
+        'handleplan_review',
+        'private_review_evidence_renders',
+        'SELECT, INSERT, UPDATE, DELETE'
+      ) as review_evidence_render_table_access,
+      has_table_privilege(
+        'handleplan_review',
+        'private_review_evidence_consumptions',
+        'SELECT, INSERT, UPDATE, DELETE'
+      ) as review_evidence_consumption_table_access,
+      has_table_privilege(
+        'handleplan_review',
+        'approved_offers',
+        'SELECT, INSERT'
+      ) as review_offer_append,
+      has_table_privilege(
+        'handleplan_review',
+        'approved_offers',
+        'UPDATE, DELETE'
+      ) as review_offer_rewrite,
+      has_table_privilege(
+        'handleplan_review',
+        'source_permissions',
+        'SELECT'
+      ) as review_permission_table_read,
+      has_column_privilege(
+        'handleplan_review',
+        'source_permissions',
+        'permissions',
+        'SELECT'
+      ) as review_permission_column_read,
+      has_column_privilege(
+        'handleplan_review',
+        'source_permissions',
+        'private_reference_key',
+        'SELECT'
+      ) as review_permission_private_read,
+      has_table_privilege(
+        'handleplan_review',
+        'price_cache',
+        'SELECT'
+      ) as review_unrelated_cache_read,
+      has_sequence_privilege(
+        'handleplan_review',
+        'review_actions_id_seq',
+        'USAGE'
+      ) as review_sequence_usage,
+      has_function_privilege(
+        'handleplan_review',
+        'reject_append_only_mutation()',
+        'EXECUTE'
+      ) as review_guard_execute,
+      has_table_privilege(
+        'handleplan_review',
+        'public_api_request_budget_events',
+        'SELECT, INSERT, UPDATE, DELETE'
+      ) as review_public_api_budget_table_access,
+      has_function_privilege(
+        'handleplan_review',
+        'claim_public_api_request_budget(text)',
+        'EXECUTE'
+      ) as review_public_api_budget_execute,
+      has_function_privilege(
+        'handleplan_review',
+        'private_review_candidate_rows_v1(bigint,timestamptz,text,text,integer,integer,integer,integer,text,timestamptz,bigint,integer)',
+        'EXECUTE'
+      ) as review_candidate_reader_execute,
+      has_function_privilege(
+        'handleplan_review',
+        'private_review_decide_v1(bigint,integer,text,text,text,text,text,text,text,integer,integer,integer,integer,text,text,timestamptz,timestamptz,text[])',
+        'EXECUTE'
+      ) as review_decision_v1_execute,
+      has_function_privilege(
+        'handleplan_review',
+        'private_review_record_evidence_render_v1(bigint,integer,text,text,text,text,text,text,text,timestamptz)',
+        'EXECUTE'
+      ) as review_evidence_render_execute,
+      has_function_privilege(
+        'handleplan_review',
+        'private_review_decide_v2(bigint,integer,text,text,text,text,text,text,text,text,text,integer,integer,integer,integer,text,text,timestamptz,timestamptz,text[])',
+        'EXECUTE'
+      ) as review_decision_v2_execute,
+      pg_has_role('handleplan_review', 'handleplan', 'MEMBER') as review_owner_member,
+      pg_has_role('handleplan_review', 'handleplan_app', 'MEMBER') as review_worker_member,
+      pg_has_role('handleplan_review', 'handleplan_web', 'MEMBER') as review_web_member,
+      has_database_privilege(
+        'handleplan_operations',
+        current_database(),
+        'CREATE'
+      ) as operations_database_create,
+      has_database_privilege(
+        'handleplan_operations',
+        current_database(),
+        'TEMPORARY'
+      ) as operations_database_temp,
+      has_schema_privilege('handleplan_operations', 'public', 'CREATE')
+        as operations_schema_create,
+      has_table_privilege(
+        'handleplan_operations',
+        'data_sources',
+        'SELECT'
+      ) as operations_public_table_read,
+      has_table_privilege(
+        'handleplan_operations',
+        'publication_captures',
+        'SELECT'
+      ) as operations_private_table_read,
+      has_table_privilege(
+        'handleplan_operations',
+        'alert_events',
+        'SELECT, INSERT, UPDATE, DELETE'
+      ) as operations_alert_ledger_access,
+      has_sequence_privilege(
+        'handleplan_operations',
+        'alert_events_id_seq',
+        'USAGE'
+      ) as operations_sequence_usage,
+      has_function_privilege(
+        'handleplan_operations',
+        'operations_dashboard_rows_v1(text[],integer)',
+        'EXECUTE'
+      ) as operations_dashboard_execute,
+      has_function_privilege(
+        'handleplan_operations',
+        'append_operations_alert_evaluation_v1(timestamptz,jsonb,jsonb)',
+        'EXECUTE'
+      ) as operations_alert_append_execute,
+      has_function_privilege(
+        'handleplan_operations',
+        'operations_alert_export_rows_v1(bigint,integer)',
+        'EXECUTE'
+      ) as operations_alert_export_execute,
+      has_function_privilege(
+        'handleplan_operations',
+        'reject_append_only_mutation()',
+        'EXECUTE'
+      ) as operations_generic_function_execute,
+      pg_has_role('handleplan_operations', 'handleplan', 'MEMBER')
+        as operations_owner_member,
+      pg_has_role('handleplan_operations', 'handleplan_app', 'MEMBER')
+        as operations_worker_member,
+      pg_has_role('handleplan_operations', 'handleplan_web', 'MEMBER')
+        as operations_web_member,
+      pg_has_role('handleplan_operations', 'handleplan_review', 'MEMBER')
+        as operations_review_member
   `;
 
   assert.deepEqual(policy, {
@@ -957,13 +1427,16 @@ async function verifyRuntimeRolePolicy(sql) {
     worker_family_public_read: false,
     worker_family_private_access: false,
     worker_lease_write: true,
-    source_health_append: false,
+    source_health_append: true,
     worker_results_append: true,
     worker_results_rewrite: false,
     budget_select: true,
     budget_insert: true,
     budget_delete: true,
     budget_update: false,
+    public_api_budget_worker_table_access: false,
+    public_api_budget_worker_execute: false,
+    worker_offer_lifecycle_execute: true,
     guard_execute: false,
     owner_member: false,
     web_database_create: false,
@@ -984,11 +1457,224 @@ async function verifyRuntimeRolePolicy(sql) {
     web_private_capture_read: false,
     web_worker_state_read: false,
     web_budget_read: false,
+    web_public_api_budget_table_access: false,
+    web_public_api_budget_execute: true,
+    web_public_official_offer_execute: true,
     web_sequence_usage: false,
     web_guard_execute: false,
     web_owner_member: false,
     web_worker_member: false,
+    review_database_create: false,
+    review_schema_create: false,
+    review_capture_read: false,
+    review_candidate_read: false,
+    review_candidate_write: false,
+    review_action_append: false,
+    review_action_rewrite: false,
+    review_evidence_render_table_access: false,
+    review_evidence_consumption_table_access: false,
+    review_offer_append: false,
+    review_offer_rewrite: false,
+    review_permission_table_read: false,
+    review_permission_column_read: false,
+    review_permission_private_read: false,
+    review_unrelated_cache_read: false,
+    review_sequence_usage: false,
+    review_guard_execute: false,
+    review_public_api_budget_table_access: false,
+    review_public_api_budget_execute: false,
+    review_candidate_reader_execute: true,
+    review_decision_v1_execute: false,
+    review_evidence_render_execute: true,
+    review_decision_v2_execute: true,
+    review_owner_member: false,
+    review_worker_member: false,
+    review_web_member: false,
+    operations_database_create: false,
+    operations_database_temp: false,
+    operations_schema_create: false,
+    operations_public_table_read: false,
+    operations_private_table_read: false,
+    operations_alert_ledger_access: false,
+    operations_sequence_usage: false,
+    operations_dashboard_execute: true,
+    operations_alert_append_execute: true,
+    operations_alert_export_execute: true,
+    operations_generic_function_execute: false,
+    operations_owner_member: false,
+    operations_worker_member: false,
+    operations_web_member: false,
+    operations_review_member: false,
   });
+
+  const [operationsProjection] = await sql`
+    select procedure.prosrc as body
+    from pg_catalog.pg_proc procedure
+    where procedure.oid = pg_catalog.to_regprocedure(
+      'public.operations_dashboard_rows_v1(text[],integer)'
+    )
+  `;
+  assert.equal(
+    operationsProjection.body.match(
+      /current_action\.decision_boundary_version\s*=\s*2/g,
+    )?.length,
+    3,
+    "final operations projection must require marker 2 at all three offer aggregates",
+  );
+  assert.doesNotMatch(
+    operationsProjection.body,
+    /current_action\.decision_boundary_version\s*=\s*1/,
+    "final operations projection must retain no legacy marker 1 predicate",
+  );
+  const [publicOfferProjection] = await sql`
+    select procedure.prosrc as body
+    from pg_catalog.pg_proc procedure
+    where procedure.oid = pg_catalog.to_regprocedure(
+      'public.public_official_offer_rows_v1(bigint[],timestamptz)'
+    )
+  `;
+  assert.match(
+    publicOfferProjection.body,
+    /review\.decision_boundary_version\s*=\s*2/,
+    "final public offer projection must require marker 2",
+  );
+  assert.doesNotMatch(
+    publicOfferProjection.body,
+    /review\.decision_boundary_version\s*=\s*1/,
+    "final public offer projection must retain no legacy marker 1 predicate",
+  );
+
+  const [budgetFunction] = await sql`
+    select
+      pg_get_functiondef(routine.oid) as definition,
+      pg_get_userbyid(routine.proowner) as owner,
+      routine.proconfig as configuration,
+      routine.prosecdef as security_definer
+    from pg_proc routine
+    where routine.oid = 'claim_public_api_request_budget(text)'::regprocedure
+  `;
+  assert.equal(budgetFunction.owner, "handleplan");
+  assert.equal(budgetFunction.security_definer, true);
+  assert.ok(
+    budgetFunction.configuration.includes("search_path=pg_catalog, pg_temp"),
+    "budget SECURITY DEFINER function must pin its search path",
+  );
+  assert.match(budgetFunction.definition, /pg_try_advisory_xact_lock/iu);
+  assert.match(budgetFunction.definition, /delete from public\.public_api_request_budget_events/iu);
+  assert.match(budgetFunction.definition, /insert into public\.public_api_request_budget_events/iu);
+  assert.doesNotMatch(
+    budgetFunction.definition,
+    /ip_address|user_agent|basket|coordinate|request_hash|address|token/iu,
+    "budget function must not accept or persist shopper/request identity",
+  );
+  const budgetColumns = await sql`
+    select column_name
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'public_api_request_budget_events'
+    order by ordinal_position
+  `;
+  assert.deepEqual(
+    budgetColumns.map(({ column_name: column }) => column),
+    ["route_key", "claimed_at"],
+    "ephemeral application budget has no request-identity storage column",
+  );
+}
+
+async function verifyReviewOfferInsertBoundary(sql) {
+  const [installedBoundary] = await sql`
+    select
+      constraint_state.constraint_definition,
+      trigger_state.trigger_definition,
+      function_state.function_definition
+    from (
+      select pg_get_constraintdef(oid) as constraint_definition
+      from pg_constraint
+      where conrelid = 'approved_offers'::regclass
+        and conname = 'approved_offers_published_candidate_binding'
+    ) constraint_state
+    cross join (
+      select pg_get_triggerdef(oid) as trigger_definition
+      from pg_trigger
+      where tgrelid = 'approved_offers'::regclass
+        and tgname = 'approved_offers_insert_boundary'
+        and not tgisinternal
+    ) trigger_state
+    cross join (
+      select pg_get_functiondef(oid) as function_definition
+      from pg_proc
+      where oid = 'enforce_approved_offer_insert_boundary()'::regprocedure
+    ) function_state
+  `;
+  assert.match(
+    installedBoundary.constraint_definition,
+    /status.*published.*candidate_id is not null/i,
+    "published offers must retain a candidate binding",
+  );
+  assert.match(
+    installedBoundary.trigger_definition,
+    /before insert on public\.approved_offers/i,
+    "approved-offer insertion must pass the database boundary trigger",
+  );
+  assert.match(
+    installedBoundary.function_definition,
+    /new\.status is distinct from 'approved'/i,
+    "direct INSERT must not create a public offer state",
+  );
+  assert.match(
+    installedBoundary.function_definition,
+    /session_user = 'handleplan_review'.*new\.candidate_id is null/is,
+    "review-role offers must bind immutable extracted candidate evidence",
+  );
+
+  const scopeKey = "ci-proof:review-offer-boundary";
+  const [scope] = await sql`
+    insert into geographic_scopes (scope_key, scope_kind, label, status)
+    values (${scopeKey}, 'national', 'Review offer boundary proof', 'active')
+    returning id
+  `;
+  const directPublishedKey = "ci-proof:direct-published-offer";
+  await assert.rejects(
+    sql`
+      insert into approved_offers (
+        offer_key, source_id, source_reference, chain, geographic_scope_id,
+        amount_ore, valid_from, valid_until, status, approved_at
+      ) values (
+        ${directPublishedKey}, 'kassalapp', 'ci-proof:forbidden', 'extra',
+        ${scope.id}, 1, now(), now() + interval '1 day', 'published', now()
+      )
+    `,
+    /approved_offers must begin approved/i,
+    "even the owner must use the guarded UPDATE publisher instead of direct INSERT",
+  );
+
+  const candidateLessKey = "ci-proof:candidate-less-approved-offer";
+  const [candidateLessOffer] = await sql`
+    insert into approved_offers (
+      offer_key, source_id, source_reference, chain, geographic_scope_id,
+      amount_ore, valid_from, valid_until, approved_at
+    ) values (
+      ${candidateLessKey}, 'kassalapp', 'ci-proof:owner-projection', 'extra',
+      ${scope.id}, 1, now(), now() + interval '1 day', now()
+    )
+    returning id, status
+  `;
+  assert.equal(candidateLessOffer.status, "approved");
+  await assert.rejects(
+    sql`
+      update approved_offers
+      set status = 'published'
+      where id = ${candidateLessOffer.id}
+    `,
+    /approved_offers_published_candidate_binding/i,
+    "an unbound projection must never become public through UPDATE",
+  );
+  const [unchangedOffer] = await sql`
+    select status from approved_offers where id = ${candidateLessOffer.id}
+  `;
+  assert.equal(unchangedOffer.status, "approved");
+  await sql`delete from approved_offers where id = ${candidateLessOffer.id}`;
+  await sql`delete from geographic_scopes where id = ${scope.id}`;
 }
 
 async function verifyDeletedMigrationHistoryIsRejected(sql, database) {
@@ -1007,6 +1693,344 @@ async function verifyDeletedMigrationHistoryIsRejected(sql, database) {
       delete from handleplan_schema_migrations where id = ${deletedMigrationId}
     `;
   }
+}
+
+async function verifyCatalogCategoryPathMigration(sql, preMigrationFixture) {
+  const [installedShape] = await sql`
+    select
+      constraint_state.convalidated,
+      trigger_state.trigger_definition,
+      index_state.indexdef
+    from (
+      select convalidated
+      from pg_constraint
+      where conrelid = 'catalog_observations'::regclass
+        and conname = 'catalog_observations_category_path_shape'
+    ) constraint_state
+    cross join (
+      select pg_get_triggerdef(oid) as trigger_definition
+      from pg_trigger
+      where tgrelid = 'catalog_observations'::regclass
+        and tgname = 'catalog_observations_category_path_guard'
+        and not tgisinternal
+    ) trigger_state
+    cross join (
+      select indexdef
+      from pg_indexes
+      where schemaname = 'public'
+        and tablename = 'catalog_observations'
+        and indexname = 'catalog_observations_category_path_gin_idx'
+    ) index_state
+  `;
+  assert.equal(installedShape.convalidated, true, "015 must validate its container constraint");
+  assert.match(
+    installedShape.trigger_definition,
+    /BEFORE INSERT OR UPDATE OF category_path/i,
+    "015 must validate category paths before any category write",
+  );
+  assert.match(
+    installedShape.indexdef,
+    /USING gin \(category_path jsonb_path_ops\) WHERE \(category_path IS NOT NULL\)/i,
+    "015 must install the partial jsonb_path_ops GIN index",
+  );
+
+  const [preMigrationObservation] = await sql`
+    select category_path
+    from catalog_observations
+    where id = ${preMigrationFixture.observationId}
+  `;
+  assert.deepEqual(
+    preMigrationObservation,
+    { category_path: null },
+    "015 must preserve a pre-existing observation as unknown category evidence",
+  );
+
+  const [categoryRun] = await sql`
+    insert into ingestion_runs (
+      job_id, source_id, run_type, status, started_at, completed_at, counts
+    ) values (
+      'ci-proof:category-path:validations', 'kassalapp', 'catalog', 'running',
+      statement_timestamp(), null, '{}'::jsonb
+    )
+    returning id
+  `;
+  const validCategoryPath = [
+    { sourceCategoryId: "10", depth: 0, name: "Mat og drikke" },
+    { sourceCategoryId: "20", depth: 1, name: "Meieriprodukter" },
+  ];
+  const insertCategoryObservation = (sourceRecordId, categoryPath) => sql`
+    insert into catalog_observations (
+      ingestion_run_id, source_record_id, canonical_product_id, gtin,
+      display_name, package_amount, package_unit, units_per_pack,
+      retrieved_at, raw_record_hash, category_path
+    ) values (
+      ${categoryRun.id}, ${sourceRecordId}, ${preMigrationFixture.productId},
+      '7038010000096', 'Category path proof', 1, 'package', 1,
+      statement_timestamp(), ${"9".repeat(64)}, ${sql.json(categoryPath)}
+    )
+  `;
+
+  await insertCategoryObservation("ci-proof-category-empty", []);
+  await insertCategoryObservation("ci-proof-category-valid", validCategoryPath);
+
+  const invalidCategoryPaths = [
+    { id: "non-array", path: { sourceCategoryId: "10", depth: 0, name: "Mat" } },
+    { id: "too-long", path: Array.from({ length: 101 }, (_, depth) => ({
+      sourceCategoryId: String(depth),
+      depth: Math.min(depth, 100),
+      name: `Category ${depth}`,
+    })) },
+    { id: "missing-key", path: [{ sourceCategoryId: "10", depth: 0 }] },
+    { id: "extra-key", path: [{
+      sourceCategoryId: "10", depth: 0, name: "Mat", slug: "mat",
+    }] },
+    { id: "duplicate-id", path: [
+      { sourceCategoryId: "10", depth: 0, name: "Mat" },
+      { sourceCategoryId: "10", depth: 1, name: "Meieri" },
+    ] },
+    { id: "blank-id", path: [{ sourceCategoryId: " ", depth: 0, name: "Mat" }] },
+    { id: "leading-zero-id", path: [{ sourceCategoryId: "01", depth: 0, name: "Mat" }] },
+    { id: "unsafe-id", path: [{
+      sourceCategoryId: "9007199254740992", depth: 0, name: "Mat",
+    }] },
+    { id: "fractional-depth", path: [{
+      sourceCategoryId: "10", depth: 0.5, name: "Mat",
+    }] },
+    { id: "negative-depth", path: [{ sourceCategoryId: "10", depth: -1, name: "Mat" }] },
+    { id: "large-depth", path: [{ sourceCategoryId: "10", depth: 101, name: "Mat" }] },
+    { id: "blank-name", path: [{ sourceCategoryId: "10", depth: 0, name: " " }] },
+    { id: "long-name", path: [{
+      sourceCategoryId: "10", depth: 0, name: "n".repeat(501),
+    }] },
+    { id: "descending-depth", path: [
+      { sourceCategoryId: "10", depth: 1, name: "Meieri" },
+      { sourceCategoryId: "20", depth: 0, name: "Mat" },
+    ] },
+    { id: "descending-id", path: [
+      { sourceCategoryId: "20", depth: 0, name: "Mat" },
+      { sourceCategoryId: "10", depth: 0, name: "Drikke" },
+    ] },
+  ];
+
+  for (const invalid of invalidCategoryPaths) {
+    await assert.rejects(
+      insertCategoryObservation(`ci-proof-category-${invalid.id}`, invalid.path),
+      /category path/i,
+      `015 must reject ${invalid.id} category evidence`,
+    );
+  }
+
+  const storedPaths = await sql`
+    select source_record_id, category_path
+    from catalog_observations
+    where ingestion_run_id = ${categoryRun.id}
+    order by source_record_id
+  `;
+  assert.deepEqual([...storedPaths], [
+    { source_record_id: "ci-proof-category-empty", category_path: [] },
+    { source_record_id: "ci-proof-category-valid", category_path: validCategoryPath },
+  ]);
+
+  await assert.rejects(
+    sql`
+      update catalog_observations
+      set category_path = '[]'::jsonb
+      where ingestion_run_id = ${categoryRun.id}
+        and source_record_id = 'ci-proof-category-valid'
+    `,
+    /append-only/i,
+    "015 category evidence must inherit the catalog append-only guard",
+  );
+
+  await sql`
+    update ingestion_runs
+    set status = 'completed', completed_at = statement_timestamp()
+    where id = ${categoryRun.id}
+  `;
+  await assert.rejects(
+    insertCategoryObservation("ci-proof-category-terminal", validCategoryPath),
+    /running ingestion run/i,
+    "015 category evidence must inherit the running-run insert guard",
+  );
+}
+
+async function verifyCompletionClockMigrationUpgrade(sql, database) {
+  const [validRun] = await sql`
+    insert into ingestion_runs (
+      job_id, source_id, run_type, status, started_at, completed_at, counts
+    ) values (
+      'ci-proof:completion-clock:valid', 'kassalapp', 'catalog', 'running',
+      statement_timestamp() - interval '2 minutes', null, '{}'::jsonb
+    )
+    returning id
+  `;
+  const [categoryProduct] = await sql`
+    insert into canonical_products (
+      display_name, package_amount, package_unit, units_per_pack, status
+    ) values (
+      'Pre-015 category path proof', 1, 'package', 1, 'active'
+    )
+    returning id
+  `;
+  const [preMigrationObservation] = await sql`
+    insert into catalog_observations (
+      ingestion_run_id, source_record_id, canonical_product_id, gtin,
+      display_name, package_amount, package_unit, units_per_pack,
+      retrieved_at, raw_record_hash
+    ) values (
+      ${validRun.id}, 'ci-proof-category-pre-015', ${categoryProduct.id},
+      '7038010000089', 'Pre-015 category path proof', 1, 'package', 1,
+      statement_timestamp(), ${"8".repeat(64)}
+    )
+    returning id
+  `;
+  const [validClockBefore] = await sql`
+    update ingestion_runs
+    set status = 'completed',
+        completed_at = statement_timestamp() - interval '1 minute'
+    where id = ${validRun.id}
+    returning status, completed_at, terminalized_at
+  `;
+  assert.ok(
+    validClockBefore.terminalized_at >= validClockBefore.completed_at,
+    "the valid 013-era terminal run must have ordered completion clocks",
+  );
+
+  const [invalidRun] = await sql`
+    insert into ingestion_runs (
+      job_id, source_id, run_type, status, started_at, completed_at, counts
+    ) values (
+      'ci-proof:completion-clock:invalid', 'kassalapp', 'catalog', 'running',
+      statement_timestamp(), null, '{}'::jsonb
+    )
+    returning id
+  `;
+  const [invalidClockBefore] = await sql`
+    update ingestion_runs
+    set status = 'completed',
+        completed_at = clock_timestamp() + interval '10 minutes'
+    where id = ${invalidRun.id}
+    returning status, completed_at, terminalized_at
+  `;
+  assert.ok(
+    invalidClockBefore.completed_at > invalidClockBefore.terminalized_at,
+    "the invalid 013-era fixture must carry a caller-controlled future completion",
+  );
+
+  await assert.rejects(
+    runMigrations(database),
+    /existing ingestion run completion clock is inconsistent/i,
+    "014 must reject inconsistent completion clocks already persisted by 013",
+  );
+
+  const [failedUpgradeState] = await sql`
+    select
+      exists (
+        select 1
+        from handleplan_schema_migrations
+        where id = '014_ingestion_completion_clock.sql'
+      ) as ledger_recorded,
+      exists (
+        select 1
+        from pg_constraint
+        where conrelid = 'ingestion_runs'::regclass
+          and conname = 'ingestion_runs_completion_not_after_terminalization'
+      ) as constraint_installed,
+      pg_get_functiondef(
+        'enforce_ingestion_run_lifecycle()'::regprocedure
+      ) as lifecycle_definition
+  `;
+  assert.equal(
+    failedUpgradeState.ledger_recorded,
+    false,
+    "a rejected 014 migration must not enter the migration ledger",
+  );
+  assert.equal(
+    failedUpgradeState.constraint_installed,
+    false,
+    "a rejected 014 migration must not leave its constraint installed",
+  );
+  assert.doesNotMatch(
+    failedUpgradeState.lifecycle_definition,
+    /completion cannot be in the future/i,
+    "a rejected 014 migration must leave the 013 lifecycle function in place",
+  );
+
+  const [invalidClockAfterFailure] = await sql`
+    select status, completed_at, terminalized_at
+    from ingestion_runs
+    where id = ${invalidRun.id}
+  `;
+  assert.deepEqual(
+    {
+      ...invalidClockAfterFailure,
+      completed_at: invalidClockAfterFailure.completed_at.toISOString(),
+      terminalized_at: invalidClockAfterFailure.terminalized_at.toISOString(),
+    },
+    {
+      ...invalidClockBefore,
+      completed_at: invalidClockBefore.completed_at.toISOString(),
+      terminalized_at: invalidClockBefore.terminalized_at.toISOString(),
+    },
+    "a rejected 014 migration must not rewrite the inconsistent row",
+  );
+
+  await sql.begin(async (transaction) => {
+    await transaction.unsafe(
+      "alter table ingestion_runs disable trigger ingestion_runs_lifecycle_guard",
+    );
+    await transaction`delete from ingestion_runs where id = ${invalidRun.id}`;
+    await transaction.unsafe(
+      "alter table ingestion_runs enable trigger ingestion_runs_lifecycle_guard",
+    );
+  });
+
+  await runMigrations(database);
+
+  const [validClockAfter] = await sql`
+    select status, completed_at, terminalized_at
+    from ingestion_runs
+    where id = ${validRun.id}
+  `;
+  assert.deepEqual(
+    {
+      ...validClockAfter,
+      completed_at: validClockAfter.completed_at.toISOString(),
+      terminalized_at: validClockAfter.terminalized_at.toISOString(),
+    },
+    {
+      ...validClockBefore,
+      completed_at: validClockBefore.completed_at.toISOString(),
+      terminalized_at: validClockBefore.terminalized_at.toISOString(),
+    },
+    "014 must preserve the valid 013-era terminal row and both of its clocks",
+  );
+
+  const [installedUpgradeState] = await sql`
+    select
+      convalidated,
+      pg_get_functiondef(
+        'enforce_ingestion_run_lifecycle()'::regprocedure
+      ) as lifecycle_definition
+    from pg_constraint
+    where conrelid = 'ingestion_runs'::regclass
+      and conname = 'ingestion_runs_completion_not_after_terminalization'
+  `;
+  assert.equal(
+    installedUpgradeState.convalidated,
+    true,
+    "014 must install a validated completion-order constraint",
+  );
+  assert.match(
+    installedUpgradeState.lifecycle_definition,
+    /completion cannot be in the future/i,
+    "014 must install the future-completion lifecycle guard",
+  );
+  await verifyCatalogCategoryPathMigration(sql, {
+    observationId: preMigrationObservation.id,
+    productId: categoryProduct.id,
+  });
+  await readMigrationLedger(sql);
 }
 
 async function databaseExists(sql, database) {
@@ -1040,6 +2064,7 @@ const createdDatabases = new Set();
 let admin;
 let source;
 let restored;
+let completionClock;
 let proofError;
 let proofResult;
 
@@ -1059,6 +2084,20 @@ try {
     );
   }
 
+  await createDatabase(admin, completionClockDatabase);
+  createdDatabases.add(completionClockDatabase);
+  await runMigrations(completionClockDatabase, "013_physical_store_directory.sql");
+  completionClock = postgres(urlForDatabase(completionClockDatabase), {
+    max: 1,
+    onnotice: () => {},
+  });
+  await verifyCompletionClockMigrationUpgrade(
+    completionClock,
+    completionClockDatabase,
+  );
+  await completionClock.end({ timeout: 5 });
+  completionClock = undefined;
+
   await createDatabase(admin, sourceDatabase);
   createdDatabases.add(sourceDatabase);
   await runMigrations(sourceDatabase, "001_price_cache.sql");
@@ -1068,12 +2107,27 @@ try {
   await source.end({ timeout: 5 });
   source = undefined;
 
+  await runMigrations(sourceDatabase, "020_official_offer_trust_fences.sql");
+  source = postgres(urlForDatabase(sourceDatabase), { max: 1, onnotice: () => {} });
+  await seedLegacyReviewRolePrivileges(source);
+  await source.end({ timeout: 5 });
+  source = undefined;
+
+  // CI_MAX skips post-migration role reconciliation. This deliberately models
+  // a process crash after 021 commits but before configureRuntimeRoles() runs.
+  await runMigrations(sourceDatabase, "021_private_review_decision_boundary.sql");
+  source = postgres(urlForDatabase(sourceDatabase), { max: 1, onnotice: () => {} });
+  await verifyPrivateReviewUpgradeCrashBoundary(source);
+  await source.end({ timeout: 5 });
+  source = undefined;
+
   await runMigrations(sourceDatabase);
   await runMigrations(sourceDatabase);
 
   source = postgres(urlForDatabase(sourceDatabase), { max: 1, onnotice: () => {} });
   await verifyLegacyUpgrade(source);
   await verifyRuntimeRolePolicy(source);
+  await verifyReviewOfferInsertBoundary(source);
   await verifyTaxonomyPublicationGuards(source);
   const sourceLedger = await readMigrationLedger(source);
   await verifyDeletedMigrationHistoryIsRejected(source, sourceDatabase);
@@ -1120,6 +2174,7 @@ try {
     "restore must preserve database-owned public-state clocks exactly",
   );
   await verifyRuntimeRolePolicy(restored);
+  await verifyReviewOfferInsertBoundary(restored);
   await verifyTaxonomyPublicationGuards(restored);
   assert.deepEqual(await readMigrationLedger(restored), sourceLedger);
 
@@ -1134,6 +2189,10 @@ try {
     restoredCatalogObservations: 1,
     restoredReviewedFamilyDecisions: 1,
     restoredRuntimeRolePolicy: true,
+    completionClockUpgradeRollback: true,
+    categoryPathUpgradeValidation: true,
+    immutableReviewCandidates: true,
+    guardedReviewOfferPublication: true,
   };
 } catch (error) {
   proofError = error;
@@ -1154,6 +2213,10 @@ try {
   if (source) {
     await attemptCleanup("close source database connection", () =>
       source.end({ timeout: 5 }));
+  }
+  if (completionClock) {
+    await attemptCleanup("close completion-clock database connection", () =>
+      completionClock.end({ timeout: 5 }));
   }
   if (admin) {
     for (const database of [...createdDatabases].reverse()) {

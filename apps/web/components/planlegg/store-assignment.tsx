@@ -1,9 +1,15 @@
 import {
   formatNok,
   type ExactProductPlanApiProductSummary,
+  type OfficialOffer,
   type PlanAssignmentV2,
   type PlanResultV2,
 } from "@handleplan/domain";
+
+import {
+  hasMembershipCondition,
+  membershipRequirementCopy,
+} from "../../lib/membership-presentation";
 
 type Chain = PlanResultV2["chains"][number];
 
@@ -17,7 +23,17 @@ interface StoreAssignmentProps {
   chain: Chain;
   order: number;
   assignments: readonly PlanAssignmentV2[];
+  officialOffers: readonly OfficialOffer[];
   products: readonly ExactProductPlanApiProductSummary[];
+}
+
+function membershipRequirement(
+  offer: OfficialOffer | undefined,
+  chain: Chain,
+): string | undefined {
+  return hasMembershipCondition(offer)
+    ? membershipRequirementCopy([chain])
+    : undefined;
 }
 
 function formatMeasure(measure: { amount: number; unit: "g" | "ml" | "piece" | "package" }): string {
@@ -39,10 +55,12 @@ export function StoreAssignment({
   chain,
   order,
   assignments,
+  officialOffers,
   products,
 }: StoreAssignmentProps) {
   const subtotal = assignments.reduce((sum, assignment) => sum + assignment.costOre, 0);
   const productsByGtin = new Map(products.map((product) => [product.gtin, product]));
+  const offersById = new Map(officialOffers.map((offer) => [offer.id, offer]));
 
   return (
     <section className="result-store" aria-label={`Butikk ${order}: ${CHAIN_NAMES[chain]}`}>
@@ -59,6 +77,12 @@ export function StoreAssignment({
       <ul className="result-store-items">
         {assignments.map((assignment) => {
           const product = productsByGtin.get(assignment.ean)!;
+          const requiredMembership = membershipRequirement(
+            assignment.checkout.appliedOfferId === undefined
+              ? undefined
+              : offersById.get(assignment.checkout.appliedOfferId),
+            assignment.chain,
+          );
           return (
             <li className="result-store-row" key={assignment.needId}>
               <span className="assignment-quantity">{formatMeasure(assignment.fulfilment.requested)}</span>
@@ -69,6 +93,7 @@ export function StoreAssignment({
                 {assignment.officialOffer !== undefined && (
                   <small>Offisielt tilbud brukt · kilde {assignment.officialOffer.sourceId}</small>
                 )}
+                {requiredMembership === undefined ? null : <small>{requiredMembership}</small>}
               </div>
               <span className="assignment-checkout">
                 {assignment.checkout.savingOre > 0 && (

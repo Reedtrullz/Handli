@@ -20,17 +20,23 @@ WORKDIR /app
 COPY . .
 ARG APP_COMMIT_SHA=development
 ENV APP_COMMIT_SHA=$APP_COMMIT_SHA
+RUN pnpm security:licenses
 RUN pnpm --filter web build
 RUN pnpm --filter @handleplan/worker build
 
 FROM base AS runner
 WORKDIR /app
+ARG APP_COMMIT_SHA=development
 ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0 \
     PORT=3000
+LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+      org.opencontainers.image.revision="$APP_COMMIT_SHA" \
+      org.opencontainers.image.source="https://github.com/Reedtrullz/Handli"
 
 RUN addgroup --system --gid 1001 nodejs \
-    && adduser --system --uid 1001 --ingroup nodejs nextjs
+    && adduser --system --uid 1001 --ingroup nodejs nextjs \
+    && install -d -o nextjs -g nodejs -m 0700 /var/lib/handleplan/private-captures
 
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/static ./apps/web/.next/static

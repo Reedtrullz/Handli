@@ -12,8 +12,9 @@ import {
 import { moneyOreSchema } from "./contracts";
 import {
   geographicContextSchema,
-  geographicScopeIncludes,
   geographicScopeSchema,
+  resolveGeographicApplicability,
+  type GeographicDirectoryEvidence,
   type GeographicContext,
 } from "./geography";
 
@@ -98,6 +99,7 @@ export interface PriceEvidenceEligibilityContext {
   maxAgeMs: number;
   location: GeographicContext;
   enabledSourceIds: readonly string[];
+  geographicDirectory?: GeographicDirectoryEvidence;
 }
 
 export type PriceEvidenceEligibilityResult =
@@ -112,6 +114,8 @@ export type PriceEvidenceEligibilityResult =
         | "stale"
         | "not-yet-valid"
         | "expired"
+        | "unknown-scope"
+        | "ambiguous-scope"
         | "wrong-scope";
     };
 
@@ -153,8 +157,20 @@ export function parseEligiblePriceEvidence(
   if (evidence.validUntil !== undefined && nowMs > Date.parse(evidence.validUntil)) {
     return { eligible: false, reason: "expired" };
   }
-  if (!geographicScopeIncludes(evidence.geographicScope, parsedLocation.data)) {
-    return { eligible: false, reason: "wrong-scope" };
+  const applicability = resolveGeographicApplicability(
+    evidence.geographicScope,
+    parsedLocation.data,
+    context.geographicDirectory,
+  );
+  if (applicability.state !== "applicable") {
+    return {
+      eligible: false,
+      reason: applicability.state === "unknown"
+        ? "unknown-scope"
+        : applicability.state === "ambiguous"
+          ? "ambiguous-scope"
+          : "wrong-scope",
+    };
   }
 
   return { eligible: true, evidence };

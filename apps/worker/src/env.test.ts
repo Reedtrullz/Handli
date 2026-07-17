@@ -33,6 +33,8 @@ describe("readWorkerRuntimeEnv", () => {
 describe("readWorkerProductionEnv", () => {
   const required = {
     DATABASE_URL: "postgresql://handleplan_app:placeholder@postgres:5432/handleplan",
+    OFFICIAL_OFFER_FOUNDATION_ENABLED: "false",
+    OFFICIAL_OFFER_PRIVATE_CAPTURE_ROOT: "/var/lib/handleplan/private-captures",
   };
 
   it("defaults the source to conditional and keeps optional credentials absent", () => {
@@ -41,6 +43,8 @@ describe("readWorkerProductionEnv", () => {
       kassalApiKey: undefined,
       kassalBaseUrl: "https://kassal.app/api/v1",
       leaseTtlMs: 120_000,
+      officialOfferFoundationEnabled: false,
+      officialOfferPrivateCaptureRoot: "/var/lib/handleplan/private-captures",
       requestBudgetLimit: 60,
       requestBudgetMaxWaitMs: 65_000,
       requestBudgetWindowMs: 60_000,
@@ -69,6 +73,8 @@ describe("readWorkerProductionEnv", () => {
     ["DATABASE_URL", "https://example.com/not-postgres"],
     ["KASSAL_BASE_URL", "http://kassal.app/api/v1"],
     ["KASSAL_SOURCE_ACCESS", "enabled"],
+    ["OFFICIAL_OFFER_FOUNDATION_ENABLED", "true"],
+    ["OFFICIAL_OFFER_PRIVATE_CAPTURE_ROOT", "relative/captures"],
     ["WORKER_LEASE_TTL_MS", "29999"],
     ["WORKER_TARGET_LIMIT", "501"],
     ["WORKER_REQUEST_BUDGET_LIMIT", "0"],

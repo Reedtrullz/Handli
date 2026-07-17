@@ -12,7 +12,10 @@ import {
   familyTaxonomyVersions,
   geographicScopes,
   ingestionRuns,
+  offerConditions,
   offerTargets,
+  physicalStoreCoverageChecks,
+  physicalStoreObservations,
   physicalStores,
   priceCoverageChecks,
   priceObservations,
@@ -59,12 +62,15 @@ describe("v1 evidence schema", () => {
         priceCoverageChecks,
         geographicScopes,
         physicalStores,
+        physicalStoreObservations,
+        physicalStoreCoverageChecks,
         publications,
         publicationCaptures,
         extractionRuns,
         extractedOfferCandidates,
         approvedOffers,
         offerTargets,
+        offerConditions,
         reviewActions,
         sourceHealthSnapshots,
         workerLeases,
@@ -90,12 +96,15 @@ describe("v1 evidence schema", () => {
       "price_coverage_checks",
       "geographic_scopes",
       "physical_stores",
+      "physical_store_observations",
+      "physical_store_coverage_checks",
       "publications",
       "publication_captures",
       "extraction_runs",
       "extracted_offer_candidates",
       "approved_offers",
       "offer_targets",
+      "offer_conditions",
       "review_actions",
       "source_health_snapshots",
       "worker_leases",
@@ -166,10 +175,63 @@ describe("v1 evidence schema", () => {
     );
   });
 
+  it("binds worker source health to one terminal job with allowlisted clocks", () => {
+    const config = getTableConfig(sourceHealthSnapshots);
+    expect(config.indexes.map(({ config: index }) => index.name)).toEqual(
+      expect.arrayContaining([
+        "source_health_snapshots_source_time_idx",
+        "source_health_snapshots_worker_job_uidx",
+      ]),
+    );
+    expect(config.foreignKeys.map(({ reference }) => reference().name)).toContain(
+      "source_health_snapshots_worker_job_fk",
+    );
+    expect(checkNames(sourceHealthSnapshots)).toEqual(expect.arrayContaining([
+      "source_health_snapshots_success_clocks_not_future",
+      "source_health_snapshots_worker_payload_allowlist",
+    ]));
+  });
+
   it("keeps source permission and coverage states fail closed", () => {
     expect(checkNames(dataSources)).toContain("data_sources_runtime_state");
     expect(checkNames(sourcePermissions)).toContain("source_permissions_decision");
     expect(checkNames(priceCoverageChecks)).toContain("price_coverage_checks_state");
+    expect(checkNames(physicalStoreCoverageChecks)).toEqual(
+      expect.arrayContaining([
+        "physical_store_coverage_checks_checked_before_creation",
+        "physical_store_coverage_checks_reason_state",
+        "physical_store_coverage_checks_record_count_range",
+        "physical_store_coverage_checks_state",
+      ]),
+    );
+  });
+
+  it("maps immutable run-scoped branch observations without private address fields", () => {
+    const observation = getTableConfig(physicalStoreObservations);
+    const coverage = getTableConfig(physicalStoreCoverageChecks);
+
+    expect(observation.uniqueConstraints.map(({ name }) => name)).toEqual(
+      expect.arrayContaining([
+        "physical_store_observations_run_branch_unique",
+        "physical_store_observations_run_external_unique",
+      ]),
+    );
+    expect(observation.columns.map(({ name }) => name)).not.toEqual(
+      expect.arrayContaining(["address_line", "municipality_code", "postal_code"]),
+    );
+    expect(checkNames(physicalStoreObservations)).toEqual(
+      expect.arrayContaining([
+        "physical_store_observations_branch_key_shape",
+        "physical_store_observations_branch_key_binding",
+        "physical_store_observations_latitude_range",
+        "physical_store_observations_longitude_range",
+        "physical_store_observations_observed_before_creation",
+        "physical_store_observations_status",
+      ]),
+    );
+    expect(coverage.uniqueConstraints.map(({ name }) => name)).toContain(
+      "physical_store_coverage_checks_run_chain_unique",
+    );
   });
 
   it("records a database-owned public-state clock for every mutable eligibility row", () => {
@@ -195,7 +257,10 @@ describe("v1 evidence schema", () => {
     expect(runIndexes).toContain("ingestion_runs_job_id_unique");
     expect(getTableConfig(ingestionRuns).columns.find(({ name }) => name === "terminalized_at")?.notNull)
       .toBe(false);
-    expect(checkNames(ingestionRuns)).toContain("ingestion_runs_terminalization_state");
+    expect(checkNames(ingestionRuns)).toEqual(expect.arrayContaining([
+      "ingestion_runs_completion_not_after_terminalization",
+      "ingestion_runs_terminalization_state",
+    ]));
     expect(outcomeConfig.uniqueConstraints.map(({ name }) => name)).toContain(
       "source_record_outcomes_run_kind_record_unique",
     );
@@ -220,17 +285,28 @@ describe("v1 evidence schema", () => {
     );
     expect(config.indexes.map(({ config: index }) => index.name)).toEqual(
       expect.arrayContaining([
+        "catalog_observations_category_path_gin_idx",
         "catalog_observations_gtin_retrieved_idx",
         "catalog_observations_product_retrieved_idx",
       ]),
     );
     expect(checkNames(catalogObservations)).toEqual(
       expect.arrayContaining([
+        "catalog_observations_category_path_shape",
         "catalog_observations_gtin_shape",
         "catalog_observations_hash_shape",
         "catalog_observations_source_time_order",
       ]),
     );
+    expect(config.columns.find(({ name }) => name === "category_path")?.notNull).toBe(false);
+    const categoryPathIndex = config.indexes.find(
+      ({ config: index }) => index.name === "catalog_observations_category_path_gin_idx",
+    );
+    expect(categoryPathIndex?.config.method).toBe("gin");
+    expect(categoryPathIndex?.config.columns[0]).toMatchObject({
+      indexConfig: { opClass: "jsonb_path_ops" },
+    });
+    expect(categoryPathIndex?.config.where).toBeDefined();
     expect(config.columns.find(({ name }) => name === "retrieved_at")?.notNull).toBe(true);
     expect(config.columns.find(({ name }) => name === "source_updated_at")?.notNull).toBe(false);
   });
@@ -273,6 +349,7 @@ describe("v1 evidence schema", () => {
         "approved_offers_amount_ore_nonnegative",
         "approved_offers_before_amount_ore_nonnegative",
         "approved_offers_chain_supported",
+        "approved_offers_published_candidate_binding",
         "approved_offers_valid_range",
       ]),
     );
@@ -283,6 +360,24 @@ describe("v1 evidence schema", () => {
       "publication_captures_rights_classification",
     );
     expect(checkNames(reviewActions)).toContain("review_actions_action");
+    const conditionCreatedAt = getTableConfig(offerConditions).columns.find(
+      ({ name }) => name === "created_at",
+    );
+    expect(conditionCreatedAt?.notNull).toBe(true);
+    expect(conditionCreatedAt?.hasDefault).toBe(true);
+    const targetCreatedAt = getTableConfig(offerTargets).columns.find(
+      ({ name }) => name === "created_at",
+    );
+    expect(targetCreatedAt?.notNull).toBe(true);
+    expect(targetCreatedAt?.hasDefault).toBe(true);
+    const decisionBoundaryVersion = getTableConfig(reviewActions).columns.find(
+      ({ name }) => name === "decision_boundary_version",
+    );
+    expect(decisionBoundaryVersion?.notNull).toBe(false);
+    expect(decisionBoundaryVersion?.hasDefault).toBe(true);
+    expect(checkNames(reviewActions)).toContain(
+      "review_actions_decision_boundary_version",
+    );
   });
 
   it("requires stable offer identities for concurrent approval convergence", () => {

@@ -11,12 +11,18 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   reporter: "line",
+  projects: [
+    { name: "chromium", use: { browserName: "chromium" } },
+    { name: "firefox", use: { browserName: "firefox" } },
+    { name: "webkit", use: { browserName: "webkit" } },
+  ],
   use: {
     baseURL: "http://127.0.0.1:3109",
-    browserName: "chromium",
     locale: "nb-NO",
+    screenshot: "off",
     timezoneId: "Europe/Oslo",
-    trace: "retain-on-failure",
+    trace: "off",
+    video: "off",
   },
   webServer: {
     command: "corepack pnpm --filter web exec next dev --hostname 127.0.0.1 --port 3109",

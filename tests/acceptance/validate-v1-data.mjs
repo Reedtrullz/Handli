@@ -65,6 +65,12 @@ const coverage = readJson("docs/data/launch-coverage.v1.json");
 const coverageSchema = readJson("docs/data/launch-coverage.v1.schema.json");
 const corpus = readJson("docs/data/benchmark-baskets.v1.json");
 const corpusSchema = readJson("docs/data/benchmark-baskets.v1.schema.json");
+const basketProtocolSchema = readJson("docs/data/benchmark-basket-protocol.v1.schema.json");
+const basketCandidateSchema = readJson("docs/data/benchmark-basket-candidate.v1.schema.json");
+const basketReportSchema = readJson("docs/data/benchmark-basket-report.v1.schema.json");
+const basketRunnerAttestationSchema = readJson(
+  "docs/data/benchmark-basket-runner-attestation.v2.schema.json",
+);
 const familyTaxonomy = readJson("docs/data/product-family-taxonomy.v1.json");
 const familyTaxonomySchema = readJson("docs/data/product-family-taxonomy.v1.schema.json");
 
@@ -75,10 +81,85 @@ assert.equal(familyTaxonomy.$schema, "./product-family-taxonomy.v1.schema.json")
 assert.match(registrySchema.$id, /source-registry\.v1\.schema\.json$/);
 assert.match(coverageSchema.$id, /launch-coverage\.v1\.schema\.json$/);
 assert.match(corpusSchema.$id, /benchmark-baskets\.v1\.schema\.json$/);
+assert.match(
+  basketProtocolSchema.$id,
+  /benchmark-basket-protocol\.v1\.schema\.json$/,
+);
+assert.match(
+  basketCandidateSchema.$id,
+  /benchmark-basket-candidate\.v1\.schema\.json$/,
+);
+assert.match(basketReportSchema.$id, /benchmark-basket-report\.v1\.schema\.json$/);
+assert.match(
+  basketRunnerAttestationSchema.$id,
+  /benchmark-basket-runner-attestation\.v2\.schema\.json$/,
+);
+assert.equal(basketProtocolSchema.properties.protocolVersion.const, "2.0.0");
+assert.equal(basketProtocolSchema.$defs.quantityCase.properties.options.maxItems, 12);
+assert.ok(
+  basketProtocolSchema.$defs.knownNotCarriedControl.required.includes("matchEvidenceId"),
+);
+assert.ok(
+  basketCandidateSchema.$defs.manualReconciliation.required.includes(
+    "reviewedEvidenceDigest",
+  ),
+);
+assert.equal(
+  basketCandidateSchema.$defs.manualReconciliation.properties.priceEvidenceIds.maxItems,
+  24,
+);
+for (const schema of [basketCandidateSchema, basketProtocolSchema]) {
+  assert.ok(schema.$defs.assignment.required.includes("ordinaryCostOre"));
+  assert.ok(schema.$defs.assignment.required.includes("appliedOfferEvidenceId"));
+  assert.equal(schema.$defs.assignment.properties.appliedOfferEvidenceId.oneOf[0].type, "null");
+}
+assert.ok(
+  basketCandidateSchema.$defs.offerTerms.allOf[0].then.required.includes(
+    "membershipProgramId",
+  ),
+);
+assert.ok(
+  basketProtocolSchema.$defs.oracleRequest.required.includes(
+    "enabledMembershipProgramIds",
+  ),
+);
+assert.ok(
+  basketRunnerAttestationSchema.$defs.snapshot.required.includes(
+    "enabledMembershipProgramIds",
+  ),
+);
+assert.ok(
+  basketRunnerAttestationSchema.$defs.oracleResult.required.includes(
+    "discountedFrontierPlanSignatures",
+  ),
+);
+assert.equal(
+  basketCandidateSchema.$defs.manualReconciliation.properties.assertions,
+  undefined,
+);
+assert.equal(basketCandidateSchema.properties.contractVersion.const, "2.0.0");
+assert.equal(basketReportSchema.properties.contractVersion.const, "2.0.0");
+assert.equal(basketReportSchema.properties.protocolVersion.const, "2.0.0");
 assert.match(familyTaxonomySchema.$id, /product-family-taxonomy\.v1\.schema\.json$/);
 assertSchemaValid("source registry", registrySchema, registry);
 assertSchemaValid("launch coverage", coverageSchema, coverage);
 assertSchemaValid("benchmark baskets", corpusSchema, corpus);
+assert.doesNotThrow(
+  () => ajv.addSchema(basketProtocolSchema),
+  "benchmark protocol schema must compile as Draft 2020-12",
+);
+assert.doesNotThrow(
+  () => ajv.compile(basketCandidateSchema),
+  "benchmark candidate schema must compile as Draft 2020-12",
+);
+assert.doesNotThrow(
+  () => ajv.compile(basketReportSchema),
+  "benchmark report schema must compile as Draft 2020-12",
+);
+assert.doesNotThrow(
+  () => ajv.compile(basketRunnerAttestationSchema),
+  "benchmark runner attestation schema must compile as Draft 2020-12",
+);
 assertSchemaValid("product-family taxonomy", familyTaxonomySchema, familyTaxonomy);
 
 // Reviewed-family vocabulary is versioned, immutable, bounded, and membership-free.
@@ -189,6 +270,18 @@ for (const sourceId of grocerySourceIds) {
 }
 
 assert.equal(sourcesById.get("kartverket-address-api")?.runtimeState, "approved");
+assert.equal(
+  sourcesById.get("valhalla-openstreetmap-self-hosted")?.runtimeState,
+  "approved",
+);
+assert.equal(
+  sourcesById.get("valhalla-openstreetmap-self-hosted")?.runtimeDefaultEnabled,
+  false,
+);
+assert.equal(
+  sourcesById.get("valhalla-openstreetmap-self-hosted")?.publicRankingEligible,
+  false,
+);
 assert.equal(sourcesById.get("kassalapp")?.runtimeState, "conditional");
 assert.equal(sourcesById.get("kassalapp")?.runtimeDefaultEnabled, false);
 assert.equal(sourcesById.get("kassalapp")?.publicRankingEligible, false);
@@ -279,8 +372,13 @@ for (const scenario of corpus.scenarios) {
   for (const item of scenario.items) {
     assert.ok(["flexible", "constrained"].includes(item.matchMode));
     assert.ok(Number.isInteger(item.requiredAmount.value) && item.requiredAmount.value > 0);
-    assert.ok(["g", "ml", "piece"].includes(item.requiredAmount.unit));
-    if (item.matchMode === "constrained") {
+    assert.ok(["g", "ml", "piece", "package"].includes(item.requiredAmount.unit));
+    assert.ok(["exact-product", "reviewed-family"].includes(item.identity.kind));
+    if (item.identity.kind === "exact-product") {
+      assert.equal(item.matchMode, "constrained");
+      assert.match(item.identity.canonicalProductId, /^product:benchmark:/);
+    }
+    if (item.matchMode === "constrained" && item.identity.kind !== "exact-product") {
       assert.ok(item.constraints.length > 0, `${scenario.id}/${item.needId} has explicit constraints`);
     }
   }
@@ -320,6 +418,7 @@ const killSwitchDoc = readText("docs/data/source-kill-switch.md");
 const classificationAdr = readText("docs/adr/0001-official-offer-vs-historical-price.md");
 const scopeAdr = readText("docs/adr/0002-launch-scope-policy.md");
 const familyTaxonomyDoc = readText("docs/data/product-family-taxonomy.md");
+const basketAcceptanceDoc = readText("docs/data/benchmark-basket-acceptance.md");
 const rootPackage = readJson("package.json");
 const ciWorkflow = readText(".github/workflows/ci.yml");
 
@@ -333,9 +432,30 @@ assert.match(scopeAdr, /among verified prices/i);
 assert.match(familyTaxonomyDoc, /defines vocabulary only/i);
 assert.match(familyTaxonomyDoc, /does not contain product memberships/i);
 assert.match(familyTaxonomyDoc, /does not enable flexible matching/i);
+assert.match(basketAcceptanceDoc, /Exit codes are fail-closed/i);
+assert.match(basketAcceptanceDoc, /exit code `2` is never a soft pass/i);
+assert.match(basketAcceptanceDoc, /at most three stores/i);
+assert.match(basketAcceptanceDoc, /There are no candidate-supplied `passed` booleans/i);
+assert.match(basketAcceptanceDoc, /runner-owned bounded V2 snapshot/i);
+assert.match(basketAcceptanceDoc, /independent V2 enumeration/i);
+assert.match(basketAcceptanceDoc, /appliedOfferEvidenceId/);
+assert.match(basketAcceptanceDoc, /cheaper program-B offer remains ineligible/i);
+assert.match(basketAcceptanceDoc, /noncanonical program set fail/i);
+assert.match(basketAcceptanceDoc, /--runner-attestation/);
+assert.match(basketAcceptanceDoc, /launch-coverage-incomplete/);
+assert.match(basketAcceptanceDoc, /--verify-report/);
+assert.match(basketAcceptanceDoc, /current pending corpus still returns `2`/i);
 assert.equal(
   rootPackage.scripts["validate:v1-data"],
   "node tests/acceptance/validate-v1-data.mjs",
+);
+assert.equal(
+  rootPackage.scripts["acceptance:v1-baskets:check"],
+  "node tests/acceptance/check-v1-baskets.mjs",
+);
+assert.equal(
+  rootPackage.scripts["acceptance:v1-baskets:test"],
+  "node --test tests/acceptance/v1-basket-runner.test.mjs",
 );
 assert.match(
   ciWorkflow,

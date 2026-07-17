@@ -30,6 +30,7 @@ Unknown permission fails closed to `blocked`. Every source defaults off. Public 
 | Coop/Extra public web | stores, regional papers, member offers | blocked | no | Public presentation is not affirmative permission for automated reuse |
 | Kartverket Address API | opt-in address lookup | approved | not applicable | Official terms permit commercial and non-commercial reuse under CC BY 4.0; attribution is mandatory |
 | openrouteservice API | opt-in route estimate | conditional | no | Result reuse is documented, but provider selection, account quota, and origin-coordinate privacy review are unresolved |
+| Self-hosted Valhalla + OpenStreetMap | opt-in route estimate | approved, disabled | no | MIT routing engine and ODbL map data permit the intended processing with attribution; production tile, capacity, freshness, and recovery proof remain gates |
 
 No grocery source is approved as of this review. Consequently, no candidate region is launch-eligible and Handleplan must not claim complete three-chain comparison.
 
@@ -63,6 +64,12 @@ These pages support manual product research and launch-feasibility checks only. 
 
 - [Kartverket terms](https://www.kartverket.no/en/api-and-data/terms-of-use) release free products for commercial and non-commercial use under CC BY 4.0 and require `©Kartverket` plus a link where practical. The [Address API guide](https://kartverket.no/api-og-data/eiendomsdata/brukarrettleiing-adresse-api) says registration is not required and describes integration into public-facing services. Approval is narrowly scoped to this address API, not map tiles or unrelated services with external licenses.
 - [openrouteservice terms](https://openrouteservice.org/terms-of-service/) require `© openrouteservice.org by HeiGIT | Map data © OpenStreetMap contributors`, license API results under CC BY 4.0, and describe account/usage constraints. [API restrictions](https://openrouteservice.org/restrictions/) document endpoint limits. Provider selection, production quota, and a privacy review for user-origin coordinates still block activation.
+- [Valhalla](https://github.com/valhalla/valhalla) is an MIT-licensed, self-hostable routing engine. Its [matrix API](https://valhalla.github.io/valhalla/api/matrix/api-reference/) supports directed time/distance matrices and both automobile and bicycle costing. [OpenStreetMap](https://www.openstreetmap.org/copyright) licenses its database under ODbL and requires attribution. ADR 0003 selects this path so volunteered coordinates remain inside Handleplan's infrastructure. Runtime remains off until the pinned image, Norway tile build, capacity, freshness, recovery, and visible attribution gates pass.
+
+The Valhalla registry kill switch maps to the server-only environment gate
+`HANDLEPLAN_SOURCE_VALHALLA_OPENSTREETMAP_SELF_HOSTED_ENABLED`. Only the exact
+value `true` may enable composition after every activation gate passes; the
+variable is intentionally absent from the current deployment.
 
 ## Required evidence before a grocery source becomes approved
 

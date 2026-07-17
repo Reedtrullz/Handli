@@ -17,7 +17,11 @@ import {
   type PriceEvidence,
   type PriceEvidenceEligibilityContext,
 } from "./evidence";
-import type { GeographicContext } from "./geography";
+import type {
+  GeographicContext,
+  GeographicDirectoryEvidence,
+  GeographicScope,
+} from "./geography";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1_000;
 const MAX_CURRENT_EVIDENCE_AGE_MS = 72 * 60 * 60 * 1_000;
@@ -131,6 +135,7 @@ export interface HistoricalComparisonDerivationInput {
     currentMaxAgeMs: number;
     enabledSourceIds: readonly string[];
     location: GeographicContext;
+    geographicDirectory?: GeographicDirectoryEvidence;
   };
 }
 
@@ -155,6 +160,50 @@ function calculateMedianOre(evidence: readonly PriceEvidence[]): number {
 function compareEvidenceOrder(left: PriceEvidence, right: PriceEvidence): number {
   const observedAtOrder = left.observedAt.localeCompare(right.observedAt);
   return observedAtOrder !== 0 ? observedAtOrder : left.id.localeCompare(right.id);
+}
+
+export function geographicScopeFingerprint(scope: GeographicScope): string {
+  switch (scope.kind) {
+    case "national":
+      return `national:${scope.countryCode}`;
+    case "regions":
+      return `regions:${scope.countryCode}:${[...scope.regionCodes].sort().join(",")}`;
+    case "postal-set":
+      return `postal-set:${scope.countryCode}:${[...scope.postalCodes].sort().join(",")}`;
+    case "stores":
+      return `stores:${[...scope.storeIds].sort().join(",")}`;
+    case "unknown":
+      return `unknown:${scope.reason}`;
+  }
+}
+
+export interface HistoricalComparisonVerificationInput {
+  comparison: unknown;
+  currentEvidence: unknown;
+  historicalEvidence: readonly unknown[];
+  derivedAt: Date;
+  eligibility: HistoricalComparisonDerivationInput["eligibility"];
+}
+
+/**
+ * Re-derives a public historical claim from its visible evidence. This binds
+ * every baseline observation to the current evidence's exact source and
+ * geographic scope, as well as to the selected market used for eligibility.
+ */
+export function historicalComparisonMatchesEvidence(
+  input: HistoricalComparisonVerificationInput,
+): boolean {
+  const parsedComparison = historicalComparisonSchema.safeParse(input.comparison);
+  if (!parsedComparison.success) return false;
+  const derived = deriveHistoricalComparison({
+    comparisonId: parsedComparison.data.id,
+    currentEvidence: input.currentEvidence,
+    historicalEvidence: input.historicalEvidence,
+    derivedAt: input.derivedAt,
+    eligibility: input.eligibility,
+  });
+  return derived !== null
+    && JSON.stringify(derived) === JSON.stringify(parsedComparison.data);
 }
 
 /**
@@ -193,6 +242,9 @@ export function deriveHistoricalComparison(
     maxAgeMs: eligibility.currentMaxAgeMs,
     location: eligibility.location,
     enabledSourceIds: eligibility.enabledSourceIds,
+    ...(eligibility.geographicDirectory === undefined
+      ? {}
+      : { geographicDirectory: eligibility.geographicDirectory }),
   };
   if (!parseEligiblePriceEvidence(current, currentEligibilityContext).eligible) {
     return null;
@@ -205,6 +257,7 @@ export function deriveHistoricalComparison(
     return null;
   }
   const canonicalProductId = current.productMatch.canonicalProductId;
+  const currentScopeFingerprint = geographicScopeFingerprint(current.geographicScope);
 
   const windowEndsAtMs = Date.parse(current.observedAt);
   if (windowEndsAtMs > input.derivedAt.getTime()) {
@@ -241,6 +294,8 @@ export function deriveHistoricalComparison(
         evidence.productMatch.kind !== "exact" ||
         evidence.productMatch.canonicalProductId !== canonicalProductId ||
         evidence.chainId !== current.chainId ||
+        evidence.sourceId !== current.sourceId ||
+        geographicScopeFingerprint(evidence.geographicScope) !== currentScopeFingerprint ||
         evidence.priceKind !== "ordinary" ||
         evidence.evidenceLevel === "ambiguous"
       ) {
@@ -253,6 +308,9 @@ export function deriveHistoricalComparison(
         maxAgeMs: 0,
         location: eligibility.location,
         enabledSourceIds: eligibility.enabledSourceIds,
+        ...(eligibility.geographicDirectory === undefined
+          ? {}
+          : { geographicDirectory: eligibility.geographicDirectory }),
       }).eligible;
       return eligibleAtObservation
         && observedAtMs >= windowStartsAtMs

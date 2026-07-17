@@ -42,19 +42,58 @@ See [local development](docs/runbooks/local-development.md) and the [Kassalapp b
 
 ## Protected VPS preview
 
-Production deployment assets live under `deploy/`. The app runs as a non-root
-standalone Next.js container on loopback port 3004 with a dedicated PostgreSQL
-service, an owner-only one-shot migrator, a least-privilege `handleplan_app`
-worker role plus a distinct read-only `handleplan_web` role, checksum-verified forward migrations, immutable commit-tagged
+Production deployment assets live under `deploy/`. One immutable image runs as
+three isolated non-root standalone Next.js processes: the public app on loopback port 3004
+has only the read-only `handleplan_web` connection and no `REVIEW_*`
+configuration, while the private review process on loopback port 3006 has only
+the isolated `handleplan_review` connection and fixed Access configuration.
+The internal operations process on loopback port 3007 has only the aggregate
+`handleplan_operations` function boundary and a distinct Access audience. A
+dedicated PostgreSQL service, owner-only one-shot migrator, and least-privilege
+`handleplan_app` worker role complete the runtime role split.
+Deployments use checksum-verified forward migrations, immutable commit-tagged
 images, health-gated startup, and rollback to the previous local image when
-startup fails. `deploy/Caddyfile.handleplan` rejects direct-origin traffic and
-requires Cloudflare Access before proxying the preview.
+startup fails. While the VPS remains an owner-only preview,
+`deploy/Caddyfile.handleplan` rejects direct-origin traffic and requests missing
+an Access assertion for the whole hostname. It then sends only the exact
+`/review` and `/api/review` route families to port 3006, exact internal
+operations route families to port 3007, and all remaining routes to port 3004.
+Both private apps still verify their separate assertions
+cryptographically; the proxy's header-presence check is not trusted as
+authentication. Removing the preview-wide gate belongs to an explicitly
+authorized public-release change, not this runtime split.
+
+The private offer-review surface has its own cryptographically verified Access
+boundary and least-privilege database role. Its fail-closed configuration,
+rights gates, append-only actions, deployment checklist, and explicit nonclaims
+are documented in the [private review runbook](docs/runbooks/private-review.md).
+The source-neutral private renderer pins the capture's canonical parent chain
+and verifies owner/mode/link count, size, MIME signature, and full checksum
+before an Access-authenticated reviewer can view the file. The GET response has
+no actionable approval proof. Supported images require a complete browser read,
+client SHA-256, successful decode, and a candidate/session-bound acknowledgement
+before the server records a one-time proof for approval or correction. PDF may
+be viewed privately but remains fail-closed for approval until bounded page
+rendering exists; rejection remains available without artwork. This is
+repository functionality, not evidence of human sight, a configured Access
+policy, a rights-approved live source, a deployed capture volume, or production
+review.
 
 `KASSAL_API_KEY`, `POSTGRES_PASSWORD`, and the pairwise-distinct
-`APP_DATABASE_PASSWORD` and `WEB_DATABASE_PASSWORD` belong only in
-`/opt/apps/handleplan/shared/production.env` on the VPS. All three database
+`APP_DATABASE_PASSWORD`, `WEB_DATABASE_PASSWORD`, `REVIEW_DATABASE_PASSWORD`,
+and `OPERATIONS_DATABASE_PASSWORD` belong only in
+`/opt/apps/handleplan/shared/production.env` on the VPS. All four database
 passwords must be independently generated, URL-safe 32-128 character secrets.
-They are not GitHub Actions secrets and must never be committed or printed.
+The review and operations Access/base-URL settings, the independently generated
+`REVIEW_EVIDENCE_PROOF_SECRET`, and the digest-bound
+`OPERATIONS_SOURCE_ROSTER_JSON` also belong in that protected file. Compose
+derives each private database URL and exposes it only to its matching process;
+the operations process alone receives the source roster. Review and operations
+may use the same canonical HTTPS origin because Caddy routes exact path families,
+but they must use separate Cloudflare Access applications and distinct bare
+audience tags. The deployment preflight compares those tags without printing or
+sourcing the protected file. These values are not GitHub Actions secrets and
+must never be committed or printed.
 
 ## Scope
 

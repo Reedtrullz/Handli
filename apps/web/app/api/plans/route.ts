@@ -16,13 +16,18 @@ import {
   type PlanServiceContract,
 } from "../../../lib/server/plan-service";
 import {
+  publicApiRuntimeControlResponse,
+  runControlledPublicApiOperation,
+  type ControlledPublicApiRouteOptions,
+} from "../../../lib/server/public-api-route-controls";
+import {
   awaitWithinRequest,
   createRequestLifetime,
   RequestOperationAbortedError,
   resolveRequestTimeoutMs,
-  type BoundedRequestOptions,
   type RequestLifetime,
 } from "../../../lib/server/request-lifetime";
+import { isAllowedLaunchMarketContext } from "../../../lib/launch-markets";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 128 * 1024;
@@ -30,7 +35,7 @@ const MAX_RESPONSE_BYTES = 128 * 1024;
 export const PLAN_CAVEATS = [
   "Resultatet gjelder prisene Handleplan kunne verifisere; ukjent kjededekning kan påvirke sammenligningen.",
   "Kjedepris betyr ikke at varen er på lager eller har samme hyllepris i din butikk.",
-  "Medlemspriser og kundeavis-tilbud er ikke med i denne beregningen.",
+  "Verifiserte kundeavistilbud kan være med; medlemspriser brukes bare for medlemsprogrammer du selv har slått på.",
 ] as const;
 
 type ServiceProvider = () => PlanServiceContract | Promise<PlanServiceContract>;
@@ -216,7 +221,7 @@ async function readJsonBody(request: Request, signal: AbortSignal): Promise<
 
 export function createPlansHandler(
   getService: ServiceProvider,
-  options: BoundedRequestOptions = {},
+  options: ControlledPublicApiRouteOptions = {},
 ) {
   const timeoutMs = resolveRequestTimeoutMs(options);
   return async function POST(request: Request): Promise<Response> {
@@ -250,27 +255,51 @@ export function createPlansHandler(
             ? errorResponse("INVALID_EXACT_PRODUCT", 422)
             : errorResponse("INVALID_REQUEST", 400);
         }
+        if (!isAllowedLaunchMarketContext(parsed.data.marketContext)) {
+          return errorResponse("MARKET_UNAVAILABLE", 422);
+        }
 
         try {
-          const service = await awaitWithinRequest(getService, lifetime.signal);
           const result = await awaitWithinRequest(
-            () => service.calculateExact(parsed.data, lifetime.signal),
+            () => runControlledPublicApiOperation(
+              options,
+              "plans",
+              parsed.data,
+              lifetime.signal,
+              async (operationSignal) => {
+                const service = await awaitWithinRequest(getService, operationSignal);
+                return service.calculateExact(parsed.data, operationSignal);
+              },
+            ),
             lifetime.signal,
           );
           const response = exactProductPlanApiResponseSchemaFor(parsed.data).safeParse({
             caveats: PLAN_CAVEATS,
             contractVersion: 1,
             evidence: result.evidence,
+            enabledMembershipProgramIds: parsed.data.enabledMembershipProgramIds,
             generatedAt: result.generatedAt,
+            ...(result.geographicDirectoryAttestation === undefined
+              ? {}
+              : {
+                  geographicDirectoryAttestation:
+                    result.geographicDirectoryAttestation,
+                }),
+            marketContext: parsed.data.marketContext,
+            planDeltaExplanations: result.planDeltaExplanations,
             plans: result.plans,
             priceDataSource: result.priceDataSource,
             products: result.products,
           });
-          if (!response.success) throw new CatalogUnavailableError();
+          if (!response.success) {
+            return errorResponse("INVALID_SERVICE_RESPONSE", 503);
+          }
           return boundedJsonResponse(response.data);
         } catch (error) {
           const abortResponse = requestAbortResponse(lifetime);
           if (abortResponse !== undefined) return abortResponse;
+          const controlledResponse = publicApiRuntimeControlResponse(error);
+          if (controlledResponse !== undefined) return controlledResponse;
           if (
             error instanceof RequestOperationAbortedError
             || error instanceof PlanRequestCancelledError
@@ -296,18 +325,38 @@ export function createPlansHandler(
           ? errorResponse("INVALID_EXACT_PRODUCT", 422)
           : errorResponse("INVALID_REQUEST", 400);
       }
+      if (!isAllowedLaunchMarketContext(parsed.data.marketContext)) {
+        return errorResponse("MARKET_UNAVAILABLE", 422);
+      }
       try {
-        const service = await awaitWithinRequest(getService, lifetime.signal);
         const result = await awaitWithinRequest(
-          () => service.calculateReviewed(parsed.data, lifetime.signal),
+          () => runControlledPublicApiOperation(
+            options,
+            "plans",
+            parsed.data,
+            lifetime.signal,
+            async (operationSignal) => {
+              const service = await awaitWithinRequest(getService, operationSignal);
+              return service.calculateReviewed(parsed.data, operationSignal);
+            },
+          ),
           lifetime.signal,
         );
         const response = reviewedFamilyPlanApiResponseV2SchemaFor(parsed.data).safeParse({
           caveats: PLAN_CAVEATS,
           contractVersion: 2,
           evidence: result.evidence,
+          enabledMembershipProgramIds: parsed.data.enabledMembershipProgramIds,
           generatedAt: result.generatedAt,
+          ...(result.geographicDirectoryAttestation === undefined
+            ? {}
+            : {
+                geographicDirectoryAttestation:
+                  result.geographicDirectoryAttestation,
+              }),
+          marketContext: parsed.data.marketContext,
           needMatches: result.needMatches,
+          planDeltaExplanations: result.planDeltaExplanations,
           plans: result.plans,
           priceDataSource: result.priceDataSource,
           productClaims: result.productClaims,
@@ -320,6 +369,8 @@ export function createPlansHandler(
       } catch (error) {
         const abortResponse = requestAbortResponse(lifetime);
         if (abortResponse !== undefined) return abortResponse;
+        const controlledResponse = publicApiRuntimeControlResponse(error);
+        if (controlledResponse !== undefined) return controlledResponse;
         if (error instanceof RequestOperationAbortedError) {
           return errorResponse("REQUEST_CANCELLED", 499);
         }
@@ -331,7 +382,11 @@ export function createPlansHandler(
   };
 }
 
-export const POST = createPlansHandler(async () => {
+export async function POST(request: Request): Promise<Response> {
   const { getServerContainer } = await import("../../../lib/server/container");
-  return getServerContainer().planService;
-});
+  const container = getServerContainer();
+  return createPlansHandler(
+    () => container.planService,
+    { runtimeControls: container.publicApiRuntimeControls },
+  )(request);
+}

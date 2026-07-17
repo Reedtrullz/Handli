@@ -7,7 +7,12 @@ import {
 } from "@handleplan/domain";
 import { useEffect, useId, useRef, useState } from "react";
 
-import { BASKET_QUANTITY_MAX, BASKET_QUANTITY_MIN } from "../../lib/browser-basket";
+import {
+  basketQuantityErrorCopy,
+  parseBasketQuantityInput,
+  type BasketQuantityInputUnit,
+} from "../../lib/basket-quantity";
+import { QuantityControl } from "./quantity-control";
 
 const MAX_SEARCH_RESPONSE_BYTES = 128 * 1024;
 
@@ -90,7 +95,11 @@ export async function searchProductsFromApi(
 }
 
 interface NeedComposerProps {
-  onProduct: (product: Product, quantity: number) => void;
+  onProduct: (
+    product: Product,
+    quantity: number,
+    quantityUnit: "piece" | "package" | "g" | "ml",
+  ) => void;
   searchProducts: ProductSearch;
   searchDelayMs?: number;
   disabled?: boolean;
@@ -113,7 +122,8 @@ export function NeedComposer({
 }: NeedComposerProps) {
   const listId = useId();
   const [query, setQuery] = useState("");
-  const [quantity, setQuantity] = useState(1);
+  const [quantityAmount, setQuantityAmount] = useState("1");
+  const [quantityInputUnit, setQuantityInputUnit] = useState<BasketQuantityInputUnit>("package");
   const [products, setProducts] = useState<Product[]>([]);
   const [searchState, setSearchState] = useState<SearchState>("idle");
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -189,7 +199,8 @@ export function NeedComposer({
   function reset(): void {
     cancelSearchWork();
     setQuery("");
-    setQuantity(1);
+    setQuantityAmount("1");
+    setQuantityInputUnit("package");
     setProducts([]);
     setOpen(false);
     setSearchState("idle");
@@ -197,7 +208,9 @@ export function NeedComposer({
   }
 
   function chooseProduct(product: Product): void {
-    onProduct(product, quantity);
+    const quantity = parseBasketQuantityInput(quantityAmount, quantityInputUnit);
+    if (quantity === undefined) return;
+    onProduct(product, quantity.quantity, quantity.quantityUnit);
     reset();
   }
 
@@ -224,6 +237,7 @@ export function NeedComposer({
   const activeOptionId = open && activeIndex >= 0
     ? `${listId}-option-${activeIndex}`
     : undefined;
+  const parsedQuantity = parseBasketQuantityInput(quantityAmount, quantityInputUnit);
   return (
     <section
       className="need-composer-section"
@@ -260,23 +274,28 @@ export function NeedComposer({
             }}
             onKeyDown={onKeyDown}
           />
-          <div className="quantity-stepper" aria-label="Antall">
-            <button
-              type="button"
-              aria-label="Reduser antall"
-              disabled={quantity <= BASKET_QUANTITY_MIN}
-              onClick={() => setQuantity((value) => Math.max(BASKET_QUANTITY_MIN, value - 1))}
-            >−</button>
-            <output aria-live="polite">{quantity}</output>
-            <button
-              type="button"
-              aria-label="Øk antall"
-              disabled={quantity >= BASKET_QUANTITY_MAX}
-              onClick={() => setQuantity((value) => Math.min(BASKET_QUANTITY_MAX, value + 1))}
-            >+</button>
-          </div>
         </div>
+        <QuantityControl
+          amount={quantityAmount}
+          disabled={disabled}
+          inputUnit={quantityInputUnit}
+          label="eksakt produkt"
+          onAmountChange={setQuantityAmount}
+          onInputUnitChange={(inputUnit, amount) => {
+            setQuantityInputUnit(inputUnit);
+            setQuantityAmount(amount);
+          }}
+        />
       </div>
+      {parsedQuantity === undefined ? (
+        <p className="quantity-error" role="alert">
+          {basketQuantityErrorCopy(quantityInputUnit)}
+        </p>
+      ) : (
+        <p className="quantity-guidance">
+          Velg pakker, stykk eller en nøyaktig vekt eller mengde. Enheten er et krav; kg og l lagres uten avrunding som g og ml.
+        </p>
+      )}
       {disabled ? <p role="status">Handlekurven kan inneholde maksimalt 50 varebehov.</p> : null}
       {!disabled && searchState === "ready" ? <p role="status">Velg et eksakt produkt fra forslagene. Bruk «Varetype» nedenfor hvis Handleplan skal velge blant gjennomgåtte alternativer.</p> : null}
       <div ref={popup} className="search-popover" hidden={!open}>

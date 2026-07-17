@@ -1,11 +1,27 @@
 import { z } from "zod";
 
 export const WORKER_CONTRACT_VERSION = 1 as const;
-export const WORKER_JOB_KINDS = [
+export const KASSALAPP_WORKER_JOB_KINDS = [
   "catalog-refresh",
   "benchmark-price-refresh",
   "physical-store-sync",
   "historical-observation-collection",
+] as const;
+
+export type KassalappWorkerJobKind = (typeof KASSALAPP_WORKER_JOB_KINDS)[number];
+
+export const OFFICIAL_OFFER_WORKER_JOB_KINDS = [
+  "official-offer-discovery",
+  "official-offer-fetch",
+  "official-offer-ingestion",
+  "official-offer-lifecycle-reconcile",
+] as const;
+
+export type OfficialOfferWorkerJobKind = (typeof OFFICIAL_OFFER_WORKER_JOB_KINDS)[number];
+
+export const WORKER_JOB_KINDS = [
+  ...KASSALAPP_WORKER_JOB_KINDS,
+  ...OFFICIAL_OFFER_WORKER_JOB_KINDS,
 ] as const;
 
 export type WorkerJobKind = (typeof WORKER_JOB_KINDS)[number];

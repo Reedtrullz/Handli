@@ -12,15 +12,15 @@ describe("database readiness", () => {
     const checkMigration = vi.fn(async () => true);
     const probe = new BoundedDatabaseReadinessProbe({
       checkMigration,
-      requiredMigration: "011_catalog_observations.sql",
+      requiredMigration: "026_official_offer_publication_runtime.sql",
       timeoutMs: 100,
     });
 
     await expect(probe.check()).resolves.toEqual({
-      requiredMigration: "011_catalog_observations.sql",
+      requiredMigration: "026_official_offer_publication_runtime.sql",
     });
     expect(checkMigration).toHaveBeenCalledWith(
-      "011_catalog_observations.sql",
+      "026_official_offer_publication_runtime.sql",
       expect.any(AbortSignal),
     );
   });
@@ -28,7 +28,7 @@ describe("database readiness", () => {
   it("fails closed when the required migration is absent", async () => {
     const probe = new BoundedDatabaseReadinessProbe({
       checkMigration: async () => false,
-      requiredMigration: "011_catalog_observations.sql",
+      requiredMigration: "026_official_offer_publication_runtime.sql",
       timeoutMs: 100,
     });
 
@@ -43,7 +43,7 @@ describe("database readiness", () => {
         dependencySignal = signal;
         return await new Promise<boolean>(() => undefined);
       },
-      requiredMigration: "011_catalog_observations.sql",
+      requiredMigration: "026_official_offer_publication_runtime.sql",
       timeoutMs: 25,
     });
 

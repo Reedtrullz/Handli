@@ -3,17 +3,21 @@ import { describe, expect, it } from "vitest";
 import {
   BASKET_STORAGE_KEY,
   BASKET_STORAGE_MAX_CODE_UNITS,
+  BASKET_MEASURE_QUANTITY_MAX,
   DEFAULT_CONVENIENCE_WEIGHT_BASIS_POINTS,
   LEGACY_BASKET_STORAGE_KEY,
   LEGACY_BASKET_V2_STORAGE_KEY,
+  LEGACY_BASKET_V3_STORAGE_KEY,
   BASKET_QUANTITY_MAX,
   BASKET_QUANTITY_MIN,
   addExactProductToBasket,
   addReviewedFamilyToBasket,
+  browserBasketSchema,
   emptyBasketV3,
   loadBasket,
   removeBasketNeed,
   saveBasket,
+  setBasketEnabledMembershipProgramIds,
   strictPlanRequestReadiness,
 } from "./browser-basket";
 
@@ -34,7 +38,7 @@ function memoryStorage(initial?: string, key = BASKET_STORAGE_KEY): Storage {
 }
 
 const populatedBasket = {
-  version: 3 as const,
+  version: 4 as const,
   needs: [
     {
       id: "need-1",
@@ -65,7 +69,13 @@ const populatedBasket = {
     },
   ],
   convenienceWeightBasisPoints: 5_000,
+  enabledMembershipProgramIds: [],
   familyConfirmations: [],
+  marketContext: {
+    contractVersion: 1 as const,
+    countryCode: "NO" as const,
+    kind: "national" as const,
+  },
   travel: { enabled: false, mode: "car" as const },
 };
 
@@ -75,6 +85,8 @@ describe("browser basket persistence", () => {
       state: "ready",
       request: {
         contractVersion: 1,
+        enabledMembershipProgramIds: [],
+        marketContext: populatedBasket.marketContext,
         maxStores: 3,
         needs: [{
           id: "need-1",
@@ -91,6 +103,44 @@ describe("browser basket persistence", () => {
     });
     const serialized = JSON.stringify(strictPlanRequestReadiness(populatedBasket));
     expect(serialized).not.toMatch(/query|matchingRule|products|productFamily|explanation|travel|origin|TINE/i);
+  });
+
+  it("round-trips and projects canonical piece, package, gram, and millilitre needs", () => {
+    for (const [quantity, quantityUnit] of [
+      [2, "piece"],
+      [3, "package"],
+      [1_000, "g"],
+      [1_500, "ml"],
+    ] as const) {
+      const candidate = {
+        ...populatedBasket,
+        needs: [{ ...populatedBasket.needs[0], quantity, quantityUnit }],
+      };
+      const storage = memoryStorage();
+
+      saveBasket(candidate, storage);
+
+      expect(loadBasket(storage)).toEqual(candidate);
+      expect(strictPlanRequestReadiness(candidate)).toMatchObject({
+        state: "ready",
+        request: { needs: [{ quantity, quantityUnit }] },
+      });
+    }
+  });
+
+  it("keeps count and metric overflow bounds separate in local state", () => {
+    expect(browserBasketSchema.safeParse({
+      ...populatedBasket,
+      needs: [{ ...populatedBasket.needs[0], quantity: 1_500, quantityUnit: "ml" }],
+    }).success).toBe(true);
+    expect(browserBasketSchema.safeParse({
+      ...populatedBasket,
+      needs: [{ ...populatedBasket.needs[0], quantity: BASKET_QUANTITY_MAX + 1, quantityUnit: "package" }],
+    }).success).toBe(false);
+    expect(browserBasketSchema.safeParse({
+      ...populatedBasket,
+      needs: [{ ...populatedBasket.needs[0], quantity: BASKET_MEASURE_QUANTITY_MAX + 1, quantityUnit: "g" }],
+    }).success).toBe(false);
   });
 
   it.each(["flexible", "constrained"] as const)(
@@ -136,13 +186,16 @@ describe("browser basket persistence", () => {
         slug: "brod",
         status: "active",
       },
-      quantity: 3,
+      quantity: 1_000,
+      quantityUnit: "g",
     }, () => ids.shift()!);
 
     expect(strictPlanRequestReadiness(basket)).toEqual({
       state: "ready",
       request: {
         contractVersion: 2,
+        enabledMembershipProgramIds: [],
+        marketContext: populatedBasket.marketContext,
         maxStores: 3,
         needs: [
           {
@@ -167,8 +220,8 @@ describe("browser basket persistence", () => {
               familyId: "family:brod",
               kind: "reviewed-family",
             },
-            quantity: 3,
-            quantityUnit: "each",
+            quantity: 1_000,
+            quantityUnit: "g",
             required: true,
           },
         ],
@@ -208,7 +261,7 @@ describe("browser basket persistence", () => {
     })))).toEqual(emptyBasketV3);
   });
 
-  it("returns a fresh empty version 3 basket when storage is empty", () => {
+  it("returns a fresh empty version 4 basket when storage is empty", () => {
     const storage = memoryStorage();
 
     expect(loadBasket(storage)).toEqual(emptyBasketV3);
@@ -306,6 +359,42 @@ describe("browser basket persistence", () => {
     expect(storage.getItem(BASKET_STORAGE_KEY)).not.toContain("origin");
   });
 
+  it("defaults an older same-key v4 basket to no enabled memberships", () => {
+    const {
+      enabledMembershipProgramIds: _memberships,
+      ...olderV4
+    } = populatedBasket;
+    void _memberships;
+
+    expect(loadBasket(memoryStorage(JSON.stringify(olderV4)))).toEqual(populatedBasket);
+  });
+
+  it("persists only canonical membership IDs and projects them into planning", () => {
+    const selected = setBasketEnabledMembershipProgramIds(
+      populatedBasket,
+      ["coop-medlem", "trumf"],
+    );
+
+    expect(selected.enabledMembershipProgramIds).toEqual(["coop-medlem", "trumf"]);
+    expect(setBasketEnabledMembershipProgramIds(selected, ["coop-medlem", "trumf"]))
+      .toBe(selected);
+    expect(setBasketEnabledMembershipProgramIds(selected, ["trumf", "coop-medlem"]))
+      .toBe(selected);
+    expect(setBasketEnabledMembershipProgramIds(selected, ["trumf", "trumf"]))
+      .toBe(selected);
+    expect(setBasketEnabledMembershipProgramIds(selected, [" trumf"]))
+      .toBe(selected);
+    expect(strictPlanRequestReadiness(selected)).toMatchObject({
+      state: "ready",
+      request: { enabledMembershipProgramIds: ["coop-medlem", "trumf"] },
+    });
+
+    const storage = memoryStorage();
+    saveBasket(selected, storage);
+    expect(loadBasket(storage).enabledMembershipProgramIds)
+      .toEqual(["coop-medlem", "trumf"]);
+  });
+
   it("retains an old flexible or constrained choice but never plans without reviewed confirmation", () => {
     const generic = {
       ...populatedBasket,
@@ -346,7 +435,13 @@ describe("browser basket persistence", () => {
     );
 
     expect(basket.convenienceWeightBasisPoints).toBe(2_500);
-    expect(basket.needs.at(-1)).toMatchObject({ id: "need-discovered", query: "Ny vare", matchRuleId: "rule-discovered" });
+    expect(basket.needs.at(-1)).toMatchObject({
+      id: "need-discovered",
+      query: "Ny vare",
+      matchRuleId: "rule-discovered",
+      quantity: 1,
+      quantityUnit: "package",
+    });
     expect(basket.matchingRules.at(-1)).toMatchObject({ mode: "exact", exactEan: discovered.ean });
     expect(basket.products.at(-1)).toEqual(discovered);
     expect(addExactProductToBasket(basket, discovered, () => "unused")).toBe(basket);
@@ -405,11 +500,15 @@ describe("browser basket persistence", () => {
     };
     const {
       convenienceWeightBasisPoints: _preference,
+      enabledMembershipProgramIds: _memberships,
       familyConfirmations: _confirmations,
+      marketContext: _marketContext,
       ...withoutV2Preference
     } = legacy;
     void _preference;
+    void _memberships;
     void _confirmations;
+    void _marketContext;
     const storage = memoryStorage(
       JSON.stringify(withoutV2Preference),
       LEGACY_BASKET_STORAGE_KEY,
@@ -426,9 +525,13 @@ describe("browser basket persistence", () => {
   it("migrates a valid exact v2 basket losslessly and removes the old key", () => {
     const {
       familyConfirmations: _confirmations,
+      enabledMembershipProgramIds: _memberships,
+      marketContext: _marketContext,
       ...legacyV2
     } = { ...populatedBasket, version: 2 as const };
     void _confirmations;
+    void _memberships;
+    void _marketContext;
     const storage = memoryStorage(
       JSON.stringify(legacyV2),
       LEGACY_BASKET_V2_STORAGE_KEY,
@@ -437,5 +540,46 @@ describe("browser basket persistence", () => {
     expect(loadBasket(storage)).toEqual(populatedBasket);
     expect(storage.getItem(LEGACY_BASKET_V2_STORAGE_KEY)).toBeNull();
     expect(storage.getItem(BASKET_STORAGE_KEY)).not.toBeNull();
+  });
+
+  it("migrates a valid v3 basket to the explicit national market", () => {
+    const {
+      enabledMembershipProgramIds: _memberships,
+      marketContext: _marketContext,
+      ...legacyV3
+    } = {
+      ...populatedBasket,
+      version: 3 as const,
+    };
+    void _marketContext;
+    void _memberships;
+    const storage = memoryStorage(
+      JSON.stringify(legacyV3),
+      LEGACY_BASKET_V3_STORAGE_KEY,
+    );
+
+    expect(loadBasket(storage)).toEqual(populatedBasket);
+    expect(storage.getItem(LEGACY_BASKET_V3_STORAGE_KEY)).toBeNull();
+    expect(storage.getItem(BASKET_STORAGE_KEY)).not.toBeNull();
+  });
+
+  it("preserves v4 basket contents but blocks planning when a stored market is stale", () => {
+    const stale = {
+      ...populatedBasket,
+      marketContext: {
+        contractVersion: 1,
+        countryCode: "NO",
+        kind: "launch-region",
+        regionId: "no-9999-no-longer-launched",
+      },
+    };
+
+    const loaded = loadBasket(memoryStorage(JSON.stringify(stale)));
+    expect(loaded).toEqual({ ...populatedBasket, marketContext: null });
+    expect(loaded.needs).toEqual(populatedBasket.needs);
+    expect(loaded.products).toEqual(populatedBasket.products);
+    expect(strictPlanRequestReadiness(loaded)).toEqual({
+      state: "requires-market-selection",
+    });
   });
 });
