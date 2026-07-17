@@ -17,14 +17,14 @@ outcome today:
   and can never return `eligible`.
 
 The current
-[typecheck-remediated source-neutral implementation draft](../evidence/v1/v1-source-neutral-typecheck-remediation-2026-07-17/release-candidate.v1.json)
+[cross-browser-remediated source-neutral implementation draft](../evidence/v1/v1-source-neutral-cross-browser-remediation-2026-07-17/release-candidate.v1.json)
 demonstrates the first mode. It binds the signed source commit, enumerates all
 26 current migrations, records no supported regions, and leaves all twelve
 release gates incomplete. Its adjacent local verification note is diagnostic
-context, not retained candidate-current release proof. The preceding PostgreSQL
-and CI remediation, full implementation, and V1-17 drafts are preserved as
-historical, immutable milestones. None of the drafts is a release or a claim
-about production.
+context, not retained candidate-current release proof. The preceding typecheck,
+PostgreSQL, and CI remediation, full implementation, and V1-17 drafts are
+preserved as historical, immutable milestones. None of the drafts is a release
+or a claim about production.
 
 ## Why promotion is intentionally closed
 
