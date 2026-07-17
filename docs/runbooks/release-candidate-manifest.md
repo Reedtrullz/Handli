@@ -17,10 +17,13 @@ outcome today:
   and can never return `eligible`.
 
 The current
-[source-neutral V1-17 draft](../evidence/v1/v1-17-source-neutral-draft-2026-07-17/release-candidate.v1.json)
-demonstrates the first mode. It records a dirty source milestone, no supported
-regions, and all twelve gates as incomplete. It is not a release or a claim
-about production.
+[source-neutral implementation draft](../evidence/v1/v1-source-neutral-implementation-2026-07-17/release-candidate.v1.json)
+demonstrates the first mode. It binds the signed source commit, enumerates all
+26 current migrations, records no supported regions, and leaves all twelve
+release gates incomplete. Its adjacent local verification note is diagnostic
+context, not retained candidate-current release proof. The earlier V1-17 draft
+is preserved as a historical, immutable milestone. Neither draft is a release
+or a claim about production.
 
 ## Why promotion is intentionally closed
 
