@@ -12,6 +12,70 @@ const nonce = `${process.pid}-${Date.now()}`;
 const sourceId = `state-test-${nonce}`.slice(0, 64);
 const scheduledAt = new Date("2026-07-16T12:00:00.000Z");
 
+interface RawSourceHealthClockRow {
+  last_capture_success_at: unknown;
+  last_discovery_success_at: unknown;
+  last_publish_success_at: unknown;
+  newest_eligible_evidence_at: unknown;
+  status: unknown;
+}
+
+interface SourceHealthClockRow {
+  last_capture_success_at: Date | null;
+  last_discovery_success_at: Date | null;
+  last_publish_success_at: Date | null;
+  newest_eligible_evidence_at: Date | null;
+  status: string;
+}
+
+const DATABASE_TIMESTAMP_PATTERN =
+  /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}(?::?\d{2})?)$/u;
+
+function decodeDatabaseTimestamp(input: unknown, name: string): Date | null {
+  if (input === null) return null;
+  if (
+    !(input instanceof Date)
+    && (typeof input !== "string" || !DATABASE_TIMESTAMP_PATTERN.test(input))
+  ) {
+    throw new TypeError(`${name} must be a PostgreSQL timestamp`);
+  }
+  const value = input instanceof Date ? new Date(input.getTime()) : new Date(input);
+  if (!Number.isFinite(value.getTime())) {
+    throw new TypeError(`${name} must be a valid PostgreSQL timestamp`);
+  }
+  return value;
+}
+
+function decodeSourceHealthClockRow(
+  row: RawSourceHealthClockRow | undefined,
+): SourceHealthClockRow {
+  if (row === undefined) {
+    throw new TypeError("PostgreSQL did not return the expected source-health row");
+  }
+  if (typeof row.status !== "string") {
+    throw new TypeError("source-health status must be a string");
+  }
+  return {
+    last_capture_success_at: decodeDatabaseTimestamp(
+      row.last_capture_success_at,
+      "last_capture_success_at",
+    ),
+    last_discovery_success_at: decodeDatabaseTimestamp(
+      row.last_discovery_success_at,
+      "last_discovery_success_at",
+    ),
+    last_publish_success_at: decodeDatabaseTimestamp(
+      row.last_publish_success_at,
+      "last_publish_success_at",
+    ),
+    newest_eligible_evidence_at: decodeDatabaseTimestamp(
+      row.newest_eligible_evidence_at,
+      "newest_eligible_evidence_at",
+    ),
+    status: row.status,
+  };
+}
+
 describe.skipIf(!runDatabaseIntegration).sequential(
   "PostgresWorkerJobStateRepository integration",
   () => {
@@ -109,13 +173,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         startedAt: new Date("2026-07-16T12:30:01.000Z"),
         status: "succeeded",
       }, lease.fenceToken)).resolves.toEqual({ created: true });
-      const [successfulHealth] = await connection.sql<{
-        last_capture_success_at: Date | null;
-        last_discovery_success_at: Date | null;
-        last_publish_success_at: Date | null;
-        newest_eligible_evidence_at: Date | null;
-        status: string;
-      }[]>`
+      const [successfulHealth] = await connection.sql<RawSourceHealthClockRow[]>`
         select
           status,
           last_discovery_success_at,
@@ -125,7 +183,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         from source_health_snapshots
         where worker_job_id = ${successfulJobId}
       `;
-      expect(successfulHealth).toEqual({
+      expect(decodeSourceHealthClockRow(successfulHealth)).toEqual({
         last_capture_success_at: successfulCompletedAt,
         last_discovery_success_at: successfulCompletedAt,
         last_publish_success_at: null,
@@ -207,13 +265,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         startedAt: new Date("2026-07-16T13:30:01.000Z"),
         status: "succeeded",
       }, lease.fenceToken)).resolves.toEqual({ created: true });
-      const [officialHealth] = await connection.sql<{
-        last_capture_success_at: Date | null;
-        last_discovery_success_at: Date | null;
-        last_publish_success_at: Date | null;
-        newest_eligible_evidence_at: Date | null;
-        status: string;
-      }[]>`
+      const [officialHealth] = await connection.sql<RawSourceHealthClockRow[]>`
         select
           status,
           last_discovery_success_at,
@@ -223,7 +275,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         from source_health_snapshots
         where worker_job_id = ${officialIngestionJobId}
       `;
-      expect(officialHealth).toEqual({
+      expect(decodeSourceHealthClockRow(officialHealth)).toEqual({
         last_capture_success_at: officialIngestionCompletedAt,
         last_discovery_success_at: officialIngestionCompletedAt,
         last_publish_success_at: null,

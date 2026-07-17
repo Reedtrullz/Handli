@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DrizzleQueryError } from "drizzle-orm";
 
 import { createDatabase, type DatabaseConnection } from "./client";
 import {
@@ -1035,10 +1036,21 @@ describe.skipIf(!runDatabaseIntegration).sequential(
             where ingestion_run_id = ${handle.id}) as coverage
       `;
       expect(counts).toEqual({ coverage: 0, observations: 0, outcomes: 0 });
-      await expect(repository.finalizeRun(handle, {
-        completedAt: new Date("2026-07-16T12:05:00.000Z"),
-        status: "completed",
-      })).rejects.toThrow(/requires coverage evidence/i);
+      let finalizationError: unknown;
+      try {
+        await repository.finalizeRun(handle, {
+          completedAt: new Date("2026-07-16T12:05:00.000Z"),
+          status: "completed",
+        });
+      } catch (error) {
+        finalizationError = error;
+      }
+      expect(finalizationError).toBeInstanceOf(DrizzleQueryError);
+      expect((finalizationError as DrizzleQueryError).cause).toMatchObject({
+        code: "23514",
+        message: "completed physical-store run requires coverage evidence",
+        name: "PostgresError",
+      });
     });
   },
 );

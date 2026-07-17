@@ -410,7 +410,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
     const eligibleEan = integrationEan(7);
     const failedRunEan = integrationEan(8);
     const runningRunEan = integrationEan(9);
-    const futureRunEan = integrationEan(10);
+    const rejectedFutureRunEan = integrationEan(10);
     const futureVerificationEan = integrationEan(11);
     const futureObservationEan = integrationEan(12);
     const futureFetchEan = integrationEan(13);
@@ -420,8 +420,13 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
     const mutableProductEan = integrationEan(17);
     const mutableScopeEan = integrationEan(18);
     const eligibleObservedAt = "2026-07-15T11:00:00.000Z";
-    const futureAt = new Date(Date.now() + 60_000).toISOString();
-    const furtherFutureAt = new Date(Date.now() + 120_000).toISOString();
+    const [fixtureClock] = await connection.sql`
+      select
+        clock_timestamp() + interval '1 hour' as future_at,
+        clock_timestamp() + interval '2 hours' as further_future_at
+    `;
+    const futureAt = databaseDate(fixtureClock!.future_at).toISOString();
+    const furtherFutureAt = databaseDate(fixtureClock!.further_future_at).toISOString();
     await connection.sql`
       update data_sources
       set runtime_state = 'approved',
@@ -467,22 +472,23 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
             created_at
           ) values (
             ${product!.id}, 'ean13', ${ean}, null, 100,
-            ${overrides.verifiedAt ?? new Date().toISOString()},
+            coalesce(
+              ${overrides.verifiedAt ?? null}::timestamptz,
+              statement_timestamp()
+            ),
             coalesce(${overrides.createdAt ?? null}::timestamptz, now())
           )
         `;
-        const completedAt = overrides.completedAt === undefined
-          ? runStatus === "running"
-            ? null
-            : new Date().toISOString()
-          : overrides.completedAt;
         const [run] = await connection.sql`
           insert into ingestion_runs (
             source_id, run_type, status, started_at, completed_at, counts,
             created_at
           ) values (
             'kassalapp', 'benchmark-prices', 'running',
-            ${overrides.createdAt ?? new Date(Date.now() - 1_000).toISOString()},
+            coalesce(
+              ${overrides.createdAt ?? null}::timestamptz,
+              statement_timestamp() - interval '1 second'
+            ),
             null, '{}',
             coalesce(${overrides.createdAt ?? null}::timestamptz, now())
           )
@@ -519,7 +525,12 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
         if (runStatus !== "running") {
           await connection.sql`
             update ingestion_runs
-            set status = ${runStatus}, completed_at = ${completedAt}
+            set status = ${runStatus},
+                completed_at = case
+                  when ${overrides.completedAt === undefined}
+                    then statement_timestamp()
+                  else ${overrides.completedAt ?? null}::timestamptz
+                end
             where id = ${run!.id}
           `;
         }
@@ -530,7 +541,9 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       await insertEvidence(eligibleEan, "completed");
       await insertEvidence(failedRunEan, "failed");
       await insertEvidence(runningRunEan, "running");
-      await insertEvidence(futureRunEan, "completed", { completedAt: futureAt });
+      await expect(
+        insertEvidence(rejectedFutureRunEan, "completed", { completedAt: futureAt }),
+      ).rejects.toThrow(/completion cannot be in the future/i);
       await insertEvidence(futureVerificationEan, "completed", {
         verifiedAt: futureAt,
       });
@@ -549,7 +562,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
           eligibleEan,
           failedRunEan,
           runningRunEan,
-          futureRunEan,
+          rejectedFutureRunEan,
           futureVerificationEan,
           futureObservationEan,
           futureFetchEan,
@@ -557,13 +570,12 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
         ]),
       ).resolves.toEqual([]);
 
-      const insufficientPermissionAt = new Date(Date.now() - 200).toISOString();
       await connection.sql`
         insert into source_permissions (
           source_id, decision, reviewed_at, valid_until, permissions, notes
         ) values (
-          'kassalapp', 'approved', ${insufficientPermissionAt},
-          ${new Date(Date.now() + 60_000).toISOString()},
+          'kassalapp', 'approved', statement_timestamp() - interval '1 second',
+          statement_timestamp() + interval '1 hour',
           '{"ordinaryPrice": false}'::jsonb,
           ${`reader-without-ordinary-price-${integrationNonce}`}
         )
@@ -572,13 +584,12 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
         (await evidenceReaderAtDatabaseNow()).getMany([eligibleEan]),
       ).resolves.toEqual([]);
 
-      const approvedAt = new Date(Date.now() - 100).toISOString();
       await connection.sql`
         insert into source_permissions (
           source_id, decision, reviewed_at, valid_until, permissions, notes
         ) values (
-          'kassalapp', 'approved', ${approvedAt},
-          ${new Date(Date.now() + 60_000).toISOString()},
+          'kassalapp', 'approved', statement_timestamp(),
+          statement_timestamp() + interval '1 hour',
           '{"ordinaryPrice": true}'::jsonb, ${`reader-approved-${integrationNonce}`}
         )
       `;
@@ -597,7 +608,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
         approvedReader.getMany([
           failedRunEan,
           runningRunEan,
-          futureRunEan,
+          rejectedFutureRunEan,
           futureVerificationEan,
           futureObservationEan,
           futureFetchEan,
@@ -735,7 +746,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
         insert into source_permissions (
           source_id, decision, reviewed_at, permissions, notes
         ) values (
-          'kassalapp', 'revoked', ${new Date().toISOString()},
+          'kassalapp', 'revoked', statement_timestamp(),
           '{"ordinaryPrice": true}'::jsonb,
           ${`reader-revoked-${integrationNonce}`}
         )

@@ -31,15 +31,11 @@ type CancelableQuery<T> = PromiseLike<T> & { cancel(): void };
 type OfficialOfferSqlClient = HandleplanDatabase["$client"];
 type OfficialOfferTransaction = postgres.TransactionSql;
 
-export const MAX_CURRENT_PUBLISHED_OFFERS = 500;
-
 export type OfficialOfferFoundationErrorCode =
   | "CANCELLED"
   | "CAPTURE_CONFLICT"
   | "EDITION_CONFLICT"
   | "EXTRACTION_CONFLICT"
-  | "FUTURE_AS_OF"
-  | "RESULT_LIMIT_EXCEEDED"
   | "SOURCE_AUTHORIZATION_STALE";
 
 export class OfficialOfferFoundationError extends Error {
@@ -67,33 +63,6 @@ export interface RecordedOfficialOfferExtraction {
   created: boolean;
   id: number;
   status: "completed" | "degraded" | "failed";
-}
-
-export interface CurrentPublishedOfficialOffer {
-  amountOre: number;
-  beforeAmountOre: number | null;
-  capturedAt: Date;
-  chain: "bunnpris" | "extra" | "rema-1000";
-  channels: readonly ("in-store" | "online")[];
-  contentKind: "publication" | "structured-feed";
-  declaredGeographicScope: GeographicScope;
-  evidenceLevel: "reviewed";
-  externalEditionId: string;
-  familySlug: string | null;
-  geographicScopeId: number;
-  id: number;
-  matchConfidence: number;
-  matchMethod: "deterministic_rule" | "exact_identifier" | "human_review";
-  memberProgramId: string | null;
-  membershipRequirement: "member" | "public";
-  multibuyGroupAmountOre: number | null;
-  multibuyQuantity: number | null;
-  offerKey: string;
-  productId: number | null;
-  sourceRecordId: string;
-  sourceId: string;
-  validFrom: Date;
-  validUntil: Date;
 }
 
 interface PublicationRow {
@@ -173,32 +142,6 @@ interface AuthorizationRow {
   rights_classifications: unknown;
 }
 
-interface PublishedOfferRow {
-  amount_ore: unknown;
-  before_amount_ore: unknown;
-  capture_retrieved_at: Date;
-  chain: string;
-  content_kind: string;
-  declared_geographic_scope: unknown;
-  external_id: string;
-  family_slug: string | null;
-  geographic_scope_id: unknown;
-  id: unknown;
-  match_confidence: unknown;
-  match_method: string;
-  member_program_id: string | null;
-  membership_requirement: string;
-  multibuy_group_amount_ore: unknown;
-  multibuy_quantity: unknown;
-  offer_key: string;
-  product_id: unknown;
-  review_channels: unknown;
-  source_reference: string;
-  source_id: string;
-  valid_from: Date;
-  valid_until: Date;
-}
-
 function cancelledError(): OfficialOfferFoundationError {
   return new OfficialOfferFoundationError("CANCELLED");
 }
@@ -260,43 +203,6 @@ function requireOptionalPositiveId(value: unknown, label: string): number | null
   return value === null ? null : requirePositiveId(value, label);
 }
 
-function requireNonNegativeSafeInteger(value: unknown, label: string): number {
-  if (!Number.isSafeInteger(value) || Number(value) < 0) {
-    throw new TypeError(`PostgreSQL returned an invalid ${label}`);
-  }
-  return Number(value);
-}
-
-function requireOptionalNonNegativeSafeInteger(
-  value: unknown,
-  label: string,
-): number | null {
-  return value === null ? null : requireNonNegativeSafeInteger(value, label);
-}
-
-function requireBoundedText(value: unknown, label: string, maxLength: number): string {
-  if (
-    typeof value !== "string"
-    || value.trim().length === 0
-    || value.trim() !== value
-    || value.length > maxLength
-  ) {
-    throw new TypeError(`PostgreSQL returned an invalid ${label}`);
-  }
-  return value;
-}
-
-function requireEnumValue<const T extends readonly string[]>(
-  value: unknown,
-  label: string,
-  allowed: T,
-): T[number] {
-  if (typeof value !== "string" || !allowed.includes(value)) {
-    throw new TypeError(`PostgreSQL returned an invalid ${label}`);
-  }
-  return value as T[number];
-}
-
 function requireBlobKey(value: unknown): asserts value is string {
   if (
     typeof value !== "string"
@@ -331,17 +237,6 @@ function requireStringArray(
     throw new TypeError(`PostgreSQL returned invalid ${label}`);
   }
   return Object.freeze((value as string[]).slice().sort());
-}
-
-function requireOfferChannels(value: unknown): readonly ("in-store" | "online")[] {
-  const channels = requireStringArray(value, "offer channels", 2);
-  if (
-    channels.length < 1
-    || channels.some((channel) => channel !== "in-store" && channel !== "online")
-  ) {
-    throw new TypeError("PostgreSQL returned invalid offer channels");
-  }
-  return channels as readonly ("in-store" | "online")[];
 }
 
 function canonicalScope(scopeInput: unknown): GeographicScope {
@@ -1034,227 +929,6 @@ export class PostgresOfficialOfferFoundationRepository {
     });
   }
 
-  async readCurrentPublishedOffers(
-    asOfInput: unknown,
-    signal?: AbortSignal,
-  ): Promise<readonly CurrentPublishedOfficialOffer[]> {
-    const asOf = dateValue(asOfInput, "offer eligibility clock");
-    const databaseClocks = await awaitAbortable(this.db.$client<Array<{ database_clock: Date }>>`
-      select clock_timestamp() as database_clock
-    `, signal);
-    const databaseClock = databaseClocks[0]?.database_clock;
-    if (databaseClock === undefined || asOf > dateValue(databaseClock, "database clock")) {
-      throw new OfficialOfferFoundationError("FUTURE_AS_OF");
-    }
-    const rows = await awaitAbortable(this.db.$client<PublishedOfferRow[]>`
-      select
-        offer.id, offer.offer_key, offer.source_id, offer.chain,
-        offer.source_reference,
-        offer.geographic_scope_id, offer.amount_ore, offer.before_amount_ore,
-        offer.multibuy_quantity, offer.multibuy_group_amount_ore,
-        offer.membership_requirement, offer.valid_from, offer.valid_until,
-        target.product_id, target.family_slug, target.match_method,
-        target.match_confidence,
-        capture.retrieved_at as capture_retrieved_at,
-        publication.external_id, publication.content_kind,
-        publication.declared_geographic_scope,
-        review.new_values #> '{decision,channels}' as review_channels,
-        review.new_values #>> '{decision,eligibility,programId}' as member_program_id
-      from approved_offers offer
-      inner join offer_targets target on target.offer_id = offer.id
-      inner join extracted_offer_candidates candidate on candidate.id = offer.candidate_id
-      inner join extraction_runs extraction on extraction.id = candidate.extraction_run_id
-      inner join publication_captures capture on capture.id = extraction.capture_id
-      inner join publications publication on publication.id = capture.publication_id
-      inner join data_sources source on source.id = offer.source_id
-      inner join geographic_scopes scope on scope.id = offer.geographic_scope_id
-      inner join lateral (
-        select current_review.*
-        from review_actions current_review
-        where current_review.candidate_id = candidate.id
-          and current_review.created_at <= clock_timestamp()
-        order by current_review.created_at desc,
-                 current_review.id desc,
-                 current_review.expected_version desc
-        limit 1
-      ) review on true
-      where offer.status = 'published'
-        and offer.valid_from <= ${asOf}
-        and offer.valid_until > ${asOf}
-        and offer.created_at <= ${asOf}
-        and offer.approved_at <= ${asOf}
-        and offer.updated_at <= ${asOf}
-        and target.created_at <= ${asOf}
-        and candidate.created_at <= ${asOf}
-        and extraction.created_at <= ${asOf}
-        and capture.created_at <= ${asOf}
-        and capture.retrieved_at <= ${asOf}
-        and publication.created_at <= ${asOf}
-        and publication.source_id = offer.source_id
-        and publication.chain = offer.chain
-        and publication.geographic_scope_id = offer.geographic_scope_id
-        and publication.content_kind is not null
-        and publication.declared_geographic_scope is not null
-        and publication.edition_identity_sha256 is not null
-        and publication.discovery_permission_id is not null
-        and capture.capture_permission_id is not null
-        and capture.capture_permission_capabilities ? 'capture'
-        and capture.rights_classification = 'public_display'
-        and extraction.status in ('completed', 'degraded')
-        and extraction.completed_at is not null
-        and extraction.completed_at <= ${asOf}
-        and extraction.extraction_method is not null
-        and extraction.extraction_permission_id is not null
-        and extraction.permission_capabilities ? 'extract'
-        and (extraction.extraction_method <> 'ocr' or extraction.ocr_permission_id is not null)
-        and source.runtime_state = 'approved'
-        and source.public_state_changed_at <= ${asOf}
-        and source.permission_reviewed_at is not null
-        and source.permission_reviewed_at <= ${asOf}
-        and (source.permission_expires_at is null or source.permission_expires_at > ${asOf})
-        and scope.status = 'active'
-        and scope.public_state_changed_at <= ${asOf}
-        and review.candidate_id = candidate.id
-        and review.offer_id = offer.id
-        and review.action in ('approve', 'correct_and_approve')
-        and review.expected_version = offer.version - 1
-        and review.created_at <= ${asOf}
-        and review.acted_at <= ${asOf}
-        and exists (
-          select 1
-          from source_permissions permission
-          where permission.id = (
-            select current_permission.id
-            from source_permissions current_permission
-            where current_permission.source_id = offer.source_id
-              and current_permission.created_at <= clock_timestamp()
-            order by current_permission.created_at desc, current_permission.id desc
-            limit 1
-          )
-            and permission.decision = 'approved'
-            and permission.created_at <= ${asOf}
-            and permission.reviewed_at <= ${asOf}
-            and (permission.valid_until is null or permission.valid_until > ${asOf})
-            and (permission.valid_until is null or permission.valid_until > clock_timestamp())
-            and source.permission_reviewed_at = permission.reviewed_at
-            and source.permission_expires_at is not distinct from permission.valid_until
-            and permission.permissions @> '{"officialOffers": true, "publicDisplay": true}'::jsonb
-            and permission.permissions -> 'officialOfferCapabilities' in (
-              '["capture", "discover", "extract"]'::jsonb,
-              '["capture", "discover", "extract", "ocr"]'::jsonb
-            )
-            and permission.permissions -> 'officialOfferRightsClassifications' in (
-              '["public_display"]'::jsonb,
-              '["extract_only", "public_display"]'::jsonb,
-              '["private_review", "public_display"]'::jsonb,
-              '["extract_only", "private_review", "public_display"]'::jsonb
-            )
-        )
-      order by offer.valid_until, offer.offer_key, offer.id
-      limit ${MAX_CURRENT_PUBLISHED_OFFERS + 1}
-    `, signal);
-    if (rows.length > MAX_CURRENT_PUBLISHED_OFFERS) {
-      throw new OfficialOfferFoundationError("RESULT_LIMIT_EXCEEDED");
-    }
-    return Object.freeze(rows.map((row) => {
-      const amountOre = requireNonNegativeSafeInteger(row.amount_ore, "offer amount");
-      const beforeAmountOre = requireOptionalNonNegativeSafeInteger(
-        row.before_amount_ore,
-        "before amount",
-      );
-      const multibuyQuantity = requireOptionalNonNegativeSafeInteger(
-        row.multibuy_quantity,
-        "multibuy quantity",
-      );
-      const multibuyGroupAmountOre = requireOptionalNonNegativeSafeInteger(
-        row.multibuy_group_amount_ore,
-        "multibuy group amount",
-      );
-      if ((multibuyQuantity === null) !== (multibuyGroupAmountOre === null)) {
-        throw new TypeError("PostgreSQL returned incomplete multibuy pricing");
-      }
-      if (multibuyQuantity !== null && multibuyQuantity < 2) {
-        throw new TypeError("PostgreSQL returned an invalid multibuy quantity");
-      }
-      if (beforeAmountOre !== null && beforeAmountOre < amountOre) {
-        throw new TypeError("PostgreSQL returned a before amount below the offer amount");
-      }
-      const membershipRequirement = requireEnumValue(
-        row.membership_requirement,
-        "membership",
-        ["member", "public"] as const,
-      );
-      const memberProgramId = row.member_program_id === null
-        ? null
-        : requireBoundedText(row.member_program_id, "member program id", 160);
-      if ((membershipRequirement === "member") !== (memberProgramId !== null)) {
-        throw new TypeError("PostgreSQL returned an invalid membership decision");
-      }
-      const productId = requireOptionalPositiveId(row.product_id, "product id");
-      const familySlug = row.family_slug === null
-        ? null
-        : requireBoundedText(row.family_slug, "family slug", 80);
-      if ((productId === null) === (familySlug === null)) {
-        throw new TypeError("PostgreSQL returned an invalid offer target");
-      }
-      const validFrom = dateValue(row.valid_from, "offer start");
-      const validUntil = dateValue(row.valid_until, "offer end");
-      if (!(validFrom <= asOf && asOf < validUntil)) {
-        throw new TypeError("PostgreSQL returned an offer outside the requested eligibility clock");
-      }
-      const capturedAt = dateValue(row.capture_retrieved_at, "capture retrieval clock");
-      if (capturedAt > asOf) {
-        throw new TypeError("PostgreSQL returned a future offer capture");
-      }
-      const matchConfidence = requireNonNegativeSafeInteger(
-        row.match_confidence,
-        "match confidence",
-      );
-      if (matchConfidence > 100) {
-        throw new TypeError("PostgreSQL returned an invalid match confidence");
-      }
-      const sourceReference = requireBoundedText(
-        row.source_reference,
-        "source record reference",
-        1_024,
-      );
-      return Object.freeze({
-        amountOre,
-        beforeAmountOre,
-        capturedAt,
-        chain: requireEnumValue(row.chain, "chain", ["bunnpris", "extra", "rema-1000"] as const),
-        channels: requireOfferChannels(row.review_channels),
-        contentKind: requireEnumValue(row.content_kind, "content kind", [
-          "publication",
-          "structured-feed",
-        ] as const),
-        declaredGeographicScope: canonicalScope(row.declared_geographic_scope),
-        evidenceLevel: "reviewed" as const,
-        externalEditionId: requireBoundedText(row.external_id, "external edition id", 160),
-        familySlug,
-        geographicScopeId: requirePositiveId(row.geographic_scope_id, "geographic scope id"),
-        id: requirePositiveId(row.id, "offer id"),
-        matchConfidence,
-        matchMethod: requireEnumValue(row.match_method, "match method", [
-          "deterministic_rule",
-          "exact_identifier",
-          "human_review",
-        ] as const),
-        memberProgramId,
-        membershipRequirement,
-        multibuyGroupAmountOre,
-        multibuyQuantity,
-        offerKey: requireBoundedText(row.offer_key, "offer key", 255),
-        productId,
-        sourceRecordId: `official-source-record:${createHash("sha256")
-          .update(sourceReference, "utf8")
-          .digest("hex")}`,
-        sourceId: requireBoundedText(row.source_id, "source id", 64),
-        validFrom,
-        validUntil,
-      });
-    }));
-  }
 }
 
 export type {

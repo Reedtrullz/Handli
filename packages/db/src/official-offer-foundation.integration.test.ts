@@ -5,15 +5,17 @@ import {
   SYNTHETIC_OFFER_LAYOUT_FINGERPRINT,
   SYNTHETIC_OFFER_SCHEMA_FINGERPRINT,
   syntheticStructuredOfferCandidates,
+  type ReviewDecisionRequestV1,
+  type ReviewOfferDecisionV1,
 } from "@handleplan/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createDatabase, type DatabaseConnection } from "./client";
 import {
   PostgresOfficialOfferFoundationRepository,
-  type CurrentPublishedOfficialOffer,
 } from "./official-offer-foundation";
 import { PostgresPublicOfficialOfferReader } from "./public-official-offer-reader";
+import { PostgresReviewQueueRepository } from "./review-queue";
 import { SOURCE_GOVERNANCE_ADVISORY_LOCK_SEED } from "./source-governance-lock";
 
 const runIntegration = process.env.RUN_OFFICIAL_OFFER_DB_INTEGRATION === "1";
@@ -23,6 +25,21 @@ function iso(value: Date): string {
   return value.toISOString();
 }
 
+const POSTGRES_TIMESTAMPTZ_PATTERN =
+  /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}(?::?\d{2})?)$/u;
+
+function databaseDate(value: unknown): Date {
+  const parsed = value instanceof Date
+    ? new Date(value.getTime())
+    : typeof value === "string" && POSTGRES_TIMESTAMPTZ_PATTERN.test(value)
+      ? new Date(value)
+      : new Date(Number.NaN);
+  if (!Number.isFinite(parsed.getTime())) {
+    throw new TypeError("Official-offer integration fixture returned an invalid database timestamp");
+  }
+  return parsed;
+}
+
 function syntheticGtin(seed: string): string {
   const body = `29${(BigInt(`0x${createHash("sha256").update(seed).digest("hex").slice(0, 14)}`)
     % 10_000_000_000n).toString().padStart(10, "0")}`;
@@ -30,6 +47,38 @@ function syntheticGtin(seed: string): string {
     sum + Number(digit) * (index % 2 === 0 ? 1 : 3), 0);
   return `${body}${(10 - checksumSum % 10) % 10}`;
 }
+
+function digest(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function reviewProofToken(seed: string, expiresAt: Date): string {
+  return `review-proof:v1.${expiresAt.getTime().toString(36)}.${digest(seed).slice(0, 22)}.${digest(`${seed}:binding`)}.${digest(`${seed}:signature`)}`;
+}
+
+describe("official-offer database timestamp boundary", () => {
+  it("normalizes Date and PostgreSQL timestamptz values to fresh finite Dates", () => {
+    const input = new Date("2026-07-17T13:55:00.123Z");
+    const fromDate = databaseDate(input);
+    const fromPostgres = databaseDate("2026-07-17 13:55:00.123456+00");
+
+    expect(fromDate).not.toBe(input);
+    expect(fromDate.toISOString()).toBe("2026-07-17T13:55:00.123Z");
+    expect(fromPostgres.toISOString()).toBe("2026-07-17T13:55:00.123Z");
+  });
+
+  it.each([
+    undefined,
+    null,
+    1_721_228_100_123,
+    "",
+    "not-a-timestamp",
+    "July 17, 2026 13:55 UTC",
+    new Date(Number.NaN),
+  ])("rejects invalid or missing database clock value %#", (value) => {
+    expect(() => databaseDate(value)).toThrow(/invalid database timestamp/i);
+  });
+});
 
 describeIntegration("official-offer PostgreSQL trust fences", () => {
   let first: DatabaseConnection;
@@ -58,6 +107,7 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
     const validUntil = new Date(Date.now() + 60 * 60_000);
     const permissions = {
       officialOffers: true,
+      privateReview: true,
       publicDisplay: true,
       officialOfferCapabilities: ["capture", "discover", "extract"],
       officialOfferRightsClassifications: [
@@ -74,7 +124,7 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
           permission_reviewed_at, permission_expires_at
         ) values (
           ${id}, ${`Official offer integration ${id}`}, 'offer', 'approved',
-          ${reviewedAt}, ${validUntil}
+          ${iso(reviewedAt)}, ${iso(validUntil)}
         )
       `;
     }
@@ -82,8 +132,8 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
       insert into source_permissions (
         source_id, decision, reviewed_at, valid_until, permissions
       ) values (
-        ${sourceId}, 'approved', ${reviewedAt}, ${validUntil},
-        ${first.sql.json(permissions)}
+        ${sourceId}, 'approved', ${iso(reviewedAt)}, ${iso(validUntil)},
+        ${JSON.stringify(permissions)}::jsonb
       )
       returning id
     `;
@@ -91,8 +141,8 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
       insert into source_permissions (
         source_id, decision, reviewed_at, valid_until, permissions
       ) values (
-        ${otherSourceId}, 'approved', ${reviewedAt}, ${validUntil},
-        ${first.sql.json(permissions)}
+        ${otherSourceId}, 'approved', ${iso(reviewedAt)}, ${iso(validUntil)},
+        ${JSON.stringify(permissions)}::jsonb
       )
       returning id
     `;
@@ -127,10 +177,10 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
 
     const repository = new PostgresOfficialOfferFoundationRepository(first.db);
     const databaseNow = async () => {
-      const [row] = await first.sql<Array<{ now: Date }>>`
+      const [row] = await first.sql<Array<{ now: unknown }>>`
         select clock_timestamp() as now
       `;
-      return row!.now;
+      return databaseDate(row?.now);
     };
     const fence = async () => ({
       contractVersion: 1 as const,
@@ -190,9 +240,9 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
         declared_geographic_scope, edition_identity_sha256, discovery_permission_id
       ) values (
         ${sourceId}, ${`cross-source-${suffix}`}, 'extra', 'forbidden',
-        ${validFrom}, ${validTo}, ${scope!.id}, 'discovered', clock_timestamp(),
+        ${iso(validFrom)}, ${iso(validTo)}, ${scope!.id}, 'discovered', clock_timestamp(),
         'structured-feed',
-        ${first.sql.json(edition.declaredGeographicScope)}, ${"f".repeat(64)},
+        ${JSON.stringify(edition.declaredGeographicScope)}::jsonb, ${"f".repeat(64)},
         ${otherPermission!.id}
       )
     `).rejects.toThrow(/permission fence is not current for source/i);
@@ -204,8 +254,8 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
         declared_geographic_scope, edition_identity_sha256, discovery_permission_id
       ) values (
         ${sourceId}, ${`forged-digest-${suffix}`}, 'extra', 'forbidden digest',
-        ${validFrom}, ${validTo}, ${scope!.id}, 'discovered', ${edition.discoveredAt},
-        'structured-feed', ${first.sql.json(edition.declaredGeographicScope)},
+        ${iso(validFrom)}, ${iso(validTo)}, ${scope!.id}, 'discovered', ${edition.discoveredAt},
+        'structured-feed', ${JSON.stringify(edition.declaredGeographicScope)}::jsonb,
         ${"f".repeat(64)}, ${permission!.id}
       )
     `).rejects.toThrow(/identity digest does not match stored facts/i);
@@ -236,7 +286,7 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
       sourceId,
       externalEditionId: edition.externalEditionId,
       checksumSha256: SYNTHETIC_OFFER_CAPTURE_CHECKSUM,
-      mimeType: "application/json",
+      mimeType: "image/png",
       byteLength: 321,
       rightsClassification: "public_display",
       retrievedAt: iso(await databaseNow()),
@@ -304,8 +354,8 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
 
     const confirmedEmptyAt = await databaseNow();
     const [confirmedEmpty] = await first.sql<Array<{
-      completed_at: Date;
-      empty_confirmation_observed_at: Date;
+      completed_at: unknown;
+      empty_confirmation_observed_at: unknown;
     }>>`
       insert into extraction_runs (
         capture_id, extractor_version, status, started_at, completed_at,
@@ -314,22 +364,22 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
         empty_result, empty_confirmation, empty_confirmation_observed_at
       ) values (
         ${capture.id}, ${`confirmed-empty-${suffix}`}, 'completed',
-        ${confirmedEmptyAt}, '2000-01-01T00:00:00.000Z', '{"total":0}'::jsonb,
+        ${iso(confirmedEmptyAt)}, '2000-01-01T00:00:00.000Z', '{"total":0}'::jsonb,
         'structured', ${permission!.id},
         '["capture", "discover", "extract"]'::jsonb,
-        ${confirmedEmptyAt}, ${confirmedEmptyAt}, 'confirmed-empty',
-        ${first.sql.json({
+        ${iso(confirmedEmptyAt)}, ${iso(confirmedEmptyAt)}, 'confirmed-empty',
+        ${JSON.stringify({
           sourceId,
           externalEditionId: edition.externalEditionId,
           basis: "source-record-count-zero",
           evidenceLocator: "integration-count-field",
-        })},
+        })}::jsonb,
         '2000-01-01T00:00:00.000Z'
       )
       returning completed_at, empty_confirmation_observed_at
     `;
-    expect(confirmedEmpty?.empty_confirmation_observed_at.getTime())
-      .toBe(confirmedEmpty?.completed_at.getTime());
+    expect(databaseDate(confirmedEmpty?.empty_confirmation_observed_at).getTime())
+      .toBe(databaseDate(confirmedEmpty?.completed_at).getTime());
 
     await expect(first.sql`
       insert into extraction_runs (
@@ -339,28 +389,41 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
         empty_result, empty_confirmation, empty_confirmation_observed_at
       ) values (
         ${capture.id}, ${`self-dated-empty-${suffix}`}, 'completed',
-        ${confirmedEmptyAt}, clock_timestamp(), '{"total":0}'::jsonb,
+        ${iso(confirmedEmptyAt)}, clock_timestamp(), '{"total":0}'::jsonb,
         'structured', ${permission!.id},
         '["capture", "discover", "extract"]'::jsonb,
-        ${confirmedEmptyAt}, ${confirmedEmptyAt}, 'confirmed-empty',
-        ${first.sql.json({
+        ${iso(confirmedEmptyAt)}, ${iso(confirmedEmptyAt)}, 'confirmed-empty',
+        ${JSON.stringify({
           sourceId,
           externalEditionId: edition.externalEditionId,
           basis: "source-record-count-zero",
           evidenceLocator: "integration-count-field",
           confirmedAt: "2000-01-01T00:00:00.000Z",
-        })},
+        })}::jsonb,
         null
       )
     `).rejects.toThrow(/canonically bound to the publication/i);
 
-    const [candidate] = await first.sql<Array<{ candidate_sha256: string; id: string }>>`
-      select id, encode(sha256(convert_to(normalized_fields::text, 'UTF8')), 'hex')
-        as candidate_sha256
+    const [candidate] = await first.sql<Array<{
+      candidate_sha256: string;
+      disposition: string;
+      exact_canonical_product_id: string | null;
+      id: string;
+    }>>`
+      select
+        id,
+        encode(sha256(convert_to(normalized_fields::text, 'UTF8')), 'hex')
+          as candidate_sha256,
+        normalized_fields ->> 'disposition' as disposition,
+        normalized_fields ->> 'exactCanonicalProductId' as exact_canonical_product_id
       from extracted_offer_candidates
       where extraction_run_id = ${extraction.id}
       limit 1
     `;
+    expect(candidate).toMatchObject({
+      disposition: "review-required",
+      exact_canonical_product_id: null,
+    });
     const [product] = await first.sql<Array<{ id: string }>>`
       insert into canonical_products (
         display_name, package_amount, package_unit, units_per_pack
@@ -372,7 +435,7 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
         product_id, scheme, value, confidence, verified_at
       ) values (${product!.id}, 'ean13', ${targetGtin}, 100, clock_timestamp())
     `;
-    const decision = {
+    const decision: ReviewOfferDecisionV1 = {
       channels: ["in-store"],
       eligibility: { kind: "public" },
       pricing: {
@@ -387,57 +450,59 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
       },
     };
     const [decisionIdentity] = await first.sql<Array<{ sha256: string }>>`
-      select encode(sha256(convert_to(${first.sql.json(decision)}::jsonb::text, 'UTF8')), 'hex')
+      select encode(sha256(convert_to(${JSON.stringify(decision)}::jsonb::text, 'UTF8')), 'hex')
         as sha256
     `;
-    const decisionAt = await databaseNow();
-    const [offer] = await first.sql<Array<{ id: string }>>`
-      insert into approved_offers (
-        offer_key, candidate_id, source_id, source_reference, chain,
-        geographic_scope_id, amount_ore, before_amount_ore,
-        membership_requirement, valid_from, valid_until,
-        status, version, approved_at
-      ) values (
-        ${`official-review:${candidate!.id}:${decisionIdentity!.sha256}`},
-        ${candidate!.id}, ${sourceId}, ${`review-candidate:${candidate!.id}:v1`},
-        'extra', ${scope!.id}, 2990, 3990,
-        'public', ${validFrom}, ${validTo}, 'approved', 1, ${decisionAt}
-      )
-      returning id
-    `;
-    await first.sql`
-      insert into offer_targets (
-        offer_id, product_id, family_slug, match_method, match_confidence
-      ) values (${offer!.id}, ${product!.id}, null, 'exact_identifier', 100)
-    `;
-    await first.sql`
-      insert into offer_conditions (offer_id, condition_type, condition_value)
-      values (
-        ${offer!.id}, 'channel',
-        ${first.sql.json({ channels: ["in-store"] })}
-      )
-    `;
-    await first.sql`
-      insert into review_actions (
-        candidate_id, offer_id, actor_id, action, expected_version,
-        previous_values, new_values, reason, acted_at
-      ) values (
-        ${candidate!.id}, ${offer!.id}, ${`access:${"a".repeat(64)}`}, 'approve', 0,
-        ${first.sql.json({
-          candidateSha256: candidate!.candidate_sha256,
-          contractVersion: 1,
-          reviewVersion: 0,
-        })},
-        ${first.sql.json({
-          contractVersion: 1,
-          reviewVersion: 1,
-          state: "approved",
-          decision,
-          decisionSha256: decisionIdentity!.sha256,
-        })},
-        'Synthetic integration approval', ${decisionAt}
-      )
-    `;
+    const reviewRepository = new PostgresReviewQueueRepository(first.db);
+    const candidateId = `review-candidate:${candidate!.id}`;
+    const actor = {
+      actorId: `access:${digest(`${suffix}:actor`)}`,
+      sessionId: `access-session:${digest(`${suffix}:session`)}`,
+    };
+    const locator = await reviewRepository.getPrivateCaptureLocator(
+      candidateId,
+      await databaseNow(),
+    );
+    expect(locator.rightsClassification).toBe("public_display");
+    if (locator.rightsClassification !== "public_display") {
+      throw new Error("Synthetic review evidence is not publicly displayable");
+    }
+    const evidenceProofSha256 = digest(`${suffix}:${candidateId}:proof`);
+    const renderClock = await databaseNow();
+    const evidenceExpiresAt = new Date(renderClock.getTime() + 60_000);
+    await reviewRepository.recordEvidenceRender({
+      ...actor,
+      candidateId,
+      checksumSha256: locator.checksumSha256,
+      cropReference: locator.cropReference,
+      evidenceProofSha256,
+      expectedVersion: 0,
+      expiresAt: iso(evidenceExpiresAt),
+      presentation: "full_capture",
+      rightsClassification: locator.rightsClassification,
+    }, renderClock);
+    const reviewRequest: ReviewDecisionRequestV1 = {
+      action: "correct_and_approve",
+      approvalEvidence: {
+        presentation: "full_capture",
+        token: reviewProofToken(`${suffix}:${candidateId}`, evidenceExpiresAt),
+      },
+      candidateId,
+      contractVersion: 1,
+      decision,
+      expectedVersion: 0,
+      reason: "Synthetic rendered evidence resolves the previously unmatched product.",
+    };
+    const reviewed = await reviewRepository.decide(
+      reviewRequest,
+      actor,
+      evidenceProofSha256,
+      await databaseNow(),
+    );
+    expect(reviewed).toMatchObject({ state: "approved" });
+    const offerIdMatch = /^review-offer:([1-9][0-9]{0,15})$/u.exec(reviewed.offerId ?? "");
+    if (offerIdMatch === null) throw new Error("Synthetic review did not return an offer ID");
+    const offer = { id: offerIdMatch[1]! };
     await first.sql`
       update approved_offers set status = 'published' where id = ${offer!.id}
     `;
@@ -445,16 +510,45 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
       insert into offer_conditions (offer_id, condition_type, condition_value)
       values (${offer!.id}, 'payment', '{"kind":"card"}'::jsonb)
     `).rejects.toThrow(/conditions are sealed/i);
-    const readAt = await databaseNow();
-    const visible: readonly CurrentPublishedOfficialOffer[] =
-      await repository.readCurrentPublishedOffers(readAt);
-    expect(visible.find(({ id }) => id === Number(offer!.id))).toMatchObject({
-      channels: ["in-store"],
-      evidenceLevel: "reviewed",
-      productId: Number(product!.id),
-      sourceId,
+    const [projectionBinding] = await first.sql<Array<{
+      clocks_are_ordered: boolean;
+      correction_is_bound: boolean;
+      decision_is_bound: boolean;
+      evidence_is_bound: boolean;
+      unresolved_requires_correction: boolean;
+    }>>`
+      select
+        candidate.normalized_fields ->> 'disposition' = 'review-required'
+          and not (candidate.normalized_fields ? 'exactCanonicalProductId')
+          as unresolved_requires_correction,
+        review.action = 'correct_and_approve'
+          and target.match_method = 'human_review'
+          and target.match_confidence = 100
+          as correction_is_bound,
+        review.decision_boundary_version = 2 as evidence_is_bound,
+        offer.offer_key = ${`official-review:${candidate!.id}:${decisionIdentity!.sha256}`}
+          as decision_is_bound,
+        offer.created_at <= offer.approved_at
+          and offer.approved_at = review.acted_at
+          and offer.created_at <= target.created_at
+          and target.created_at <= review.created_at
+          as clocks_are_ordered
+      from approved_offers offer
+      inner join extracted_offer_candidates candidate on candidate.id = offer.candidate_id
+      inner join offer_targets target on target.offer_id = offer.id
+      inner join review_actions review on review.offer_id = offer.id
+      where offer.id = ${offer!.id}
+    `;
+    expect(projectionBinding).toEqual({
+      clocks_are_ordered: true,
+      correction_is_bound: true,
+      decision_is_bound: true,
+      evidence_is_bound: true,
+      unresolved_requires_correction: true,
     });
-    const publicSnapshot = await new PostgresPublicOfficialOfferReader(first.db).getMany(
+    const readAt = await databaseNow();
+    const publicReader = new PostgresPublicOfficialOfferReader(first.db);
+    const publicSnapshot = await publicReader.getMany(
       [`product:${product!.id}`],
       readAt,
     );
@@ -496,8 +590,7 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
       returning id, encode(sha256(convert_to(normalized_fields::text, 'UTF8')), 'hex')
         as candidate_sha256
     `;
-    const legacyDecisionAt = await databaseNow();
-    const [legacyOffer] = await first.sql<Array<{ id: string }>>`
+    const [legacyOffer] = await first.sql<Array<{ approved_at: unknown; id: string }>>`
       insert into approved_offers (
         offer_key, candidate_id, source_id, source_reference, chain,
         geographic_scope_id, amount_ore, before_amount_ore,
@@ -508,20 +601,21 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
         ${legacyCandidate!.id}, ${sourceId},
         ${`review-candidate:${legacyCandidate!.id}:v1`},
         'extra', ${scope!.id}, 2990, 3990, 'public',
-        ${validFrom}, ${validTo}, 'approved', 1, ${legacyDecisionAt}
+        ${iso(validFrom)}, ${iso(validTo)}, 'approved', 1, clock_timestamp()
       )
-      returning id
+      returning id, approved_at
     `;
+    const legacyDecisionAt = databaseDate(legacyOffer?.approved_at);
     await first.sql`
       insert into offer_targets (
         offer_id, product_id, family_slug, match_method, match_confidence
-      ) values (${legacyOffer!.id}, ${product!.id}, null, 'exact_identifier', 100)
+      ) values (${legacyOffer!.id}, ${product!.id}, null, 'human_review', 100)
     `;
     await first.sql`
       insert into offer_conditions (offer_id, condition_type, condition_value)
       values (
         ${legacyOffer!.id}, 'channel',
-        ${first.sql.json({ channels: ["in-store"] })}
+        ${JSON.stringify({ channels: ["in-store"] })}::jsonb
       )
     `;
     await first.sql`
@@ -531,26 +625,26 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
         decision_boundary_version
       ) values (
         ${legacyCandidate!.id}, ${legacyOffer!.id},
-        ${`access:${"b".repeat(64)}`}, 'approve', 0,
-        ${first.sql.json({
+        ${`access:${"b".repeat(64)}`}, 'correct_and_approve', 0,
+        ${JSON.stringify({
           candidateSha256: legacyCandidate!.candidate_sha256,
           contractVersion: 1,
           reviewVersion: 0,
-        })},
-        ${first.sql.json({
+        })}::jsonb,
+        ${JSON.stringify({
           contractVersion: 1,
           reviewVersion: 1,
           state: "approved",
           decision,
           decisionSha256: decisionIdentity!.sha256,
-        })},
-        'Legacy direct-table approval probe', ${legacyDecisionAt}, null
+        })}::jsonb,
+        'Legacy direct-table approval probe', ${iso(legacyDecisionAt)}, null
       )
     `;
     await first.sql`
       update approved_offers set status = 'published' where id = ${legacyOffer!.id}
     `;
-    const legacyQuarantined = await new PostgresPublicOfficialOfferReader(first.db).getMany(
+    const legacyQuarantined = await publicReader.getMany(
       [`product:${product!.id}`],
       await databaseNow(),
     );
@@ -582,7 +676,7 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
         source_id, decision, reviewed_at, valid_until, permissions
       ) values (
         ${sourceId}, 'revoked',
-        ${new Date(reviewedAt.getTime() - 60_000)}, null, '{}'::jsonb
+        ${iso(new Date(reviewedAt.getTime() - 60_000))}, null, '{}'::jsonb
       )
     `.finally(() => {
       revocationSettled = true;
@@ -592,7 +686,13 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
     releaseLock();
     await Promise.all([holding, revocation]);
 
-    expect(await repository.readCurrentPublishedOffers(await databaseNow())).toEqual([]);
+    const afterRevocation = await publicReader.getMany(
+      [`product:${product!.id}`],
+      await databaseNow(),
+    );
+    expect(afterRevocation.offers.filter((currentOffer) =>
+      currentOffer.sourceId === sourceId)).toEqual([]);
+    expect(afterRevocation.sources.filter((source) => source.id === sourceId)).toEqual([]);
     await expect(repository.recordCapture({
       contractVersion: 1,
       publicationId: recordedEdition.id,
@@ -614,15 +714,15 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
         insert into source_permissions (
           source_id, decision, reviewed_at, valid_until, permissions
         ) values (
-          ${sourceId}, 'approved', ${reapprovedAt}, ${reapprovedUntil},
-          ${transaction.json(permissions)}
+          ${sourceId}, 'approved', ${iso(reapprovedAt)}, ${iso(reapprovedUntil)},
+          ${JSON.stringify(permissions)}::jsonb
         )
       `;
       await transaction`
         update data_sources
         set runtime_state = 'approved',
-            permission_reviewed_at = ${reapprovedAt},
-            permission_expires_at = ${reapprovedUntil}
+            permission_reviewed_at = ${iso(reapprovedAt)},
+            permission_expires_at = ${iso(reapprovedUntil)}
         where id = ${sourceId}
       `;
     });

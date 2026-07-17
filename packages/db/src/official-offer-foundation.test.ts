@@ -487,66 +487,10 @@ describe("PostgresOfficialOfferFoundationRepository", () => {
     expect(JSON.stringify(insert?.values)).not.toContain("confirmedAt");
   });
 
-  it("filters expiry and revocation at read time without capture or reviewer exposure", async () => {
-    const database = scriptedDatabase((sql) => sql.includes("from approved_offers offer")
-      ? [{
-          id: "7",
-          offer_key: "synthetic-offer-7",
-          source_reference: "review-candidate:7:v1",
-          source_id: syntheticAuthorizedLocalEdition.sourceId,
-          chain: "extra",
-          geographic_scope_id: "42",
-          amount_ore: 3_990,
-          before_amount_ore: 4_990,
-          multibuy_quantity: null,
-          multibuy_group_amount_ore: null,
-          membership_requirement: "public",
-          valid_from: new Date("2026-07-13T00:00:00.000Z"),
-          valid_until: new Date("2026-07-20T00:00:00.000Z"),
-          product_id: "9",
-          family_slug: null,
-          match_method: "exact_identifier",
-          match_confidence: 100,
-          capture_retrieved_at: new Date("2026-07-12T12:00:30.000Z"),
-          external_id: syntheticAuthorizedLocalEdition.externalEditionId,
-          content_kind: syntheticAuthorizedLocalEdition.contentKind,
-          declared_geographic_scope: syntheticAuthorizedLocalEdition.declaredGeographicScope,
-          review_channels: ["in-store"],
-          member_program_id: null,
-        }]
-      : []);
+  it("does not expose a second current-offer projection beside the canonical reader", () => {
+    const database = scriptedDatabase(() => []);
     const repository = new PostgresOfficialOfferFoundationRepository(database.db);
 
-    const rows = await repository.readCurrentPublishedOffers(
-      new Date("2026-07-17T00:00:00.000Z"),
-    );
-    expect(rows).toHaveLength(1);
-    const read = database.calls.find(({ sql }) => sql.includes("from approved_offers offer"))?.sql
-      ?? "";
-    expect(read).toContain("offer.valid_from <=");
-    expect(read).toContain("offer.valid_until >");
-    expect(read).toContain("source.runtime_state = 'approved'");
-    expect(read).toContain("permission.decision = 'approved'");
-    expect(read).toContain(
-      "order by current_permission.created_at desc, current_permission.id desc",
-    );
-    expect(read).not.toContain("order by current_permission.reviewed_at desc");
-    expect(read).toContain("officialOffers");
-    expect(read).toContain("review_actions");
-    expect(read).toContain("review.offer_id = offer.id");
-    expect(read).toContain("review.expected_version = offer.version - 1");
-    expect(read).toContain("current_review.created_at desc");
-    expect(read).toContain(
-      "order by current_review.created_at desc,\n                 current_review.id desc",
-    );
-    expect(read).not.toContain("order by current_review.expected_version desc");
-    expect(read).not.toContain("current_review.acted_at desc");
-    expect(read).toContain("publication_captures");
-    expect(read).toContain("capture.rights_classification = 'public_display'");
-    expect(read).toContain("limit");
-    expect(read).not.toContain("actor_id");
-    expect(Object.keys(rows[0] ?? {})).not.toEqual(
-      expect.arrayContaining(["candidateId", "reviewerId", "sourceReference"]),
-    );
+    expect("readCurrentPublishedOffers" in repository).toBe(false);
   });
 });
