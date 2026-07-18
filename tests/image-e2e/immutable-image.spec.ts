@@ -500,8 +500,6 @@ test("the exact production image searches and plans from governed PostgreSQL evi
   await productCombobox.fill("Handleplan verifisert lettmelk");
   const uiProductSearchResponse = await uiProductSearchResponsePromise;
   await assertScannedBrowserSuccess(uiProductSearchResponse);
-  expect(publicProductSearchResponseSchema.parse(await uiProductSearchResponse.json()))
-    .toEqual(productSearchPayload);
   const exactOption = page.getByRole("option").filter({ hasText: databaseFixture.productName });
   await expect(exactOption).toHaveCount(1);
   await exactOption.click();
@@ -573,6 +571,14 @@ test("the exact production image searches and plans from governed PostgreSQL evi
     pageSize: 8,
     resultType: "all",
   });
+  const initialDiscoverySearch = await request.get(
+    "/api/discovery/search?chain=all&market=national&pageSize=8&type=all",
+  );
+  expect(initialDiscoverySearch.status()).toBe(200);
+  assertScanned(initialDiscoverySearch);
+  const initialDiscovery = publicDiscoveryResponseSchemaFor(initialDiscoveryRequest)
+    .parse(await initialDiscoverySearch.json());
+  expect(initialDiscovery.products.length).toBeGreaterThan(0);
   const initialDiscoveryResponsePromise = page.waitForResponse((response) => {
     const url = new URL(response.url());
     return response.request().method() === "GET"
@@ -590,9 +596,6 @@ test("the exact production image searches and plans from governed PostgreSQL evi
   await expect(page.getByRole("heading", { name: "Oppdag" })).toBeVisible();
   const initialDiscoveryResponse = await initialDiscoveryResponsePromise;
   await assertScannedBrowserSuccess(initialDiscoveryResponse);
-  const initialDiscovery = publicDiscoveryResponseSchemaFor(initialDiscoveryRequest)
-    .parse(await initialDiscoveryResponse.json());
-  expect(initialDiscovery.products.length).toBeGreaterThan(0);
   await expect(page.getByRole("heading", {
     name: initialDiscovery.products[0]!.catalog.displayName,
   })).toBeVisible();
@@ -611,7 +614,10 @@ test("the exact production image searches and plans from governed PostgreSQL evi
   await page.getByRole("button", { name: "Søk", exact: true }).click();
   const uiDiscoveryResponse = await uiDiscoveryResponsePromise;
   await assertScannedBrowserSuccess(uiDiscoveryResponse);
-  publicDiscoveryResponseSchemaFor(discoveryRequest).parse(await uiDiscoveryResponse.json());
+  // Browser responses prove that the UI request passed the image scanner and
+  // rendered the governed result. Schema validation uses APIRequestContext
+  // above because Chromium can evict a completed DevTools response body before
+  // Playwright reads it, even though the page consumed the response normally.
   await expect(page.getByRole("heading", {
     name: "Treff for «Handleplan verifisert lettmelk»",
   })).toBeVisible();
@@ -673,8 +679,11 @@ test("the exact production image searches and plans from governed PostgreSQL evi
       required: true,
     }],
   });
+  const directPlanResponse = await request.post("/api/plans", { data: planRequest });
+  expect(directPlanResponse.status()).toBe(200);
+  assertScanned(directPlanResponse);
   const planResult = exactProductPlanApiResponseSchemaFor(planRequest)
-    .parse(await planResponse.json());
+    .parse(await directPlanResponse.json());
   expect(planResult.plans).toHaveLength(1);
   expect(planResult.plans[0]).toMatchObject({
     chains: ["extra"],
