@@ -1,7 +1,7 @@
 {
   "contractVersion": 1,
   "generatedFrom": "installed frozen pnpm dependency manifests",
-  "inventorySha256": "0737c7596ba2a1fecca07661c28ba685a08b597c866bd8667aee672804ec1167",
+  "inventorySha256": "35be5a87c19b5ce6ab02ef203b63ab389205825a0eb6fb7743a5489de12f6139",
   "licenseCounts": {
     "0BSD": 1,
     "Apache-2.0": 29,
@@ -11,14 +11,14 @@
     "CC-BY-4.0": 1,
     "CC0-1.0": 2,
     "ISC": 16,
-    "MIT": 381,
+    "MIT": 379,
     "MIT-0": 2,
     "MPL-2.0": 3,
     "Python-2.0": 1,
     "Unlicense": 1
   },
-  "lockfileSha256": "0b41617cf68e209e55bd86863ea16114249dc194734cf0345cee11e0947cd0f9",
-  "packageCount": 453,
+  "lockfileSha256": "86c22aa3aa0df1c87e420805da343580abe3375b190b21e56772db5d1a71d872",
+  "packageCount": 451,
   "packages": [
     {
       "license": "MIT",
@@ -928,11 +928,6 @@
     {
       "license": "MIT",
       "name": "esbuild",
-      "version": "0.18.20"
-    },
-    {
-      "license": "MIT",
-      "name": "esbuild",
       "version": "0.25.12"
     },
     {
@@ -1749,11 +1744,6 @@
       "license": "MIT",
       "name": "possible-typed-array-names",
       "version": "1.1.0"
-    },
-    {
-      "license": "MIT",
-      "name": "postcss",
-      "version": "8.4.31"
     },
     {
       "license": "MIT",
