@@ -106,8 +106,17 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       `;
     }
 
-    async function databaseClock(): Promise<Date> {
-      const [clock] = await admin.sql`select clock_timestamp() as current_time`;
+    async function databaseClock(
+      options: { afterCommittedWrite?: boolean } = {},
+    ): Promise<Date> {
+      // PostgreSQL retains microseconds while the driver returns a millisecond
+      // JS Date. Pad only post-write snapshots so a row created in the same
+      // millisecond cannot fall just beyond the serialized evaluation clock.
+      const offsetMilliseconds = options.afterCommittedWrite === true ? 1 : 0;
+      const [clock] = await admin.sql`
+        select clock_timestamp()
+          + (${offsetMilliseconds}::integer * interval '1 millisecond') as current_time
+      `;
       const current = clock?.current_time instanceof Date
         ? clock.current_time
         : new Date(String(clock?.current_time));
@@ -461,7 +470,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         returning created_at > ${snapshotAt.toISOString()}::timestamptz as created_later
       `;
       expect(futureRevocation?.created_later).toBe(true);
-      const afterFutureAt = await databaseClock();
+      const afterFutureAt = await databaseClock({ afterCommittedWrite: true });
       await expect(reader.loadEligibleBranches({
         eligibleChainIds: ["extra"],
         evaluatedAt: afterFutureAt,
@@ -489,7 +498,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         marketContext,
       })).resolves.toEqual(baseline);
 
-      const currentAt = await databaseClock();
+      const currentAt = await databaseClock({ afterCommittedWrite: true });
 
       await expect(reader.loadEligibleBranches({
         eligibleChainIds: ["extra"],
