@@ -1,0 +1,344 @@
+{
+  "$schema": "../../../release/v1-candidate-manifest.schema.json",
+  "manifestVersion": "1.0.0",
+  "candidateId": "v1-source-neutral-pg-remediation-2026-07-17",
+  "mode": "draft_unverified",
+  "createdAt": "2026-07-17T12:17:27.527Z",
+  "releaseDecision": "blocked",
+  "source": {
+    "commitSha": "80b9e1f46762d0c43a7dffc799ebf54b13295c2d",
+    "treeState": "dirty",
+    "commitBinding": "baseline_only"
+  },
+  "image": {
+    "repository": null,
+    "manifestDigest": null,
+    "digestKind": "oci_manifest",
+    "immutableReference": null,
+    "registryReadbackEvidenceId": null,
+    "promoted": false
+  },
+  "database": {
+    "startingState": {
+      "kind": "unverified",
+      "identifier": null
+    },
+    "migrations": [
+      {
+        "path": "deploy/migrations/001_price_cache.sql",
+        "sha256": "c1803a5179f3379a19fd3384561ee25ba8fc46dfa70779d63bd06f034ea20d9a"
+      },
+      {
+        "path": "deploy/migrations/002_sources_catalog.sql",
+        "sha256": "c5c5e7f7864cb1701835a7b93761545a4627a2e1b6f983ea53e64a13a61d3a05"
+      },
+      {
+        "path": "deploy/migrations/003_price_evidence_coverage.sql",
+        "sha256": "5e9ac6e2c21b2290d0160f45aa4c76c3b47a36ecbd3f738774faa80ab93f0f06"
+      },
+      {
+        "path": "deploy/migrations/004_geography_publications.sql",
+        "sha256": "f49d9d2ab8cd3f4e47f2453bd6d2b2d8313e94d8bda0ff1e53996b351ffe5943"
+      },
+      {
+        "path": "deploy/migrations/005_offers_reviews.sql",
+        "sha256": "e60b9d73561fc5c0e72ac5f5d0495b7c34dc8134ceba57f3e96871fa0b6b73bd"
+      },
+      {
+        "path": "deploy/migrations/006_source_health.sql",
+        "sha256": "490910604aa75a68910b22e5f4af1638890b2baf13b887a5233c7de1b14719dc"
+      },
+      {
+        "path": "deploy/migrations/007_append_only_guards.sql",
+        "sha256": "9c6ac9301b3a11dbbd800c6da87e57e811c2a9e37b4365ccbbfbcb95f977cb87"
+      },
+      {
+        "path": "deploy/migrations/008_provider_request_budget.sql",
+        "sha256": "4c51a2d5443b01323a36104eaff1d1c9fdc0f637fc2ef98c9a705621315d37ec"
+      },
+      {
+        "path": "deploy/migrations/009_ingestion_outcomes.sql",
+        "sha256": "b35d2c465283c7fd514f41566a0e514b896e31a5831cf0c9fef77e3b012dc469"
+      },
+      {
+        "path": "deploy/migrations/010_worker_job_results.sql",
+        "sha256": "8c99f7a11d8c33825c8e90d12f77ffb58a42d6b23d622447720c846cb586d6b4"
+      },
+      {
+        "path": "deploy/migrations/011_catalog_observations.sql",
+        "sha256": "0c5a8b06b9b71859990366864351705d772e6d47bbd2047fa839fef318d38dec"
+      },
+      {
+        "path": "deploy/migrations/012_reviewed_family_taxonomy.sql",
+        "sha256": "70101ad7f170617de7d26614661c69e208293601388f6259c6441a40c941fda3"
+      },
+      {
+        "path": "deploy/migrations/013_physical_store_directory.sql",
+        "sha256": "5a223d407b24d9848f35336ede86c8ab2be456273ac44e17b69860cf7d1a9088"
+      },
+      {
+        "path": "deploy/migrations/014_ingestion_completion_clock.sql",
+        "sha256": "52808f3e778e129a84928994f1d47acde58e134438aa390458506b2ee23b4a7a"
+      },
+      {
+        "path": "deploy/migrations/015_catalog_category_path.sql",
+        "sha256": "4a94b671f6a45cc04a0563a45952468a123a372381cbbccd33a0222cffbb79d6"
+      },
+      {
+        "path": "deploy/migrations/016_worker_source_health.sql",
+        "sha256": "bc84b6b41db1ea5ef01e3c60eb84b9be3027d728f9989362548bc199cd055d1a"
+      },
+      {
+        "path": "deploy/migrations/017_geographic_directory_region_proof.sql",
+        "sha256": "4fe8c7ce3aefb46d2af7f335f30b789d9a25bd662884713619247fdb448368c8"
+      },
+      {
+        "path": "deploy/migrations/018_review_candidate_immutability.sql",
+        "sha256": "67ebf517236564b41d825da519d9d10b524f6c34119288f02bbca2711a10c307"
+      },
+      {
+        "path": "deploy/migrations/019_public_api_request_budget.sql",
+        "sha256": "7ffc33c1e129134570437bbe6b2f185b4130734f1a55a7184e33edb1aed70f05"
+      },
+      {
+        "path": "deploy/migrations/020_official_offer_trust_fences.sql",
+        "sha256": "203a5c5b66b2ebdd50f9e2a94f7477d2b0b9c3c253f893744fa5d7d90ee2c931"
+      },
+      {
+        "path": "deploy/migrations/021_private_review_decision_boundary.sql",
+        "sha256": "6f34f5e4b211378942d4dabc9b95bbb0bbe66968b8fc8c3f2ff7138244443f3b"
+      },
+      {
+        "path": "deploy/migrations/022_public_official_offer_projection.sql",
+        "sha256": "4fb9f560ff89f062bf0a025118d582f7c3b3b60f63ce5b5917a91f63c6427249"
+      },
+      {
+        "path": "deploy/migrations/023_official_offer_worker_jobs.sql",
+        "sha256": "2eaf73fcc4298a308ba7e8074cb6a2a44ad11b9a23a18b940083d4bd35f5f15a"
+      },
+      {
+        "path": "deploy/migrations/024_operations_runtime_boundary.sql",
+        "sha256": "15df6f98c99fc81bb4750169613f288d9cb4b640d5f020bbdf648ad189b34336"
+      },
+      {
+        "path": "deploy/migrations/025_private_review_evidence_renderer.sql",
+        "sha256": "3d4da7bd3c35cce0393b0a98e52dea02f2b3a3c15425a623330ff443871e6417"
+      },
+      {
+        "path": "deploy/migrations/026_official_offer_publication_runtime.sql",
+        "sha256": "fd9b961e452e5ad2d42bca44a2d619321be78c7f93e9f97732e7f443a7c119de"
+      }
+    ]
+  },
+  "sourceRegistry": {
+    "path": "docs/data/source-registry.v1.json",
+    "version": "1.0.0",
+    "sha256": "67e6d94bbdc00a76f8d6ba140b183546a59df6e1e007e0d209718797166394fe"
+  },
+  "coverageManifest": {
+    "path": "docs/data/launch-coverage.v1.json",
+    "version": "1.0.0",
+    "sha256": "9b1dad9a78392e49e3cbb034e8c6e875f9bd0b010c6c8772f70ae668947e400a"
+  },
+  "evidence": {
+    "ci": [
+      {
+        "id": "candidate-ci",
+        "status": "unverified",
+        "command": "corepack pnpm install --frozen-lockfile && corepack pnpm lint && corepack pnpm typecheck && corepack pnpm test && corepack pnpm build",
+        "environment": "candidate-current GitHub Actions runner",
+        "artifact": null,
+        "sha256": null,
+        "reviewedAt": null
+      }
+    ],
+    "tests": [
+      {
+        "id": "database-acceptance",
+        "status": "unverified",
+        "command": "node tests/acceptance/prove-database-upgrade.mjs",
+        "environment": "candidate-current CI PostgreSQL",
+        "artifact": null,
+        "sha256": null,
+        "reviewedAt": null
+      },
+      {
+        "id": "browser-acceptance",
+        "status": "unverified",
+        "command": "corepack pnpm e2e",
+        "environment": "candidate-current production build in Chromium, Firefox, and WebKit",
+        "artifact": null,
+        "sha256": null,
+        "reviewedAt": null
+      },
+      {
+        "id": "regional-basket-oracle",
+        "status": "unverified",
+        "command": "candidate release regional basket reconciliation protocol",
+        "environment": "rights-cleared supported-region corpus",
+        "artifact": null,
+        "sha256": null,
+        "reviewedAt": null
+      }
+    ],
+    "scans": [
+      {
+        "id": "dependency-and-secret-scans",
+        "status": "unverified",
+        "command": "corepack pnpm security:audit && corepack pnpm security:licenses && corepack pnpm security:secrets",
+        "environment": "candidate-current frozen dependency graph and repository",
+        "artifact": null,
+        "sha256": null,
+        "reviewedAt": null
+      },
+      {
+        "id": "container-scan",
+        "status": "unverified",
+        "command": "trivy image --exit-code 1 --severity HIGH,CRITICAL $HANDLEPLAN_IMMUTABLE_IMAGE",
+        "environment": "candidate-current immutable registry image",
+        "artifact": null,
+        "sha256": null,
+        "reviewedAt": null
+      },
+      {
+        "id": "supply-chain-attestations",
+        "status": "unverified",
+        "command": "corepack pnpm security:sbom && corepack pnpm security:provenance",
+        "environment": "candidate-current CI build from an exact git archive",
+        "artifact": null,
+        "sha256": null,
+        "reviewedAt": null
+      }
+    ],
+    "reviews": [
+      {
+        "id": "manual-rights-legal-device-reviews",
+        "status": "unverified",
+        "command": "candidate release manual rights, legal, governance, accessibility, device, and basket review protocols",
+        "environment": "named candidate-current reviewers and physical devices where required",
+        "artifact": null,
+        "sha256": null,
+        "reviewedAt": null
+      }
+    ]
+  },
+  "backup": {
+    "status": "missing",
+    "identifier": null,
+    "createdAt": null,
+    "restoreTestedAt": null,
+    "artifact": null,
+    "sha256": null
+  },
+  "supportedRegions": [],
+  "attestations": {
+    "sbom": {
+      "status": "missing",
+      "subjectCommitSha": null,
+      "artifact": null,
+      "sha256": null
+    },
+    "provenance": {
+      "status": "missing",
+      "subjectCommitSha": null,
+      "subjectManifestDigest": null,
+      "artifact": null,
+      "sha256": null
+    },
+    "imageSignature": {
+      "status": "missing",
+      "subjectManifestDigest": null,
+      "artifact": null,
+      "sha256": null,
+      "signer": null,
+      "verifiedAt": null
+    }
+  },
+  "gates": [
+    {
+      "id": "G1",
+      "status": "not_started",
+      "evidenceIds": []
+    },
+    {
+      "id": "G2",
+      "status": "not_started",
+      "evidenceIds": []
+    },
+    {
+      "id": "G3",
+      "status": "not_started",
+      "evidenceIds": []
+    },
+    {
+      "id": "G4",
+      "status": "not_started",
+      "evidenceIds": []
+    },
+    {
+      "id": "G5",
+      "status": "not_started",
+      "evidenceIds": []
+    },
+    {
+      "id": "G6",
+      "status": "not_started",
+      "evidenceIds": []
+    },
+    {
+      "id": "G7",
+      "status": "not_started",
+      "evidenceIds": []
+    },
+    {
+      "id": "G8",
+      "status": "not_started",
+      "evidenceIds": []
+    },
+    {
+      "id": "G9",
+      "status": "not_started",
+      "evidenceIds": []
+    },
+    {
+      "id": "G10",
+      "status": "not_started",
+      "evidenceIds": []
+    },
+    {
+      "id": "G11",
+      "status": "not_started",
+      "evidenceIds": []
+    },
+    {
+      "id": "G12",
+      "status": "not_started",
+      "evidenceIds": []
+    }
+  ],
+  "missingOrUnverifiedGateIds": [
+    "G1",
+    "G2",
+    "G3",
+    "G4",
+    "G5",
+    "G6",
+    "G7",
+    "G8",
+    "G9",
+    "G10",
+    "G11",
+    "G12"
+  ],
+  "limitations": [
+    "This generated file records a dirty working-tree milestone; the commit is a baseline only and does not identify the uncommitted source bytes.",
+    "No immutable OCI manifest digest has been built, scanned, signed, promoted, or read back from preview or production.",
+    "No candidate-current CI, full browser matrix, live PostgreSQL migration, or regional basket artifact is retained here.",
+    "No encrypted off-host backup identifier or isolated restore evidence exists.",
+    "No retained verified SBOM, signed provenance, or verified image signature exists.",
+    "The bound coverage manifest selects no supported launch region.",
+    "All twelve public-release gates are not started for this candidate.",
+    "Promotion verification is intentionally unsupported until source and evidence commits are split, registry and signature proofs are verified independently, and G1-G12 have gate-specific evidence contracts.",
+    "This draft is not a release, deployment record, or public-launch authorization."
+  ]
+}

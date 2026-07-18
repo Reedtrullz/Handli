@@ -1,5 +1,6 @@
 import {
-  planRequestSchema,
+  sourceNeutralPlanRequestSchema,
+  MAX_PERSISTED_MONEY_ORE,
   type MatchRule,
   type MoneyOre,
   type Need,
@@ -7,14 +8,15 @@ import {
   type PlanResult,
   type PriceObservation,
 } from "./contracts";
+import { calculatePackageFulfilment, type Fulfilment } from "./fulfilment";
 import { matchProducts } from "./matching";
 import { classifyFreshness } from "./price-eligibility";
 
 type Chain = PriceObservation["chain"];
-type Assignment = PlanResult["assignments"][number];
+type Assignment<SourceId extends string> = PlanResult<SourceId>["assignments"][number];
 
-interface AssignmentCandidate {
-  assignment: Assignment;
+interface AssignmentCandidate<SourceId extends string> {
+  assignment: Assignment<SourceId>;
 }
 
 const CHAIN_ORDER: readonly Chain[] = ["bunnpris", "extra", "rema-1000"];
@@ -54,7 +56,10 @@ function combinations(chains: readonly Chain[], maximum: number): Chain[][] {
   return result;
 }
 
-function compareCandidates(left: AssignmentCandidate, right: AssignmentCandidate): number {
+function compareCandidates<SourceId extends string>(
+  left: AssignmentCandidate<SourceId>,
+  right: AssignmentCandidate<SourceId>,
+): number {
   return (
     left.assignment.costOre - right.assignment.costOre ||
     compareText(left.assignment.ean, right.assignment.ean) ||
@@ -63,17 +68,19 @@ function compareCandidates(left: AssignmentCandidate, right: AssignmentCandidate
   );
 }
 
-function assignmentKey(assignment: Assignment): string {
+function assignmentKey<SourceId extends string>(assignment: Assignment<SourceId>): string {
   return [
     assignment.needId,
     assignment.ean,
     assignment.chain,
     assignment.quantity,
     assignment.costOre,
+    assignment.fulfilment?.packageCount ?? "legacy",
+    assignment.fulfilment?.surplusAmount ?? "legacy",
   ].join(":");
 }
 
-function planIdentity(assignments: readonly Assignment[]): string {
+function planIdentity<SourceId extends string>(assignments: readonly Assignment<SourceId>[]): string {
   return assignments.map(assignmentKey).join("|");
 }
 
@@ -90,15 +97,15 @@ function stableHash(value: string): string {
   return `${(first >>> 0).toString(36)}${(second >>> 0).toString(36)}`;
 }
 
-function planForSubset(
+function planForSubset<SourceId extends string>(
   requiredNeeds: readonly Need[],
   rulesById: ReadonlyMap<string, MatchRule>,
-  request: PlanRequest,
-  eligiblePrices: readonly PriceObservation[],
+  request: PlanRequest<SourceId>,
+  eligiblePrices: readonly PriceObservation<SourceId>[],
   subset: readonly Chain[],
-): PlanResult | undefined {
+): PlanResult<SourceId> | undefined {
   const subsetSet = new Set(subset);
-  const assignments: Assignment[] = [];
+  const assignments: Assignment<SourceId>[] = [];
   const substitutions: string[] = [];
   const freshness: Record<string, string> = {};
 
@@ -111,15 +118,45 @@ function planForSubset(
     const matchingEans = new Set(
       matchProducts(need, rule, request.products).map(({ ean }) => ean),
     );
-    const candidates: AssignmentCandidate[] = [];
+    const productsByEan = new Map(request.products.map((product) => [product.ean, product]));
+    const candidates: AssignmentCandidate<SourceId>[] = [];
 
     for (const observation of eligiblePrices) {
       if (!subsetSet.has(observation.chain) || !matchingEans.has(observation.ean)) {
         continue;
       }
 
-      const cost = observation.amountOre * need.quantity;
-      if (!Number.isSafeInteger(cost) || cost < 0) {
+      let packageCount = need.quantity;
+      let fulfilment: Fulfilment | undefined;
+      if (need.quantityUnit !== "each") {
+        const product = productsByEan.get(observation.ean);
+        if (
+          product?.packageQuantity === undefined
+          || product.packageUnit !== need.quantityUnit
+          || !Number.isSafeInteger(product.packageQuantity)
+        ) {
+          continue;
+        }
+        const calculated = calculatePackageFulfilment({
+          canonicalProductId: product.ean,
+          needId: need.id,
+          requested: { amount: need.quantity, unit: need.quantityUnit },
+          packageMeasure: {
+            amount: product.packageQuantity,
+            unit: product.packageUnit,
+          },
+        });
+        if (calculated.state !== "complete") continue;
+        fulfilment = calculated.fulfilment;
+        packageCount = fulfilment.packageCount;
+      }
+
+      const cost = observation.amountOre * packageCount;
+      if (
+        !Number.isSafeInteger(cost)
+        || cost < 0
+        || cost > MAX_PERSISTED_MONEY_ORE
+      ) {
         continue;
       }
 
@@ -132,6 +169,7 @@ function planForSubset(
           costOre: cost as MoneyOre,
           observedAt: observation.observedAt,
           source: observation.source,
+          ...(fulfilment === undefined ? {} : { fulfilment }),
         },
       });
     }
@@ -152,7 +190,7 @@ function planForSubset(
   substitutions.sort(compareText);
 
   const total = assignments.reduce((sum, assignment) => sum + assignment.costOre, 0);
-  if (!Number.isSafeInteger(total) || total < 0) {
+  if (!Number.isSafeInteger(total) || total < 0 || total > MAX_PERSISTED_MONEY_ORE) {
     return undefined;
   }
 
@@ -173,7 +211,10 @@ function planForSubset(
   };
 }
 
-function dominates(left: PlanResult, right: PlanResult): boolean {
+function dominates<SourceId extends string>(
+  left: PlanResult<SourceId>,
+  right: PlanResult<SourceId>,
+): boolean {
   const noWorse =
     left.totalOre <= right.totalOre &&
     left.chains.length <= right.chains.length &&
@@ -186,7 +227,10 @@ function dominates(left: PlanResult, right: PlanResult): boolean {
   return noWorse && strictlyBetter;
 }
 
-function comparePlans(left: PlanResult, right: PlanResult): number {
+function comparePlans<SourceId extends string>(
+  left: PlanResult<SourceId>,
+  right: PlanResult<SourceId>,
+): number {
   return (
     left.chains.length - right.chains.length ||
     left.substitutions.length - right.substitutions.length ||
@@ -195,21 +239,24 @@ function comparePlans(left: PlanResult, right: PlanResult): number {
   );
 }
 
-export function calculatePlans(request: PlanRequest, now: Date): PlanResult[] {
+export function calculatePlans<SourceId extends string = "kassalapp">(
+  request: PlanRequest<SourceId>,
+  now: Date,
+): PlanResult<SourceId>[] {
   if (!Number.isFinite(now.getTime())) {
     return [];
   }
 
-  const parsed = planRequestSchema.safeParse(request);
+  const parsed = sourceNeutralPlanRequestSchema.safeParse(request);
   if (!parsed.success) {
     return [];
   }
-  const validated = parsed.data;
+  const validated = parsed.data as PlanRequest<SourceId>;
 
   if (
     !hasUniqueIds(validated.needs) ||
     !hasUniqueIds(validated.matchingRules) ||
-    validated.needs.some(({ quantity, quantityUnit, required }) => !Number.isSafeInteger(quantity) || (required && quantityUnit !== "each"))
+    validated.needs.some(({ quantity }) => !Number.isSafeInteger(quantity))
   ) {
     return [];
   }
@@ -233,9 +280,9 @@ export function calculatePlans(request: PlanRequest, now: Date): PlanResult[] {
     .map((subset) =>
       planForSubset(requiredNeeds, rulesById, validated, eligiblePrices, subset),
     )
-    .filter((plan): plan is PlanResult => plan !== undefined);
+    .filter((plan): plan is PlanResult<SourceId> => plan !== undefined);
 
-  const uniqueAssignments = new Map<string, PlanResult>();
+  const uniqueAssignments = new Map<string, PlanResult<SourceId>>();
   for (const plan of plans.sort(comparePlans)) {
     uniqueAssignments.set(planIdentity(plan.assignments), plan);
   }

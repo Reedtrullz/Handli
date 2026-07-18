@@ -1,20 +1,45 @@
 {
   "name": "handleplan",
   "private": true,
+  "license": "AGPL-3.0-or-later",
   "packageManager": "pnpm@10.34.5",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
+    "acceptance:v1-baskets:check": "node tests/acceptance/check-v1-baskets.mjs",
+    "acceptance:v1-baskets:test": "node --test tests/acceptance/v1-basket-runner.test.mjs",
     "build": "pnpm --filter web build",
     "dev": "pnpm --filter web dev",
     "e2e": "playwright test",
+    "e2e:handlemodus": "pnpm --filter web test:handlemodus:browser",
+    "e2e:image": "playwright test --config playwright.image.config.ts",
+    "e2e:public-lifecycle": "node --test tests/build/public-harness-lifecycle.test.mjs",
     "lint": "pnpm -r lint",
-    "test": "pnpm -r test",
-    "typecheck": "pnpm -r typecheck"
+    "operations:backup:test": "node --check deploy/backup/toolkit.mjs && node --check deploy/backup/private-capture-archive.mjs && node --check deploy/backup/create-backup.mjs && node --check deploy/backup/verify-restore.mjs && node --test tests/operations/backup-tooling.test.mjs tests/operations/private-capture-archive.test.mjs",
+    "operations:image:test": "node --check scripts/operations/verify-production-image.mjs && node --check scripts/operations/verify-ci-image-bundle.mjs && node --check tests/image-e2e/start-production-image.mjs && node --test tests/operations/production-image-contract.test.mjs tests/operations/ci-image-bundle-verifier.test.mjs",
+    "operations:monitor:test": "node --check scripts/operations/check-public-monitor.mjs && node --test tests/operations/public-monitor.test.mjs",
+    "release:manifest:draft": "node scripts/release/generate-v1-draft-manifest.mjs",
+    "release:manifest:test": "node --test tests/release/v1-candidate-manifest.test.mjs",
+    "release:manifest:verify": "node scripts/release/verify-v1-candidate-manifest.mjs",
+    "security:audit": "pnpm audit --audit-level high",
+    "security:licenses": "node scripts/security/check-licenses.mjs",
+    "security:licenses:write": "node scripts/security/check-licenses.mjs --write",
+    "security:provenance": "node scripts/security/generate-build-provenance.mjs .artifacts/security/handleplan-image.docker.tar .artifacts/security/handleplan.provenance.json",
+    "security:scripts:test": "node --test tests/security/security-scripts.test.mjs",
+    "security:sbom": "node scripts/security/generate-sbom.mjs .artifacts/security/handleplan.spdx.json",
+    "security:secrets": "node scripts/security/scan-secrets.mjs",
+    "test": "pnpm -r test && node --test tests/build/public-build-binding.test.mjs tests/operations/production-image-contract.test.mjs tests/operations/ci-image-bundle-verifier.test.mjs",
+    "typecheck": "pnpm -r typecheck",
+    "validate:v1-data": "node tests/acceptance/validate-v1-data.mjs"
+  },
+  "dependencies": {
+    "postgres": "3.4.9"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.11.0",
-    "@playwright/test": "1.58.0"
+    "@playwright/test": "1.58.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1"
   }
 }

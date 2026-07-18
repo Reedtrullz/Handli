@@ -1,0 +1,17 @@
+services:
+  app:
+    environment:
+      APP_COMMIT_SHA: ${APP_COMMIT_SHA:?APP_COMMIT_SHA is required}
+      DATABASE_URL: postgresql://handleplan_web:${WEB_DATABASE_PASSWORD:?WEB_DATABASE_PASSWORD is required}@postgres:5432/handleplan
+      # Old production images require real-mode variables at startup. Keep that
+      # compatibility without restoring either worker write authority or a live
+      # source credential: the web role cannot claim a provider budget slot and
+      # a closed loopback port is a second fail-closed boundary.
+      KASSAL_API_KEY: legacy-rollback-network-disabled
+      KASSAL_BASE_URL: https://127.0.0.1:1
+      KASSAL_MODE: real
+      NEXT_TELEMETRY_DISABLED: "1"
+      NODE_ENV: production
+      PRICE_EVIDENCE_READ_MODEL: ${PRICE_EVIDENCE_READ_MODEL:-legacy}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health | grep -q '\"status\":\"ok\"'"]

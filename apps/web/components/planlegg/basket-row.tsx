@@ -3,13 +3,27 @@
 import type { MatchRule, Need, Product } from "@handleplan/domain";
 import { useState } from "react";
 
-import { BASKET_QUANTITY_MAX, BASKET_QUANTITY_MIN } from "../../lib/browser-basket";
+import { type BrowserFamilyConfirmation } from "../../lib/browser-basket";
+import {
+  basketQuantityCopy,
+  basketQuantityDraft,
+  basketQuantityErrorCopy,
+  parseBasketQuantityInput,
+  type BasketCanonicalQuantityUnit,
+  type BasketQuantityInputUnit,
+} from "../../lib/basket-quantity";
+import { QuantityControl } from "./quantity-control";
 
 interface BasketRowProps {
   need: Need;
   rule: MatchRule;
   product?: Product;
-  onQuantityChange: (quantity: number) => void;
+  familyConfirmation?: BrowserFamilyConfirmation;
+  onQuantityChange: (
+    quantity: number,
+    quantityUnit: BasketCanonicalQuantityUnit,
+  ) => void;
+  onQuantityValidityChange: (valid: boolean) => void;
   onRemove: () => void;
 }
 
@@ -17,52 +31,80 @@ export function BasketRow({
   need,
   rule,
   product,
+  familyConfirmation,
   onQuantityChange,
+  onQuantityValidityChange,
   onRemove,
 }: BasketRowProps) {
-  const [quantityDraft, setQuantityDraft] = useState(String(need.quantity));
+  const initialQuantity = basketQuantityDraft(need.quantity, need.quantityUnit);
+  const [quantityAmount, setQuantityAmount] = useState(initialQuantity.amount);
+  const [quantityInputUnit, setQuantityInputUnit] = useState<BasketQuantityInputUnit>(
+    initialQuantity.inputUnit,
+  );
+  const [legacyEach, setLegacyEach] = useState(initialQuantity.legacyEach);
 
   const label = product?.name ?? need.query;
   const matchLabel =
     rule.mode === "exact"
       ? "Eksakt produkt"
-      : rule.mode === "flexible"
-        ? "Samme type, valgfritt merke"
-        : "Valgfritt merke";
-  const explanation = rule.mode === "exact" ? `Låst til ${product?.name ?? need.query}` : rule.explanation;
+      : familyConfirmation === undefined
+        ? "Må godkjennes på nytt"
+        : "Gjennomgått varetype";
+  const explanation = rule.mode === "exact"
+    ? `Låst til ${product?.name ?? need.query}`
+    : familyConfirmation === undefined
+      ? "Eldre fleksibelt valg uten publisert kandidatbekreftelse"
+      : `${familyConfirmation.candidateCount} ${familyConfirmation.candidateCount === 1 ? "godkjent kandidat" : "godkjente kandidater"}${familyConfirmation.allowedBrands === undefined ? ", valgfritt merke" : `: ${familyConfirmation.allowedBrands.join(" eller ")}`}`;
 
-  function commitQuantity(): void {
-    const quantity = Number(quantityDraft);
-    if (
-      Number.isSafeInteger(quantity) &&
-      quantity >= BASKET_QUANTITY_MIN &&
-      quantity <= BASKET_QUANTITY_MAX
-    ) {
-      onQuantityChange(quantity);
-    } else {
-      setQuantityDraft(String(need.quantity));
-    }
+  const parsedQuantity = parseBasketQuantityInput(quantityAmount, quantityInputUnit);
+
+  function changeAmount(amount: string): void {
+    setQuantityAmount(amount);
+    const parsed = parseBasketQuantityInput(amount, quantityInputUnit);
+    onQuantityValidityChange(parsed !== undefined);
+    if (parsed === undefined) return;
+    setLegacyEach(false);
+    onQuantityChange(parsed.quantity, parsed.quantityUnit);
+  }
+
+  function changeInputUnit(inputUnit: BasketQuantityInputUnit, amount: string): void {
+    setQuantityInputUnit(inputUnit);
+    setQuantityAmount(amount);
+    const parsed = parseBasketQuantityInput(amount, inputUnit);
+    onQuantityValidityChange(parsed !== undefined);
+    if (parsed === undefined) return;
+    setLegacyEach(false);
+    onQuantityChange(parsed.quantity, parsed.quantityUnit);
   }
 
   return (
     <li className="basket-row" aria-label={label}>
-      <input
-        className="row-quantity"
-        type="number"
-        min={BASKET_QUANTITY_MIN}
-        max={BASKET_QUANTITY_MAX}
-        step="1"
-        inputMode="numeric"
-        aria-label={`Antall ${label}`}
-        value={quantityDraft}
-        onChange={(event) => setQuantityDraft(event.target.value)}
-        onBlur={commitQuantity}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") event.currentTarget.blur();
-        }}
-      />
+      <div className="basket-row-quantity">
+        <QuantityControl
+          amount={quantityAmount}
+          inputUnit={quantityInputUnit}
+          label={label}
+          onAmountChange={changeAmount}
+          onInputUnitChange={changeInputUnit}
+        />
+        {parsedQuantity === undefined ? (
+          <small className="quantity-error" role="alert">
+            {basketQuantityErrorCopy(quantityInputUnit)}
+          </small>
+        ) : null}
+        {legacyEach ? (
+          <small className="quantity-guidance">
+            Eldre «antall» vises som pakker, i tråd med den opprinnelige planbetydningen.
+          </small>
+        ) : null}
+      </div>
       <div className="basket-row-copy">
         <strong>{label}</strong>
+        <span className="basket-quantity-copy">
+          Behov: {parsedQuantity === undefined
+            ? "ugyldig mengde"
+            : basketQuantityCopy(parsedQuantity.quantity, parsedQuantity.quantityUnit)}
+        </span>
         <div className="match-copy">
           <span className="match-badge">{matchLabel}</span>
           {explanation !== matchLabel ? <span>{explanation}</span> : null}

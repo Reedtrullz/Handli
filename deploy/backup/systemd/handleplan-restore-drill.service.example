@@ -1,0 +1,39 @@
+# Example only. Manual isolated drill; never attach this unit to a timer.
+[Unit]
+Description=Handleplan isolated database restore drill
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=handleplan-restore
+Group=handleplan-restore
+KillMode=control-group
+Environment=HANDLEPLAN_RESTORE_DRILL_ENABLED=false
+EnvironmentFile=-/run/handleplan-restore/restore-drill.env
+ExecStart=/usr/bin/node /opt/apps/handleplan/operations/current/deploy/backup/verify-restore.mjs
+UMask=0077
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadOnlyPaths=/opt/apps/handleplan/operations /run/handleplan-restore
+ReadWritePaths=/var/lib/handleplan-restore
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+TimeoutStartSec=2h
+TimeoutStopSec=10s
+LimitCORE=0
+LimitFSIZE=16G

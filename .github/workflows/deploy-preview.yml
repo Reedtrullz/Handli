@@ -4,9 +4,9 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
-  workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -16,23 +16,165 @@ concurrency:
 jobs:
   deploy:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'main')
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The worker readback allows one bounded 55-minute cycle, with margin for
+    # image transfer/load, migrations, verification, and a possible rollback.
+    timeout-minutes: 120
     environment:
       name: preview
       url: https://handle.reidar.tech
     env:
-      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      CI_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+      CI_RUN_ID: ${{ github.event.workflow_run.id }}
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
 
     steps:
       - name: Check out the exact verified revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ env.DEPLOY_SHA }}
+
+      - name: Use the exact release-verifier Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.22.3
+
+      - name: Install the exact release-verifier dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Download image bundle from the exact successful CI run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: handleplan-ci-image-${{ env.DEPLOY_SHA }}-attempt-${{ env.CI_RUN_ATTEMPT }}
+          path: deployment-artifact
+          repository: ${{ github.repository }}
+          run-id: ${{ env.CI_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Verify the CI image bundle before VPS transfer
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CI_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+          git diff --quiet
+          git diff --cached --quiet
+
+          artifact_dir=deployment-artifact
+          manifest="$artifact_dir/handleplan-image-bundle.v1"
+          image_archive="$artifact_dir/handleplan-image.docker.tar"
+          source_archive="$artifact_dir/handleplan-source.tar"
+          provenance="$artifact_dir/handleplan.provenance.json"
+          sbom="$artifact_dir/handleplan.spdx.json"
+          test "$(find "$artifact_dir" -mindepth 1 -maxdepth 1 -printf x | wc -c)" -eq 5
+          for artifact in "$manifest" "$image_archive" "$source_archive" "$provenance" "$sbom"; do
+            test -f "$artifact"
+            test ! -L "$artifact"
+          done
+          test "$(wc -l < "$manifest" | tr -d '[:space:]')" -eq 15
+          test "$(sed -n '1p' "$manifest")" = 'format=handleplan-ci-image-bundle-v3'
+          test "$(sed -n '2p' "$manifest")" = "revision=$DEPLOY_SHA"
+          test "$(sed -n '3p' "$manifest")" = "image_reference=handleplan:$DEPLOY_SHA"
+          manifest_image_id=$(sed -n '4p' "$manifest")
+          manifest_platform=$(sed -n '5p' "$manifest")
+          manifest_runtime_source_digest_sha256=$(sed -n '6p' "$manifest")
+          manifest_runtime_source_file_count=$(sed -n '7p' "$manifest")
+          manifest_runtime_shipment_digest_sha256=$(sed -n '8p' "$manifest")
+          manifest_runtime_shipment_entry_count=$(sed -n '9p' "$manifest")
+          manifest_image_archive_sha256=$(sed -n '10p' "$manifest")
+          manifest_source_archive_sha256=$(sed -n '11p' "$manifest")
+          manifest_provenance_sha256=$(sed -n '12p' "$manifest")
+          manifest_sbom_sha256=$(sed -n '13p' "$manifest")
+          [[ "$manifest_image_id" == image_id=* ]]
+          test "$manifest_platform" = 'platform=linux/amd64'
+          [[ "$manifest_runtime_source_digest_sha256" == runtime_source_digest_sha256=* ]]
+          [[ "$manifest_runtime_source_file_count" == runtime_source_file_count=* ]]
+          [[ "$manifest_runtime_shipment_digest_sha256" == runtime_shipment_digest_sha256=* ]]
+          [[ "$manifest_runtime_shipment_entry_count" == runtime_shipment_entry_count=* ]]
+          [[ "$manifest_image_archive_sha256" == image_archive_sha256=* ]]
+          [[ "$manifest_source_archive_sha256" == source_archive_sha256=* ]]
+          [[ "$manifest_provenance_sha256" == provenance_sha256=* ]]
+          [[ "$manifest_sbom_sha256" == sbom_sha256=* ]]
+          expected_image_id=${manifest_image_id#image_id=}
+          runtime_source_digest_sha256=${manifest_runtime_source_digest_sha256#runtime_source_digest_sha256=}
+          runtime_source_file_count=${manifest_runtime_source_file_count#runtime_source_file_count=}
+          runtime_shipment_digest_sha256=${manifest_runtime_shipment_digest_sha256#runtime_shipment_digest_sha256=}
+          runtime_shipment_entry_count=${manifest_runtime_shipment_entry_count#runtime_shipment_entry_count=}
+          image_archive_sha256=${manifest_image_archive_sha256#image_archive_sha256=}
+          source_archive_sha256=${manifest_source_archive_sha256#source_archive_sha256=}
+          provenance_sha256=${manifest_provenance_sha256#provenance_sha256=}
+          sbom_sha256=${manifest_sbom_sha256#sbom_sha256=}
+          test "$(sed -n '14p' "$manifest")" = "ci_run_id=$CI_RUN_ID"
+          test "$(sed -n '15p' "$manifest")" = "ci_run_attempt=$CI_RUN_ATTEMPT"
+          [[ "$expected_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          for digest in "$runtime_source_digest_sha256" "$runtime_shipment_digest_sha256" "$image_archive_sha256" "$source_archive_sha256" "$provenance_sha256" "$sbom_sha256"; do
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+          done
+          [[ "$runtime_source_file_count" =~ ^[1-9][0-9]{0,15}$ ]]
+          [[ "$runtime_shipment_entry_count" =~ ^[1-9][0-9]{0,15}$ ]]
+          test "$(sha256sum "$image_archive" | awk '{print $1}')" = "$image_archive_sha256"
+          test "$(sha256sum "$source_archive" | awk '{print $1}')" = "$source_archive_sha256"
+          test "$(sha256sum "$provenance" | awk '{print $1}')" = "$provenance_sha256"
+          test "$(sha256sum "$sbom" | awk '{print $1}')" = "$sbom_sha256"
+          test "$(wc -c < "$image_archive" | tr -d '[:space:]')" -gt 0
+          test "$(wc -c < "$image_archive" | tr -d '[:space:]')" -le 2147483648
+          test "$(wc -c < "$source_archive" | tr -d '[:space:]')" -gt 0
+          test "$(wc -c < "$source_archive" | tr -d '[:space:]')" -le 134217728
+          test "$(wc -c < "$provenance" | tr -d '[:space:]')" -gt 0
+          test "$(wc -c < "$provenance" | tr -d '[:space:]')" -le 16777216
+          test "$(wc -c < "$sbom" | tr -d '[:space:]')" -gt 0
+          test "$(wc -c < "$sbom" | tr -d '[:space:]')" -le 67108864
+          runner_source_archive="$RUNNER_TEMP/handleplan-source-$DEPLOY_SHA.tar"
+          git archive --format=tar --output="$runner_source_archive" "$DEPLOY_SHA"
+          test "$(sha256sum "$runner_source_archive" | awk '{print $1}')" = "$source_archive_sha256"
+          rm -f "$runner_source_archive"
+          tar -tf "$image_archive" >/dev/null
+          tar -tf "$source_archive" >/dev/null
+          jq -e --arg revision "$DEPLOY_SHA" --arg archive "$image_archive_sha256" '
+            ._type == "https://in-toto.io/Statement/v1" and
+            .predicateType == "https://slsa.dev/provenance/v1" and
+            .predicate.buildDefinition.externalParameters.commitSha == $revision and
+            .subject == [{name: "handleplan-image.docker.tar", digest: {sha256: $archive}}]
+          ' "$provenance" >/dev/null
+
+          docker image load --input "$image_archive" >/dev/null
+          test "$(docker image inspect --format '{{.Id}}' "handleplan:$DEPLOY_SHA")" = "$expected_image_id"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "handleplan:$DEPLOY_SHA")" = "$DEPLOY_SHA"
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "handleplan:$DEPLOY_SHA")" = 'linux/amd64'
+          image_verification="$RUNNER_TEMP/handleplan-image-verification-$DEPLOY_SHA.json"
+          node scripts/operations/verify-production-image.mjs \
+            --image-reference "handleplan:$DEPLOY_SHA" \
+            --expected-image-id "$expected_image_id" \
+            --expected-revision "$DEPLOY_SHA" \
+            --archive "$image_archive" \
+            > "$image_verification"
+          test "$(jq -er '.runtimeSourceDigestSha256' "$image_verification")" = "$runtime_source_digest_sha256"
+          test "$(jq -er '.runtimeSourceFileCount' "$image_verification")" = "$runtime_source_file_count"
+          test "$(jq -er '.shipmentDigestSha256' "$image_verification")" = "$runtime_shipment_digest_sha256"
+          test "$(jq -er '.shipmentEntryCount' "$image_verification")" = "$runtime_shipment_entry_count"
+          test "$(jq -er '.platform' "$image_verification")" = 'linux/amd64'
+          rm -f "$image_verification"
+          bundle_manifest_sha256=$(sha256sum "$manifest" | awk '{print $1}')
+          [[ "$bundle_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]
+          node scripts/operations/verify-ci-image-bundle.mjs \
+            "$manifest" \
+            "$bundle_manifest_sha256" \
+            "$DEPLOY_SHA" \
+            "$expected_image_id" \
+            "$CI_RUN_ID" \
+            "$CI_RUN_ATTEMPT"
+          printf 'EXPECTED_IMAGE_ID=%s\n' "$expected_image_id" >> "$GITHUB_ENV"
+          printf 'EXPECTED_BUNDLE_MANIFEST_SHA256=%s\n' "$bundle_manifest_sha256" >> "$GITHUB_ENV"
 
       - name: Configure pinned VPS access
         shell: bash
@@ -50,17 +192,341 @@ jobs:
           chmod 600 ~/.ssh/known_hosts
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes deploy@198.23.137.16 true
 
-      - name: Build and deploy the verified commit on the VPS
+      - name: Capture the exact immutable rollback guard
+        id: rollback_guard
         shell: bash
         run: |
           set -euo pipefail
+          rollback_guard=$(ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy@198.23.137.16 \
+            'set -eu
+            manifest=$(cat /opt/apps/handleplan/state/current-deployment)
+            test ! -e /opt/apps/handleplan/state/pending-deployment
+            test ! -L /opt/apps/handleplan/state/pending-deployment
+            set -- $manifest
+            test "$#" -eq 3
+            test "$1" = v1
+            test "$3" = current
+            previous_revision=$2
+            previous_image_id=$(cat /opt/apps/handleplan/state/current-image-id)
+            test "$(cat /opt/apps/handleplan/state/current-revision)" = "$previous_revision"
+            test "$(cat /opt/apps/handleplan/state/verified-images/$previous_revision)" = "v1 $previous_revision $previous_image_id"
+            test "$(docker image inspect --format "{{.Id}}" "$previous_image_id")" = "$previous_image_id"
+            test "$(docker image inspect --format "{{index .Config.Labels \"org.opencontainers.image.revision\"}}" "$previous_image_id")" = "$previous_revision"
+            printf "%s %s\n" "$previous_revision" "$previous_image_id"')
+          read -r previous_revision previous_image_id extra <<< "$rollback_guard"
+          [[ "$previous_revision" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$previous_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test -z "${extra:-}"
+          test "$previous_revision" != "$DEPLOY_SHA"
+          pending_deployment_token=$(openssl rand -hex 32)
+          [[ "$pending_deployment_token" =~ ^[0-9a-f]{64}$ ]]
+          printf 'PREVIOUS_REVISION=%s\n' "$previous_revision" >> "$GITHUB_ENV"
+          printf 'PREVIOUS_IMAGE_ID=%s\n' "$previous_image_id" >> "$GITHUB_ENV"
+          printf 'PENDING_DEPLOYMENT_TOKEN=%s\n' "$pending_deployment_token" >> "$GITHUB_ENV"
+
+      - name: Transfer and deploy the exact CI image on the VPS
+        id: transfer_deploy
+        shell: bash
+        env:
+          REMOTE_BUNDLE_ROOT: /opt/apps/handleplan/deploy-bundles
+          REMOTE_CONTROL_ROOT: /opt/apps/handleplan/deploy-control-staging
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CI_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$EXPECTED_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_BUNDLE_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PENDING_DEPLOYMENT_TOKEN" =~ ^[0-9a-f]{64}$ ]]
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+          git diff --quiet
+          git diff --cached --quiet
+          remote_bundle="$REMOTE_BUNDLE_ROOT/$DEPLOY_SHA/$CI_RUN_ID-$CI_RUN_ATTEMPT/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          prepare_control_sha256=$(sha256sum deploy/prepare-deployment-bundle-on-vps.sh | awk '{print $1}')
+          [[ "$prepare_control_sha256" =~ ^[0-9a-f]{64}$ ]]
+          remote_prepare_incoming="$REMOTE_CONTROL_ROOT/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.prepare.incoming"
+          remote_prepare_ready="$REMOTE_CONTROL_ROOT/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$prepare_control_sha256.prepare"
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            deploy@198.23.137.16 "sh -s -- '$DEPLOY_SHA'" < deploy/deploy-on-vps.sh
+            deploy@198.23.137.16 \
+            "set -eu; test -d '/opt/apps/handleplan'; test ! -L '/opt/apps/handleplan'; test \"\$(cd /opt/apps/handleplan && pwd -P)\" = '/opt/apps/handleplan'; if test ! -e '$REMOTE_CONTROL_ROOT' && test ! -L '$REMOTE_CONTROL_ROOT'; then install -d -m 700 '$REMOTE_CONTROL_ROOT'; fi; test -d '$REMOTE_CONTROL_ROOT'; test ! -L '$REMOTE_CONTROL_ROOT'; test \"\$(cd '$REMOTE_CONTROL_ROOT' && pwd -P)\" = '$REMOTE_CONTROL_ROOT'; unsafe_control=\$(find '$REMOTE_CONTROL_ROOT' -mindepth 1 -maxdepth 1 ! -type f -printf x -quit); test -z \"\$unsafe_control\"; find '$REMOTE_CONTROL_ROOT' -mindepth 1 -maxdepth 1 -type f -delete; test -z \"\$(find '$REMOTE_CONTROL_ROOT' -mindepth 1 -maxdepth 1 -printf x -quit)\"; test ! -e '$remote_prepare_incoming'; test ! -L '$remote_prepare_incoming'; test ! -e '$remote_prepare_ready'; test ! -L '$remote_prepare_ready'"
+          scp -q -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy/prepare-deployment-bundle-on-vps.sh \
+            "deploy@198.23.137.16:$remote_prepare_incoming"
+          prepared_bundle=$(ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy@198.23.137.16 \
+            "set -eu; test -d '$REMOTE_CONTROL_ROOT'; test ! -L '$REMOTE_CONTROL_ROOT'; test \"\$(cd '$REMOTE_CONTROL_ROOT' && pwd -P)\" = '$REMOTE_CONTROL_ROOT'; test \"\$(find '$REMOTE_CONTROL_ROOT' -mindepth 1 -maxdepth 1 -printf x | wc -c)\" -eq 1; test -f '$remote_prepare_incoming'; test ! -L '$remote_prepare_incoming'; test \"\$(sha256sum '$remote_prepare_incoming' | awk '{print \$1}')\" = '$prepare_control_sha256'; chmod 700 '$remote_prepare_incoming'; mv '$remote_prepare_incoming' '$remote_prepare_ready'; test \"\$(find '$REMOTE_CONTROL_ROOT' -mindepth 1 -maxdepth 1 -printf x | wc -c)\" -eq 1; test -x '$remote_prepare_ready'; test ! -L '$remote_prepare_ready'; set +e; prepared_output=\$(HANDLEPLAN_APP_ROOT='/opt/apps/handleplan' HANDLEPLAN_DEPLOY_BUNDLE_ROOT='$REMOTE_BUNDLE_ROOT' '$remote_prepare_ready' '$DEPLOY_SHA' '$CI_RUN_ID' '$CI_RUN_ATTEMPT' '$GITHUB_RUN_ID' '$GITHUB_RUN_ATTEMPT'); prepare_status=\$?; set -e; rm -f -- '$remote_prepare_ready'; test \"\$prepare_status\" -eq 0; printf '%s\n' \"\$prepared_output\"")
+          test "$prepared_bundle" = "$remote_bundle"
+          scp -q -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy/cleanup-deployment-bundle-on-vps.sh \
+            deploy/deploy-on-vps.sh \
+            deploy/deployment-state.sh \
+            deploy/resolve-pending-deployment-on-vps.sh \
+            deploy/watch-pending-deployment-on-vps.sh \
+            "deploy@198.23.137.16:$remote_bundle/"
+          scp -q -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deployment-artifact/handleplan-image-bundle.v1 \
+            deployment-artifact/handleplan-image.docker.tar \
+            deployment-artifact/handleplan-source.tar \
+            deployment-artifact/handleplan.provenance.json \
+            deployment-artifact/handleplan.spdx.json \
+            "deploy@198.23.137.16:$remote_bundle/image/"
+          deployment_output=$(ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy@198.23.137.16 \
+            "set -eu; test -f '$remote_bundle/.lease.v1'; test ! -L '$remote_bundle/.lease.v1'; lease_expires=\$((\$(date +%s) + 10800)); lease_tmp='$remote_bundle/.lease.v1.tmp'; test ! -e \"\$lease_tmp\"; umask 077; printf 'v1 %s %s %s %s %s %s\n' '$DEPLOY_SHA' '$CI_RUN_ID' '$CI_RUN_ATTEMPT' '$GITHUB_RUN_ID' '$GITHUB_RUN_ATTEMPT' \"\$lease_expires\" > \"\$lease_tmp\"; chmod 600 \"\$lease_tmp\"; mv -f \"\$lease_tmp\" '$remote_bundle/.lease.v1'; chmod 700 '$remote_bundle/cleanup-deployment-bundle-on-vps.sh' '$remote_bundle/deploy-on-vps.sh' '$remote_bundle/resolve-pending-deployment-on-vps.sh' '$remote_bundle/watch-pending-deployment-on-vps.sh'; chmod 600 '$remote_bundle/deployment-state.sh' '$remote_bundle/image/'*; '$remote_bundle/deploy-on-vps.sh' '$DEPLOY_SHA' '$CI_RUN_ID' '$CI_RUN_ATTEMPT' '$EXPECTED_BUNDLE_MANIFEST_SHA256' '$PENDING_DEPLOYMENT_TOKEN' '$PREVIOUS_REVISION' '$PREVIOUS_IMAGE_ID'")
+          printf '%s\n' "$deployment_output"
+          test "$(printf '%s\n' "$deployment_output" | grep -c '^pending-deployment-deadline=[1-9][0-9]*$')" -eq 1
+          pending_deployment_deadline=$(printf '%s\n' "$deployment_output" | sed -n 's/^pending-deployment-deadline=//p')
+          [[ "$pending_deployment_deadline" =~ ^[1-9][0-9]{0,11}$ ]]
+          printf 'PENDING_DEPLOYMENT_DEADLINE=%s\n' "$pending_deployment_deadline" >> "$GITHUB_ENV"
 
       - name: Verify container and exact local health
+        id: local_readback
         shell: bash
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
             deploy@198.23.137.16 \
-            "test \"\$(cat /opt/apps/handleplan/state/current-revision)\" = '$DEPLOY_SHA' && curl --fail --silent --show-error http://127.0.0.1:3004/api/health | grep -F '\"commit\":\"$DEPLOY_SHA\"'"
+            "set -eu; test \"\$(cat /opt/apps/handleplan/state/current-deployment)\" = 'v1 $DEPLOY_SHA current'; test \"\$(cat /opt/apps/handleplan/state/current-revision)\" = '$DEPLOY_SHA'; test \"\$(cat /opt/apps/handleplan/state/current-image-id)\" = '$EXPECTED_IMAGE_ID'; test \"\$(cat /opt/apps/handleplan/state/deployment-high-water)\" = '$DEPLOY_SHA'; test \"\$(cat /opt/apps/handleplan/state/verified-images/$DEPLOY_SHA)\" = 'v1 $DEPLOY_SHA $EXPECTED_IMAGE_ID'; test \"\$(docker image inspect --format '{{.Id}}' 'handleplan:$DEPLOY_SHA')\" = '$EXPECTED_IMAGE_ID'; curl --fail --silent --show-error http://127.0.0.1:3004/api/health | grep -F '\"commit\":\"$DEPLOY_SHA\"'; /opt/apps/handleplan/operations/current/deploy/resolve-pending-deployment-on-vps.sh verify '$DEPLOY_SHA' '$EXPECTED_IMAGE_ID' '$PENDING_DEPLOYMENT_TOKEN' '$PREVIOUS_REVISION' '$PREVIOUS_IMAGE_ID' '$PENDING_DEPLOYMENT_DEADLINE'"
+
+      - name: Verify the externally routed HTTPS revision and readiness
+        id: external_probe
+        shell: bash
+        env:
+          HANDLEPLAN_MONITOR_CF_ACCESS_CLIENT_ID: ${{ secrets.HANDLEPLAN_MONITOR_CF_ACCESS_CLIENT_ID }}
+          HANDLEPLAN_MONITOR_CF_ACCESS_CLIENT_SECRET: ${{ secrets.HANDLEPLAN_MONITOR_CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$HANDLEPLAN_MONITOR_CF_ACCESS_CLIENT_ID"
+          test -n "$HANDLEPLAN_MONITOR_CF_ACCESS_CLIENT_SECRET"
+          expected_migration=$(sed -n 's/^export const REQUIRED_DATABASE_MIGRATION = "\([0-9][0-9][0-9]_[a-z0-9_]*\.sql\)" as const;$/\1/p' apps/web/lib/server/readiness.ts)
+          [[ "$expected_migration" =~ ^[0-9]{3}_[a-z0-9_]+\.sql$ ]]
+          expected_public_build_id=$(node --input-type=module <<'BUILD_ID_NODE'
+          import { computePublicSourceBinding } from "./scripts/e2e/public-build-binding.mjs";
+          const binding = computePublicSourceBinding();
+          process.stdout.write(`hpv2-${binding.digestSha256}`);
+          BUILD_ID_NODE
+          )
+          [[ "$expected_public_build_id" =~ ^hpv2-[0-9a-f]{64}$ ]]
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy@198.23.137.16 \
+            "/opt/apps/handleplan/operations/current/deploy/resolve-pending-deployment-on-vps.sh verify '$DEPLOY_SHA' '$EXPECTED_IMAGE_ID' '$PENDING_DEPLOYMENT_TOKEN' '$PREVIOUS_REVISION' '$PREVIOUS_IMAGE_ID' '$PENDING_DEPLOYMENT_DEADLINE'"
+          HANDLEPLAN_MONITOR_BASE_URL=https://handle.reidar.tech/ \
+          HANDLEPLAN_MONITOR_EXPECTED_MIGRATION="$expected_migration" \
+          HANDLEPLAN_MONITOR_EXPECTED_REVISION="$DEPLOY_SHA" \
+          HANDLEPLAN_MONITOR_EXPECTED_PUBLIC_BUILD_ID="$expected_public_build_id" \
+            node --input-type=module <<'NODE'
+          import {
+            validateHealthContract,
+            validateReadinessContract,
+          } from "./scripts/operations/check-public-monitor.mjs";
+          import { JSDOM } from "./apps/web/node_modules/jsdom/lib/api.js";
+
+          const maximumJsonBytes = 64 * 1024;
+          const maximumHtmlBytes = 512 * 1024;
+          const baseUrl = new URL(process.env.HANDLEPLAN_MONITOR_BASE_URL);
+          const accessClientId = process.env.HANDLEPLAN_MONITOR_CF_ACCESS_CLIENT_ID;
+          const accessClientSecret = process.env.HANDLEPLAN_MONITOR_CF_ACCESS_CLIENT_SECRET;
+          const expectedMigration = process.env.HANDLEPLAN_MONITOR_EXPECTED_MIGRATION;
+          const expectedPublicBuildId =
+            process.env.HANDLEPLAN_MONITOR_EXPECTED_PUBLIC_BUILD_ID;
+          const expectedRevision = process.env.HANDLEPLAN_MONITOR_EXPECTED_REVISION;
+
+          async function readBounded(pathname, maximumBytes, accept) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 15_000);
+            try {
+              const response = await fetch(new URL(pathname, baseUrl), {
+                cache: "no-store",
+                headers: {
+                  accept,
+                  "cf-access-client-id": accessClientId,
+                  "cf-access-client-secret": accessClientSecret,
+                },
+                method: "GET",
+                redirect: "manual",
+                signal: controller.signal,
+              });
+              const declaredLength = response.headers.get("content-length");
+              if (
+                (declaredLength !== null
+                  && (!/^\d+$/u.test(declaredLength) || Number(declaredLength) > maximumBytes))
+                || response.body === null
+              ) throw new Error("external deployment contract unavailable");
+
+              const reader = response.body.getReader();
+              const chunks = [];
+              let total = 0;
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                total += value.byteLength;
+                if (total > maximumBytes) {
+                  await reader.cancel();
+                  throw new Error("external deployment contract exceeded its byte limit");
+                }
+                chunks.push(value);
+              }
+              const bytes = new Uint8Array(total);
+              let offset = 0;
+              for (const chunk of chunks) {
+                bytes.set(chunk, offset);
+                offset += chunk.byteLength;
+              }
+              return { bytes, response };
+            } finally {
+              clearTimeout(timeout);
+            }
+          }
+
+          function decodeUtf8(bytes) {
+            return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+          }
+
+          function hasExplicitUtf8Charset(contentType) {
+            const [mediaType, ...parameters] = contentType.split(";");
+            if (mediaType.trim().toLowerCase() !== "text/html") return false;
+            const charsetValues = parameters.flatMap((parameter) => {
+              const match = /^\s*charset\s*=\s*(?:"([^"]+)"|([^"\s]+))\s*$/iu
+                .exec(parameter);
+              return match === null ? [] : [match[1] ?? match[2]];
+            });
+            return charsetValues.length === 1
+              && /^(?:utf-8|utf8)$/iu.test(charsetValues[0]);
+          }
+
+          async function readJsonContract(pathname) {
+            const result = await readBounded(
+              pathname,
+              maximumJsonBytes,
+              "application/json",
+            );
+            const contentType = result.response.headers.get("content-type") ?? "";
+            const cacheControl = (result.response.headers.get("cache-control") ?? "")
+              .split(",")
+              .map((value) => value.trim().toLowerCase());
+            if (
+              result.response.status !== 200
+              || !/^application\/json(?:\s*;|$)/iu.test(contentType)
+              || !cacheControl.includes("no-store")
+            ) throw new Error("external JSON deployment contract unavailable");
+            return JSON.parse(decodeUtf8(result.bytes));
+          }
+
+          async function verifyPublicShell() {
+            const root = await readBounded("/", maximumJsonBytes, "text/html");
+            if (root.response.status !== 307) {
+              throw new Error("external root redirect unavailable");
+            }
+            const location = root.response.headers.get("location");
+            if (location !== "/planlegg") {
+              throw new Error("external root redirect location is not exact");
+            }
+            const target = new URL(location ?? "", baseUrl);
+            if (
+              target.origin !== baseUrl.origin
+              || target.pathname !== "/planlegg"
+              || target.search !== ""
+              || target.hash !== ""
+            ) throw new Error("external root redirect differs from the Handleplan shell");
+
+            const shell = await readBounded(
+              "/planlegg",
+              maximumHtmlBytes,
+              "text/html",
+            );
+            const contentType = shell.response.headers.get("content-type") ?? "";
+            if (
+              shell.response.status !== 200
+              || !hasExplicitUtf8Charset(contentType)
+            ) throw new Error("external Handleplan shell unavailable");
+            const html = decodeUtf8(shell.bytes);
+            const dom = new JSDOM(html, { contentType: "text/html" });
+            try {
+              const { document } = dom.window;
+              const directTitles = [...document.head.children].filter(
+                (element) => element.localName === "title",
+              );
+              const buildMarkers = [...document.querySelectorAll(
+                'meta[name="handleplan-public-build-id"]',
+              )];
+              const marker = buildMarkers[0];
+              const markerAttributes = marker === undefined
+                ? []
+                : [...marker.attributes].map((attribute) => attribute.name).sort();
+              if (
+                document.documentElement.lang !== "nb"
+                || directTitles.length !== 1
+                || directTitles[0].textContent !== "Handleplan"
+                || buildMarkers.length !== 1
+                || marker.parentElement !== document.head
+                || markerAttributes.length !== 2
+                || markerAttributes[0] !== "content"
+                || markerAttributes[1] !== "name"
+                || marker.getAttribute("content") !== expectedPublicBuildId
+              ) throw new Error("external response is not the exact Handleplan shell");
+            } finally {
+              dom.window.close();
+            }
+          }
+
+          try {
+            await verifyPublicShell();
+            validateHealthContract(await readJsonContract("/api/health"), expectedRevision);
+            validateReadinessContract(await readJsonContract("/api/ready"), expectedMigration);
+            process.stdout.write("external-deployment-readback=ok\n");
+          } catch {
+            process.stderr.write("external-deployment-readback=failed\n");
+            process.exitCode = 1;
+          }
+          NODE
+
+      - name: Finalize the externally verified pending deployment
+        id: finalize_deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PENDING_DEPLOYMENT_TOKEN" =~ ^[0-9a-f]{64}$ ]]
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy@198.23.137.16 \
+            "set -eu; /opt/apps/handleplan/operations/current/deploy/resolve-pending-deployment-on-vps.sh accept '$DEPLOY_SHA' '$EXPECTED_IMAGE_ID' '$PENDING_DEPLOYMENT_TOKEN' '$PREVIOUS_REVISION' '$PREVIOUS_IMAGE_ID' '$PENDING_DEPLOYMENT_DEADLINE'; test \"\$(cat /opt/apps/handleplan/state/current-deployment)\" = 'v1 $DEPLOY_SHA current'; test \"\$(cat /opt/apps/handleplan/state/current-image-id)\" = '$EXPECTED_IMAGE_ID'; test ! -e /opt/apps/handleplan/state/pending-deployment; test ! -L /opt/apps/handleplan/state/pending-deployment"
+
+      - name: Roll back a candidate rejected by external promotion proof
+        if: ${{ always() && steps.rollback_guard.outcome == 'success' && steps.transfer_deploy.outcome != 'skipped' && steps.finalize_deployment.outcome != 'success' }}
+        shell: bash
+        env:
+          REMOTE_BUNDLE_ROOT: /opt/apps/handleplan/deploy-bundles
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$PREVIOUS_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PREVIOUS_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$PENDING_DEPLOYMENT_TOKEN" =~ ^[0-9a-f]{64}$ ]]
+          remote_bundle="$REMOTE_BUNDLE_ROOT/$DEPLOY_SHA/$CI_RUN_ID-$CI_RUN_ATTEMPT/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy@198.23.137.16 \
+            "set -eu; resolver='$remote_bundle/resolve-pending-deployment-on-vps.sh'; test -x \"\$resolver\"; test ! -L \"\$resolver\"; resolution=\$(\"\$resolver\" reject '$DEPLOY_SHA' '$EXPECTED_IMAGE_ID' '$PENDING_DEPLOYMENT_TOKEN' '$PREVIOUS_REVISION' '$PREVIOUS_IMAGE_ID' '$PENDING_DEPLOYMENT_DEADLINE'); case \"\$resolution\" in 'pending-deployment=$DEPLOY_SHA rejected') test \"\$(cat /opt/apps/handleplan/state/current-deployment)\" = 'v1 $PREVIOUS_REVISION current'; test \"\$(cat /opt/apps/handleplan/state/current-image-id)\" = '$PREVIOUS_IMAGE_ID' ;; 'pending-deployment=$DEPLOY_SHA already-accepted') test \"\$(cat /opt/apps/handleplan/state/current-deployment)\" = 'v1 $DEPLOY_SHA current'; test \"\$(cat /opt/apps/handleplan/state/current-image-id)\" = '$EXPECTED_IMAGE_ID' ;; *) exit 1 ;; esac; test ! -e /opt/apps/handleplan/state/pending-deployment; test ! -L /opt/apps/handleplan/state/pending-deployment"
+
+      - name: Remove the finished VPS transfer bundle
+        if: ${{ always() && steps.transfer_deploy.outcome != 'skipped' }}
+        shell: bash
+        env:
+          REMOTE_BUNDLE_ROOT: /opt/apps/handleplan/deploy-bundles
+          REMOTE_CONTROL_ROOT: /opt/apps/handleplan/deploy-control-staging
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CI_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          remote_bundle="$REMOTE_BUNDLE_ROOT/$DEPLOY_SHA/$CI_RUN_ID-$CI_RUN_ATTEMPT/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          prepare_control_sha256=$(sha256sum deploy/prepare-deployment-bundle-on-vps.sh | awk '{print $1}')
+          [[ "$prepare_control_sha256" =~ ^[0-9a-f]{64}$ ]]
+          remote_prepare_incoming="$REMOTE_CONTROL_ROOT/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.prepare.incoming"
+          remote_prepare_ready="$REMOTE_CONTROL_ROOT/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$prepare_control_sha256.prepare"
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy@198.23.137.16 \
+            "set -eu; for control in '$remote_prepare_incoming' '$remote_prepare_ready'; do if test -e \"\$control\" || test -L \"\$control\"; then test -f \"\$control\"; test ! -L \"\$control\"; rm -f -- \"\$control\"; fi; done; cleanup='$remote_bundle/cleanup-deployment-bundle-on-vps.sh'; if test -e \"\$cleanup\" || test -L \"\$cleanup\"; then test -x \"\$cleanup\"; test ! -L \"\$cleanup\"; \"\$cleanup\" '$DEPLOY_SHA' '$CI_RUN_ID' '$CI_RUN_ATTEMPT' '$GITHUB_RUN_ID' '$GITHUB_RUN_ATTEMPT'; else printf '%s\n' 'Transfer cleanup deferred to the next locked retention sweep' >&2; fi"

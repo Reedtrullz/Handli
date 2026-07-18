@@ -1,22 +1,25 @@
 import { expect, test } from "@playwright/test";
 
 const basket = {
-  version: 1,
+  version: 4,
   needs: [
     { id: "milk", query: "Lettmelk", quantity: 1, quantityUnit: "each", matchRuleId: "milk-rule", required: true },
     { id: "cheese", query: "Norvegia", quantity: 1, quantityUnit: "each", matchRuleId: "cheese-rule", required: true },
     { id: "soap", query: "Omo", quantity: 1, quantityUnit: "each", matchRuleId: "soap-rule", required: true },
   ],
   matchingRules: [
-    { id: "milk-rule", mode: "exact", exactEan: "7038010000013", userApproved: true, explanation: "Eksakt produkt" },
-    { id: "cheese-rule", mode: "exact", exactEan: "7038010000020", userApproved: true, explanation: "Eksakt produkt" },
-    { id: "soap-rule", mode: "exact", exactEan: "7038010000037", userApproved: true, explanation: "Eksakt produkt" },
+    { id: "milk-rule", mode: "exact", exactEan: "7038010000010", userApproved: true, explanation: "Eksakt produkt" },
+    { id: "cheese-rule", mode: "exact", exactEan: "7038010000027", userApproved: true, explanation: "Eksakt produkt" },
+    { id: "soap-rule", mode: "exact", exactEan: "7038010000034", userApproved: true, explanation: "Eksakt produkt" },
   ],
   products: [
-    { ean: "7038010000013", name: "TINE Lettmelk 1 l", brand: "TINE" },
-    { ean: "7038010000020", name: "Norvegia 1 kg", brand: "TINE" },
-    { ean: "7038010000037", name: "Omo Color 1,2 l", brand: "Omo" },
+    { ean: "7038010000010", name: "TINE Lettmelk 1 l", brand: "TINE" },
+    { ean: "7038010000027", name: "Norvegia 1 kg", brand: "TINE" },
+    { ean: "7038010000034", name: "Omo Color 1,2 l", brand: "Omo" },
   ],
+  convenienceWeightBasisPoints: 5_000,
+  familyConfirmations: [],
+  marketContext: { contractVersion: 1, countryCode: "NO", kind: "national" },
   travel: { enabled: false, mode: "car" },
 };
 
@@ -25,9 +28,9 @@ const response = {
   priceDataSource: "upstream",
   caveats: ["Kjedepris betyr ikke at varen er på lager eller har samme hyllepris i din butikk."],
   plans: [
-    { id: "plan-balanced", assignments: [{ needId: "milk", ean: "7038010000013", chain: "rema-1000", quantity: 1, costOre: 30_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "cheese", ean: "7038010000020", chain: "extra", quantity: 1, costOre: 20_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "soap", ean: "7038010000037", chain: "extra", quantity: 1, costOre: 32_460, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }], totalOre: 82_460, chains: ["extra", "rema-1000"], substitutions: [], coverage: 1, freshness: { milk: "eligible", cheese: "eligible", soap: "eligible" } },
-    { id: "plan-savings", assignments: [{ needId: "milk", ean: "7038010000013", chain: "bunnpris", quantity: 1, costOre: 30_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "cheese", ean: "7038010000020", chain: "rema-1000", quantity: 1, costOre: 20_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "soap", ean: "7038010000037", chain: "extra", quantity: 1, costOre: 29_320, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }], totalOre: 79_320, chains: ["bunnpris", "extra", "rema-1000"], substitutions: [], coverage: 1, freshness: { milk: "eligible", cheese: "eligible", soap: "eligible" } },
-    { id: "plan-convenience", assignments: [{ needId: "milk", ean: "7038010000013", chain: "extra", quantity: 1, costOre: 30_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "cheese", ean: "7038010000020", chain: "extra", quantity: 1, costOre: 30_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "soap", ean: "7038010000037", chain: "extra", quantity: 1, costOre: 35_060, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }], totalOre: 95_060, chains: ["extra"], substitutions: [], coverage: 1, freshness: { milk: "eligible", cheese: "eligible", soap: "eligible" } },
+    { id: "plan-balanced", assignments: [{ needId: "milk", ean: "7038010000010", chain: "rema-1000", quantity: 1, costOre: 30_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "cheese", ean: "7038010000027", chain: "extra", quantity: 1, costOre: 20_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "soap", ean: "7038010000034", chain: "extra", quantity: 1, costOre: 32_460, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }], totalOre: 82_460, chains: ["extra", "rema-1000"], substitutions: [], coverage: 1, freshness: { milk: "eligible", cheese: "eligible", soap: "eligible" } },
+    { id: "plan-savings", assignments: [{ needId: "milk", ean: "7038010000010", chain: "bunnpris", quantity: 1, costOre: 30_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "cheese", ean: "7038010000027", chain: "rema-1000", quantity: 1, costOre: 20_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "soap", ean: "7038010000034", chain: "extra", quantity: 1, costOre: 29_320, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }], totalOre: 79_320, chains: ["bunnpris", "extra", "rema-1000"], substitutions: [], coverage: 1, freshness: { milk: "eligible", cheese: "eligible", soap: "eligible" } },
+    { id: "plan-convenience", assignments: [{ needId: "milk", ean: "7038010000010", chain: "extra", quantity: 1, costOre: 30_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "cheese", ean: "7038010000027", chain: "extra", quantity: 1, costOre: 30_000, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }, { needId: "soap", ean: "7038010000034", chain: "extra", quantity: 1, costOre: 35_060, observedAt: "2026-07-15T06:12:00.000Z", source: "kassalapp" }], totalOre: 95_060, chains: ["extra"], substitutions: [], coverage: 1, freshness: { milk: "eligible", cheese: "eligible", soap: "eligible" } },
   ],
 };
 
@@ -41,7 +44,7 @@ for (const viewport of viewports) {
   test(`${viewport.width}px result workspace is stable and keyboard operable`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: "reduce" });
-    await page.addInitScript((value) => localStorage.setItem("handleplan:basket:v1", JSON.stringify(value)), basket);
+    await page.addInitScript((value) => localStorage.setItem("handleplan:basket:v4", JSON.stringify(value)), basket);
     await page.route("**/api/plans", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(response) }));
     await page.goto("/planlegg/resultat");
     await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important}html,body,button,input{font-family:Arial,sans-serif!important}.font-mono,.result-total{font-family:monospace!important}nextjs-portal{display:none!important}" });

@@ -1,10 +1,12 @@
 .git
 .github
+.artifacts
 .next
 .superdesign
 .superpowers
 .worktrees
 coverage
+**/dist
 docs/evidence
 node_modules
 playwright-report
@@ -12,8 +14,5 @@ test-results
 **/.next
 **/node_modules
 **/*-test-results
-**/*.test.ts
-**/*.test.tsx
-**/tests
 .env*
 !.env.example

@@ -1,120 +1,52 @@
 "use client";
 
 import {
-  matchProducts,
-  type MatchRule,
-  type Need,
-  type PlanResult,
-  type Product,
+  exactProductPlanApiResponseSchemaFor,
+  reviewedFamilyPlanApiResponseV2SchemaFor,
+  type ExactProductPlanApiRequest,
+  type ExactProductPlanApiResponse,
+  type OfficialOffer,
+  type PlanResultV2,
+  type ReviewedFamilyPlanApiRequestV2,
+  type ReviewedFamilyPlanApiResponseV2,
+  type TravelCalculationState,
 } from "@handleplan/domain";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { z } from "zod";
 
-import { balancedPlanId, compareConvenience, projectPlanFrontier, PlanSelector } from "../../../components/planlegg/plan-selector";
+import {
+  planIdForPreference,
+  PlanSelector,
+} from "../../../components/planlegg/plan-selector";
 import { PlanSummary } from "../../../components/planlegg/plan-summary";
 import { PriceProvenance } from "../../../components/planlegg/price-provenance";
+import { StartTripButton } from "../../../components/planlegg/start-trip-button";
 import { StoreAssignment } from "../../../components/planlegg/store-assignment";
-import { loadBasket, saveBasket, SELECTED_PLAN_ID_MAX, type BrowserBasket } from "../../../lib/browser-basket";
+import {
+  TravelResultControls,
+  type TravelResultBinding,
+  type TravelResultUpdate,
+} from "../../../components/planlegg/travel-result-controls";
+import {
+  loadBasket,
+  saveBasket,
+  setBasketEnabledMembershipProgramIds,
+  strictPlanRequestReadiness,
+  type BrowserBasket,
+} from "../../../lib/browser-basket";
+import { membershipPreferencePresentations } from "../../../lib/membership-presentation";
 
 const MAX_RESPONSE_BYTES = 128 * 1024;
-const MAX_PLANS = 24;
-const publicText = z.string().trim().min(1).max(300);
-const planId = z.string().trim().min(1).max(SELECTED_PLAN_ID_MAX);
-const ean = z.string().regex(/^(?:\d{8}|\d{13})$/);
-const chain = z.enum(["bunnpris", "rema-1000", "extra"]);
-const moneyOre = z.number().int().nonnegative().safe().max(100_000_000);
-const assignment = z.object({
-  needId: publicText,
-  ean,
-  chain,
-  quantity: z.number().int().positive().safe().max(10_000),
-  costOre: moneyOre,
-  observedAt: z.iso.datetime({ offset: false, precision: 3 }),
-  source: z.literal("kassalapp"),
-}).strict();
-const plan = z.object({
-  id: planId,
-  assignments: z.array(assignment).min(1).max(50),
-  totalOre: moneyOre,
-  chains: z.array(chain).min(1).max(3),
-  substitutions: z.array(publicText).max(50),
-  coverage: z.literal(1),
-  freshness: z.record(publicText, z.literal("eligible")),
-}).strict();
-const responseSchema = z.object({
-  caveats: z.array(publicText).max(10),
-  generatedAt: z.iso.datetime({ offset: false, precision: 3 }),
-  priceDataSource: z.enum(["upstream", "cache"]),
-  plans: z.array(plan).max(MAX_PLANS),
-}).strict();
-
-type ParsedResultResponse = z.infer<typeof responseSchema>;
-interface ResultResponse extends Omit<ParsedResultResponse, "plans"> {
-  plans: PlanResult[];
-}
+type PlanRequest = ExactProductPlanApiRequest | ReviewedFamilyPlanApiRequestV2;
+type PlanResponse = ExactProductPlanApiResponse | ReviewedFamilyPlanApiResponseV2;
 type ResultState =
   | { status: "loading" }
-  | { status: "ready"; response: ResultResponse }
+  | { status: "ready"; response: PlanResponse }
   | { status: "empty" }
   | { status: "unavailable" }
+  | { status: "reapproval" }
   | { status: "invalid" };
 
 const subscribeToClient = () => () => {};
-
-function sameMembers(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && new Set(left).size === left.length && left.every((value) => right.includes(value));
-}
-
-function assignmentIdentity(candidate: ParsedResultResponse["plans"][number]): string {
-  return [...candidate.assignments]
-    .sort((left, right) => left.needId.localeCompare(right.needId))
-    .map((row) => `${row.needId}\0${row.ean}\0${row.chain}\0${row.quantity}\0${row.costOre}`)
-    .join("\u0001");
-}
-
-function dominates(
-  left: ParsedResultResponse["plans"][number],
-  right: ParsedResultResponse["plans"][number],
-): boolean {
-  const noWorse = left.totalOre <= right.totalOre && left.chains.length <= right.chains.length && left.substitutions.length <= right.substitutions.length;
-  return noWorse && (left.totalOre < right.totalOre || left.chains.length < right.chains.length || left.substitutions.length < right.substitutions.length);
-}
-
-function isCompleteSafeResponse(response: ParsedResultResponse, basket: BrowserBasket): boolean {
-  if (new Set(response.plans.map(({ id }) => id)).size !== response.plans.length) return false;
-  if (new Set(response.plans.map(assignmentIdentity)).size !== response.plans.length) return false;
-  if (response.plans.some((candidate, index) => response.plans.some((other, otherIndex) => index !== otherIndex && dominates(other, candidate)))) return false;
-  const requiredNeeds = basket.needs.filter(({ required }) => required);
-  const requiredIds = requiredNeeds.map(({ id }) => id);
-  const productsByEan = new Map(basket.products.map((product) => [product.ean, product]));
-  const rulesById = new Map(basket.matchingRules.map((rule) => [rule.id, rule]));
-  const needsById = new Map(requiredNeeds.map((need) => [need.id, need]));
-  const generatedAt = new Date(response.generatedAt).getTime();
-  if (!Number.isFinite(generatedAt)) return false;
-
-  return response.plans.every((candidate) => {
-    if (!sameMembers(candidate.assignments.map(({ needId }) => needId), requiredIds)) return false;
-    if (!sameMembers(candidate.chains, candidate.assignments.map(({ chain: assignmentChain }) => assignmentChain).filter((value, index, all) => all.indexOf(value) === index))) return false;
-    if (!sameMembers(Object.keys(candidate.freshness), requiredIds)) return false;
-    if (candidate.assignments.reduce((sum, row) => sum + row.costOre, 0) !== candidate.totalOre) return false;
-    const expectedSubstitutions = candidate.assignments.flatMap((row) => {
-      const need = needsById.get(row.needId);
-      const rule = need ? rulesById.get(need.matchRuleId) : undefined;
-      return rule?.mode === "exact" ? [] : [row.needId];
-    });
-    if (!sameMembers(candidate.substitutions, expectedSubstitutions)) return false;
-
-    return candidate.assignments.every((row) => {
-      const need = needsById.get(row.needId);
-      const product = productsByEan.get(row.ean);
-      const rule = need ? rulesById.get(need.matchRuleId) : undefined;
-      const observedAt = new Date(row.observedAt).getTime();
-      if (!need || !product || !rule || row.quantity !== need.quantity || row.source !== "kassalapp") return false;
-      if (!Number.isFinite(observedAt) || observedAt > generatedAt || generatedAt - observedAt > 72 * 60 * 60 * 1000) return false;
-      return matchProducts(need as Need, rule as MatchRule, [product as Product]).length === 1;
-    });
-  });
-}
 
 async function cancelResponseBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
   if (body === null) return;
@@ -125,7 +57,10 @@ async function cancelResponseBody(body: ReadableStream<Uint8Array> | null): Prom
   }
 }
 
-async function readSafeResponse(response: Response, basket: BrowserBasket): Promise<ResultResponse | undefined> {
+async function readSafeResponse(
+  response: Response,
+  request: PlanRequest,
+): Promise<PlanResponse | undefined> {
   const contentType = response.headers.get("content-type") ?? "";
   const token = "[!#$%&'*+.^_`|~0-9A-Za-z-]+";
   const quotedString = '"(?:[^"\\\\\\r\\n]|\\\\[\\t\\x20-\\x7e])*"';
@@ -173,34 +108,188 @@ async function readSafeResponse(response: Response, basket: BrowserBasket): Prom
   } catch {
     return undefined;
   }
-  const parsed = responseSchema.safeParse(value);
-  if (!parsed.success || !isCompleteSafeResponse(parsed.data, basket)) return undefined;
-  return parsed.data as unknown as ResultResponse;
+  const parsed = request.contractVersion === 1
+    ? exactProductPlanApiResponseSchemaFor(request).safeParse(value)
+    : reviewedFamilyPlanApiResponseV2SchemaFor(request).safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
-function requestForBasket(basket: BrowserBasket): string | undefined {
-  const request = JSON.stringify({
-    needs: basket.needs,
-    matchingRules: basket.matchingRules,
-    products: basket.products,
-    maxStores: 3,
+function ReviewedFamilySelections({
+  plan,
+  response,
+}: {
+  plan: PlanResultV2;
+  response: ReviewedFamilyPlanApiResponseV2;
+}) {
+  const assignmentsByNeed = new Map(
+    plan.assignments.map((assignment) => [assignment.needId, assignment]),
+  );
+  const productsById = new Map(
+    response.productClaims.map((claim) => [claim.canonicalProductId, claim.product]),
+  );
+  const selections = response.needMatches.flatMap((match) => {
+    if (match.kind !== "reviewed-family") return [];
+    const assignment = assignmentsByNeed.get(match.needId);
+    const product = assignment === undefined
+      ? undefined
+      : productsById.get(assignment.canonicalProductId);
+    return assignment === undefined || product === undefined
+      ? []
+      : [{ assignment, match, product }];
   });
-  return new TextEncoder().encode(request).byteLength <= 64 * 1024 ? request : undefined;
+
+  if (selections.length === 0) return null;
+  return (
+    <section className="result-store" aria-labelledby="reviewed-family-selections-title">
+      <header className="result-store-header">
+        <div>
+          <div>
+            <h2 id="reviewed-family-selections-title">Godkjente varebytter</h2>
+            <p>Valgt fra den kontrollerte produktfamilien du godkjente.</p>
+          </div>
+        </div>
+      </header>
+      <ul className="result-store-items">
+        {selections.map(({ match, product }) => (
+          <li className="result-store-row" key={match.needId}>
+            <span aria-hidden="true">↔</span>
+            <div>
+              <strong>{match.family.labelNo}</strong>
+              <small>{product.displayName}</small>
+              <small>
+                Valgt blant {match.candidateProductIds.length} {match.candidateProductIds.length === 1 ? "kontrollert produkt" : "kontrollerte produkter"}
+                {match.allowedBrands === undefined ? "" : ` · merke: ${match.allowedBrands.join(" eller ")}`}
+              </small>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function reviewedProductsForPlan(
+  response: ReviewedFamilyPlanApiResponseV2,
+  plan: PlanResultV2,
+) {
+  const claimsById = new Map(
+    response.productClaims.map((claim) => [claim.canonicalProductId, claim.product]),
+  );
+  const canonicalIdByGtin = new Map<string, string>();
+  const productsByGtin = new Map<
+    string,
+    ReviewedFamilyPlanApiResponseV2["productClaims"][number]["product"]
+  >();
+  for (const assignment of plan.assignments) {
+    const product = claimsById.get(assignment.canonicalProductId);
+    const priorCanonicalId = canonicalIdByGtin.get(assignment.ean);
+    if (
+      product === undefined
+      || product.gtin !== assignment.ean
+      || (priorCanonicalId !== undefined && priorCanonicalId !== assignment.canonicalProductId)
+    ) {
+      return undefined;
+    }
+    canonicalIdByGtin.set(assignment.ean, assignment.canonicalProductId);
+    productsByGtin.set(assignment.ean, product);
+  }
+  return [...productsByGtin.values()];
+}
+
+function availableMembershipProgramIds(response: PlanResponse): string[] {
+  const offers = officialOffersForResponse(response);
+  return [...new Set(offers.flatMap(({ conditions }) =>
+    conditions.flatMap((condition) =>
+      condition.kind === "member" ? [condition.programId] : []
+    )))].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+}
+
+function officialOffersForResponse(response: PlanResponse): OfficialOffer[] {
+  return response.contractVersion === 1
+    ? response.evidence.needs.flatMap(({ officialOffers }) => officialOffers)
+    : response.evidence.officialOffers;
+}
+
+function MembershipPreferences({
+  officialOffers,
+  enabledProgramIds,
+  onChange,
+}: {
+  officialOffers: readonly OfficialOffer[];
+  enabledProgramIds: readonly string[];
+  onChange: (programId: string, enabled: boolean) => void;
+}) {
+  const presentations = membershipPreferencePresentations(
+    officialOffers,
+    enabledProgramIds,
+  );
+  if (presentations.length === 0) return null;
+  return (
+    <section className="result-memberships" aria-labelledby="membership-preferences-title">
+      <fieldset aria-describedby="membership-preferences-description">
+        <legend id="membership-preferences-title">Medlemspriser</legend>
+        <p id="membership-preferences-description">
+          Slå bare på programmer du er medlem av. Ingen medlemsprogrammer er valgt automatisk.
+        </p>
+        <ul>
+          {presentations.map((presentation) => {
+            const enabled = enabledProgramIds.includes(presentation.programId);
+            return (
+            <li key={presentation.programId}>
+              <label>
+                <input
+                  checked={enabled}
+                  onChange={(event) => {
+                    const nextEnabled = event.currentTarget.checked;
+                    if (nextEnabled && !presentation.available) return;
+                    onChange(presentation.programId, nextEnabled);
+                  }}
+                  type="checkbox"
+                />
+                <span className="result-membership-copy">
+                  <span>{presentation.label}</span>
+                  <small>{presentation.detail}</small>
+                </span>
+              </label>
+            </li>
+            );
+          })}
+        </ul>
+      </fieldset>
+    </section>
+  );
 }
 
 function ResultWorkspaceClient() {
-  const [basket] = useState<BrowserBasket>(() => loadBasket());
+  const [basket, setBasket] = useState<BrowserBasket>(() => loadBasket());
   const [state, setState] = useState<ResultState>({ status: "loading" });
   const [retry, setRetry] = useState(0);
-  const [selectedPlanId, setSelectedPlanId] = useState<string | undefined>(basket.selectedPlanId);
+  const [selectedPlanId, setSelectedPlanId] = useState<string | undefined>();
+  const preferenceBasisPoints = useRef(basket.convenienceWeightBasisPoints);
+  const [travelPlanning, setTravelPlanning] = useState<PlanResponse | undefined>();
+  const [travelBinding, setTravelBinding] = useState<TravelResultBinding | undefined>();
+  const [travel, setTravel] = useState<TravelCalculationState>({
+    contractVersion: 1,
+    kind: "not-requested",
+  });
   const requestVersion = useRef(0);
-  const requiredItems = basket.needs.filter(({ required }) => required).length;
-  const requestBody = useMemo(() => requestForBasket(basket), [basket]);
+  const readiness = useMemo(() => strictPlanRequestReadiness(basket), [basket]);
+  const request = readiness.state === "ready" ? readiness.request : undefined;
+  const requiredItems = request?.needs.length ?? 0;
+  const requestBody = useMemo(() => {
+    if (request === undefined) return undefined;
+    const serialized = JSON.stringify(request);
+    return new TextEncoder().encode(serialized).byteLength <= 64 * 1024
+      ? serialized
+      : undefined;
+  }, [request]);
 
   useEffect(() => {
-    if (requiredItems === 0 || requestBody === undefined) {
-      return;
-    }
+    if (requestBody === undefined) return;
+    // requestBody is serialized only from a successfully validated local
+    // request above. Binding response validation to this immutable snapshot
+    // also keeps presentation-only preference changes from refetching.
+    const boundRequest = JSON.parse(requestBody) as PlanRequest;
     const version = ++requestVersion.current;
     const controller = new AbortController();
     void fetch("/api/plans", {
@@ -210,15 +299,22 @@ function ResultWorkspaceClient() {
       signal: controller.signal,
     }).then(async (response) => {
       if (controller.signal.aborted || version !== requestVersion.current) return;
-      if (response.status === 503) {
+      if (response.status === 499 || response.status === 503) {
+        await cancelResponseBody(response.body);
         setState({ status: "unavailable" });
         return;
       }
+      if (response.status === 409 || response.status === 422) {
+        await cancelResponseBody(response.body);
+        setState({ status: "reapproval" });
+        return;
+      }
       if (!response.ok) {
+        await cancelResponseBody(response.body);
         setState({ status: "invalid" });
         return;
       }
-      const safe = await readSafeResponse(response, basket);
+      const safe = await readSafeResponse(response, boundRequest);
       if (controller.signal.aborted || version !== requestVersion.current) return;
       if (!safe) {
         setState({ status: "invalid" });
@@ -228,17 +324,18 @@ function ResultWorkspaceClient() {
         setState({ status: "empty" });
         return;
       }
-      const representatives = projectPlanFrontier(safe.plans);
-      const returnedIds = new Set(representatives.map(({ id }) => id));
-      const nextSelection = selectedPlanId && returnedIds.has(selectedPlanId)
-        ? selectedPlanId
-        : balancedPlanId(representatives);
+      const nextSelection = planIdForPreference(
+        safe.plans,
+        preferenceBasisPoints.current,
+      );
       if (!nextSelection) {
         setState({ status: "invalid" });
         return;
       }
       setSelectedPlanId(nextSelection);
-      saveBasket({ ...basket, selectedPlanId: nextSelection });
+      setTravelPlanning(undefined);
+      setTravelBinding(undefined);
+      setTravel({ contractVersion: 1, kind: "not-requested" });
       setState({ status: "ready", response: safe });
     }).catch((error: unknown) => {
       if (controller.signal.aborted || version !== requestVersion.current) return;
@@ -247,12 +344,28 @@ function ResultWorkspaceClient() {
     });
 
     return () => controller.abort();
-  // The basket is intentionally snapshotted once for this calculation page.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestBody, requiredItems, retry]);
+  // Request values change with identity, market, quantity, or membership inputs.
+  // The presentation-only preference lives in a ref and intentionally does not refetch.
+  }, [requestBody, retry]);
 
-  if (requiredItems === 0) {
+  if (readiness.state === "empty") {
     return <ResultMessage title="Handlekurven er tom" copy="Legg til varer før du beregner en handleplan." />;
+  }
+  if (readiness.state === "requires-reviewed-approval") {
+    return (
+      <ResultMessage
+        title="Godkjenn varevalget på nytt"
+        copy="Minst ett fleksibelt varevalg mangler en gyldig, kontrollert produktfamilie. Gå tilbake og kontroller kandidatene på nytt. Ingen eldre prisberegning ble brukt."
+      />
+    );
+  }
+  if (readiness.state === "requires-market-selection") {
+    return (
+      <ResultMessage
+        title="Velg prisområde på nytt"
+        copy="Det lagrede prisområdet er ikke lenger tilgjengelig. Handlelisten er bevart, men ingen prisforespørsel sendes før du velger et tilgjengelig område i Planlegg eller Oppdag."
+      />
+    );
   }
   if (requestBody === undefined) {
     return <ResultMessage title="Kunne ikke vise handleplanen" copy="Handlekurven er for stor eller ugyldig. Gå tilbake og kontroller varene." />;
@@ -277,18 +390,86 @@ function ResultWorkspaceClient() {
       </ResultMessage>
     );
   }
+  if (state.status === "reapproval") {
+    return request?.contractVersion === 1
+      ? <ResultMessage title="Varen må godkjennes på nytt" copy="Minst én vare finnes ikke lenger som det eksakte produktet du valgte. Gå tilbake og velg varen på nytt. Ingen eldre prisberegning ble brukt." />
+      : <ResultMessage title="Godkjenn varevalget på nytt" copy="Den kontrollerte kandidatlisten har endret seg eller kan ikke lenger bekreftes. Gå tilbake og godkjenn varevalget på nytt. Ingen eldre prisberegning ble brukt." />;
+  }
   if (state.status === "invalid") {
     return <ResultMessage title="Kunne ikke vise handleplanen" copy="Svaret kunne ikke bekreftes som en komplett og trygg plan." />;
   }
+  if (request === undefined) {
+    return <ResultMessage title="Kunne ikke vise handleplanen" copy="Handlekurven kunne ikke bekreftes som en trygg forespørsel." />;
+  }
 
-  const ordered = projectPlanFrontier(state.response.plans);
+  const priceOnlyResponse = state.response;
+  const activeResponse = travelPlanning ?? priceOnlyResponse;
+  const ordered = activeResponse.plans;
   const selected = ordered.find(({ id }) => id === selectedPlanId) ?? ordered[0]!;
-  const convenience = [...ordered].sort(compareConvenience)[0]!;
+  const selectedExplanation = activeResponse.planDeltaExplanations.entries.find(
+    ({ planId }) => planId === selected.id,
+  );
+  const products = activeResponse.contractVersion === 1
+    ? activeResponse.products
+    : reviewedProductsForPlan(activeResponse, selected);
+  const reviewedRequest = request.contractVersion === 2 ? request : undefined;
+  if (
+    products === undefined
+    || selectedExplanation === undefined
+    || (activeResponse.contractVersion === 2 && reviewedRequest === undefined)
+  ) {
+    return <ResultMessage title="Kunne ikke vise handleplanen" copy="Svaret kunne ikke bekreftes som en komplett og trygg plan." />;
+  }
 
   function selectPlan(planId: string): void {
     setSelectedPlanId(planId);
-    saveBasket({ ...basket, selectedPlanId: planId });
   }
+
+  function applyTravelResult(update: TravelResultUpdate): void {
+    setTravel(update.travel);
+    if (update.travel.kind !== "calculated") {
+      setTravelBinding(undefined);
+      const planning = "planning" in update ? update.planning : priceOnlyResponse;
+      setTravelPlanning("planning" in update ? update.planning : undefined);
+      const nextSelection = planIdForPreference(planning.plans, preferenceBasisPoints.current);
+      if (nextSelection !== undefined) setSelectedPlanId(nextSelection);
+      return;
+    }
+    if (!("planning" in update) || !("travelBinding" in update)) return;
+    setTravelBinding(update.travelBinding);
+    setTravelPlanning(update.planning);
+    const nextSelection = planIdForPreference(
+      update.planning.plans,
+      preferenceBasisPoints.current,
+    );
+    if (nextSelection !== undefined) setSelectedPlanId(nextSelection);
+  }
+
+  function setMembershipProgram(programId: string, enabled: boolean): void {
+    const availableProgramIds = availableMembershipProgramIds(priceOnlyResponse);
+    if (
+      (enabled && !availableProgramIds.includes(programId))
+      || (!enabled && !basket.enabledMembershipProgramIds.includes(programId))
+    ) return;
+    const nextProgramIds = enabled
+      ? [...new Set([...basket.enabledMembershipProgramIds, programId])]
+        .sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
+      : basket.enabledMembershipProgramIds.filter((candidate) => candidate !== programId);
+    const nextBasket = setBasketEnabledMembershipProgramIds(basket, nextProgramIds);
+    if (nextBasket === basket) return;
+    saveBasket(nextBasket);
+    setBasket(nextBasket);
+    setSelectedPlanId(undefined);
+    setTravelPlanning(undefined);
+    setTravelBinding(undefined);
+    setTravel({ contractVersion: 1, kind: "not-requested" });
+    setState({ status: "loading" });
+  }
+
+  const calculatedTravel = travel.kind === "calculated" ? travel : undefined;
+  const routesByPlan = new Map(
+    calculatedTravel?.routes.map((route) => [route.planId, route]) ?? [],
+  );
 
   return (
     <main className="result-main" data-layout="result-workspace">
@@ -297,7 +478,10 @@ function ResultWorkspaceClient() {
           <header className="result-heading">
             <p>Handleplan</p>
             <h1>Handleliste fordelt på butikker</h1>
-            <span>Komplett kurv basert på {requiredItems} nødvendige varer.</span>
+            <span>
+              Komplett kurv basert på {requiredItems}
+              {requiredItems === 1 ? " nødvendig vare." : " nødvendige varer."}
+            </span>
           </header>
           {selected.chains.map((selectedChain, index) => (
             <StoreAssignment
@@ -305,23 +489,69 @@ function ResultWorkspaceClient() {
               chain={selectedChain}
               order={index + 1}
               assignments={selected.assignments.filter(({ chain: assignmentChain }) => assignmentChain === selectedChain)}
-              needs={basket.needs}
-              products={basket.products}
+              officialOffers={officialOffersForResponse(activeResponse)}
+              products={products}
             />
           ))}
+          {activeResponse.contractVersion === 2 && (
+            <ReviewedFamilySelections plan={selected} response={activeResponse} />
+          )}
         </div>
         <aside className="result-rail">
           <PlanSummary
-            plan={selected as PlanResult}
-            convenienceTotalOre={convenience.totalOre}
+            plan={selected}
+            explanation={selectedExplanation}
+            explanationQualifier={activeResponse.planDeltaExplanations.qualifier.message}
             requiredItems={requiredItems}
+            travelRoute={routesByPlan.get(selected.id)}
           />
-          <PlanSelector plans={ordered as PlanResult[]} selectedPlanId={selected.id} onSelect={selectPlan} />
+          {activeResponse.contractVersion === 1 && request.contractVersion === 1 ? (
+            <StartTripButton
+              key={`${activeResponse.generatedAt}:${selected.id}`}
+              exactRequest={request}
+              exactResponse={activeResponse}
+              plan={selected}
+              travelBinding={travelBinding}
+            />
+          ) : activeResponse.contractVersion === 2 && reviewedRequest !== undefined ? (
+            <StartTripButton
+              key={`${activeResponse.generatedAt}:${selected.id}`}
+              kind="reviewed-family"
+              plan={selected}
+              reviewedRequest={reviewedRequest}
+              reviewedResponse={activeResponse}
+              travelBinding={travelBinding}
+            />
+          ) : null}
+          <TravelResultControls
+            planningRequest={request}
+            onTravelResult={applyTravelResult}
+          />
+          <MembershipPreferences
+            officialOffers={officialOffersForResponse(priceOnlyResponse)}
+            enabledProgramIds={basket.enabledMembershipProgramIds}
+            onChange={setMembershipProgram}
+          />
+          <PlanSelector
+            plans={ordered}
+            selectedPlanId={selected.id}
+            onSelect={selectPlan}
+            officialOffers={officialOffersForResponse(activeResponse)}
+            planDeltaExplanations={activeResponse.planDeltaExplanations}
+            travel={calculatedTravel}
+            onPreferenceChange={(convenienceWeightBasisPoints) => {
+              const nextBasket = { ...basket, convenienceWeightBasisPoints };
+              preferenceBasisPoints.current = convenienceWeightBasisPoints;
+              saveBasket(nextBasket);
+              setBasket(nextBasket);
+            }}
+          />
           <PriceProvenance
-            generatedAt={state.response.generatedAt}
-            caveats={state.response.caveats}
+            generatedAt={activeResponse.generatedAt}
+            caveats={activeResponse.caveats}
             assignments={selected.assignments}
-            priceDataSource={state.response.priceDataSource}
+            evidence={activeResponse.evidence}
+            priceDataSource={activeResponse.priceDataSource}
           />
         </aside>
       </div>
@@ -364,7 +594,14 @@ export default function ResultPage() {
       </header>
       <ResultWorkspace />
       <footer className="site-footer">
-        <div><p>© 2026 Handleplan • Uavhengig prissammenligning</p></div>
+        <div>
+          <p>© 2026 Handleplan • Uavhengig prissammenligning</p>
+          <nav aria-label="Om Handleplan">
+            <a href="/status">Datadekning</a>
+            <a href="/om">Offentlig gode og rettelser</a>
+            <a href="/personvern">Personvern</a>
+          </nav>
+        </div>
       </footer>
     </div>
   );

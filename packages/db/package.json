@@ -4,7 +4,32 @@
   "type": "module",
   "exports": {
     ".": "./src/price-cache.ts",
-    "./client": "./src/client.ts"
+    "./branch-directory": "./src/branch-directory.ts",
+    "./catalog-reader": "./src/catalog-reader.ts",
+    "./client": "./src/client.ts",
+    "./evidence": "./src/price-evidence.ts",
+    "./geographic-directory": "./src/geographic-directory.ts",
+    "./ingestion": "./src/ingestion.ts",
+    "./official-offer-foundation": "./src/official-offer-foundation.ts",
+    "./official-offer-lifecycle": "./src/official-offer-lifecycle.ts",
+    "./operations-dashboard": "./src/operations-dashboard.ts",
+    "./operations-runtime": "./src/operations-runtime.ts",
+    "./planning-evidence-reader": "./src/planning-evidence-reader.ts",
+    "./public-official-offer-reader": "./src/public-official-offer-reader.ts",
+    "./public-api-request-budget": "./src/public-api-request-budget.ts",
+    "./public-catalog-index-reader": "./src/public-catalog-index-reader.ts",
+    "./read-model": "./src/price-read-model.ts",
+    "./request-budget": "./src/request-budget.ts",
+    "./review-queue": "./src/review-queue.ts",
+    "./reviewed-family-reader": "./src/reviewed-family-reader.ts",
+    "./schema": "./src/schema.ts",
+    "./source-access": "./src/source-access.ts",
+    "./source-governance-lock": "./src/source-governance-lock.ts",
+    "./source-health-writer": "./src/source-health-writer.ts",
+    "./source-status-reader": "./src/source-status-reader.ts",
+    "./worker-lease": "./src/worker-lease.ts",
+    "./worker-state": "./src/worker-state.ts",
+    "./worker-targets": "./src/worker-targets.ts"
   },
   "scripts": {
     "db:migrate": "drizzle-kit push",
@@ -21,6 +46,6 @@
     "@types/node": "24.10.13",
     "drizzle-kit": "^0.31.10",
     "typescript": "5.9.3",
-    "vitest": "4.0.18"
+    "vitest": "4.1.0"
   }
 }
