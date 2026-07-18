@@ -8,7 +8,13 @@ import {
   publicDiscoveryResponseSchemaFor,
   publicProductSearchResponseSchema,
 } from "@handleplan/domain";
-import { expect, test, type APIResponse, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type APIResponse,
+  type Page,
+  type Response as PlaywrightResponse,
+} from "@playwright/test";
 
 import { createStrictResultTripSnapshot } from "../../apps/web/lib/strict-result-trip";
 import { strictResultTripFixture } from "../../apps/web/test-support/strict-result-trip-fixture";
@@ -31,8 +37,18 @@ const sealedPublic = path.join(
   "public",
 );
 const expectedRevision = process.env.APP_COMMIT_SHA ?? "";
+const applicationOrigin = "https://127.0.0.1:3121";
 const responseScanHeader = "x-handleplan-image-e2e-response-scan";
 const leakProbeHeader = "x-handleplan-image-e2e-leak-probe";
+const safeServerFailureCodes = new Set([
+  "CATALOG_UNAVAILABLE",
+  "INVALID_SERVICE_RESPONSE",
+  "PRICE_DATA_UNAVAILABLE",
+  "REQUEST_BUDGET_UNAVAILABLE",
+  "REQUEST_TIMEOUT",
+  "RESPONSE_TOO_LARGE",
+  "SERVER_BUSY",
+]);
 const isolatedDatabaseRoleEnvironmentNames = [
   "HANDLEPLAN_IMAGE_DATABASE_URL",
   "HANDLEPLAN_IMAGE_SEED_APP_DATABASE_URL",
@@ -54,6 +70,39 @@ test.afterEach(async ({ page }) => {
 
 function assertScanned(response: APIResponse): void {
   expect(response.headers()[responseScanHeader]).toBe("passed-v1");
+}
+
+async function safeServerFailureDiagnostic(response: PlaywrightResponse): Promise<string> {
+  const url = new URL(response.url());
+  const headers = response.headers();
+  const scanValue = headers[responseScanHeader];
+  const scan = scanValue === "passed-v1" || scanValue === "rejected-v1"
+    ? scanValue
+    : "missing-or-invalid";
+  const contentType = headers["content-type"] ?? "";
+  const declaredLength = headers["content-length"];
+  const safeDeclaredLength = declaredLength === undefined
+    || (/^\d{1,4}$/u.test(declaredLength) && Number(declaredLength) <= 1_024);
+  let code = "unavailable";
+  if (safeDeclaredLength && contentType.toLowerCase().startsWith("application/json")) {
+    try {
+      const body = await response.body();
+      if (body.byteLength <= 1_024) {
+        const value: unknown = JSON.parse(body.toString("utf8"));
+        if (
+          typeof value === "object"
+          && value !== null
+          && Object.keys(value).length === 1
+          && "code" in value
+          && typeof value.code === "string"
+          && safeServerFailureCodes.has(value.code)
+        ) code = value.code;
+      }
+    } catch {
+      // Diagnostics remain path-only if an interrupted response body cannot be read safely.
+    }
+  }
+  return `${response.request().method()} ${url.pathname} status=${response.status()} code=${code} scan=${scan}`;
 }
 
 async function assertSafeLeakRejection(response: APIResponse): Promise<void> {
@@ -389,9 +438,22 @@ test("the exact production image searches and plans from governed PostgreSQL evi
   request,
 }) => {
   const browserErrors: string[] = [];
+  const serverFailureDiagnostics: string[] = [];
+  const pendingServerFailureDiagnostics: Promise<void>[] = [];
   page.on("pageerror", (error) => browserErrors.push(`pageerror: ${error.message}`));
   page.on("console", (message) => {
     if (message.type() === "error") browserErrors.push(`console: ${message.text()}`);
+  });
+  page.on("response", (response) => {
+    const url = new URL(response.url());
+    if (
+      url.origin !== applicationOrigin
+      || response.status() < 500
+    ) return;
+    pendingServerFailureDiagnostics.push(safeServerFailureDiagnostic(response)
+      .then((value) => {
+        serverFailureDiagnostics.push(value);
+      }));
   });
 
   const productSearch = await request.get(
@@ -399,7 +461,8 @@ test("the exact production image searches and plans from governed PostgreSQL evi
   );
   expect(productSearch.status()).toBe(200);
   assertScanned(productSearch);
-  expect(publicProductSearchResponseSchema.parse(await productSearch.json())).toEqual({
+  const productSearchPayload = publicProductSearchResponseSchema.parse(await productSearch.json());
+  expect(productSearchPayload).toEqual({
     contractVersion: 1,
     products: [{
       brand: databaseFixture.brand,
@@ -412,10 +475,22 @@ test("the exact production image searches and plans from governed PostgreSQL evi
   });
 
   await page.goto("/planlegg", { waitUntil: "domcontentloaded" });
+  expect(new URL(page.url()).origin).toBe(applicationOrigin);
   await expect(page).toHaveTitle("Handleplan");
   await expect(page.getByRole("heading", { name: "Hva skal du handle?" })).toBeVisible();
   const productCombobox = page.getByRole("combobox", { name: "Hva skal du handle?" });
+  const uiProductSearchResponsePromise = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "GET"
+      && url.pathname === "/api/products/search"
+      && url.searchParams.get("q") === "Handleplan verifisert lettmelk";
+  });
   await productCombobox.fill("Handleplan verifisert lettmelk");
+  const uiProductSearchResponse = await uiProductSearchResponsePromise;
+  expect(uiProductSearchResponse.status()).toBe(200);
+  expect(uiProductSearchResponse.headers()[responseScanHeader]).toBe("passed-v1");
+  expect(publicProductSearchResponseSchema.parse(await uiProductSearchResponse.json()))
+    .toEqual(productSearchPayload);
   const exactOption = page.getByRole("option").filter({ hasText: databaseFixture.productName });
   await expect(exactOption).toHaveCount(1);
   await exactOption.click();
@@ -480,12 +555,54 @@ test("the exact production image searches and plans from governed PostgreSQL evi
     ],
   });
 
+  const initialDiscoveryRequest = publicDiscoveryRequestV1Schema.parse({
+    chain: "all",
+    contractVersion: 1,
+    marketContext: { contractVersion: 1, countryCode: "NO", kind: "national" },
+    pageSize: 8,
+    resultType: "all",
+  });
+  const initialDiscoveryResponsePromise = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "GET"
+      && url.pathname === "/api/discovery/search"
+      && url.searchParams.get("chain") === "all"
+      && url.searchParams.get("market") === "national"
+      && url.searchParams.get("pageSize") === "8"
+      && url.searchParams.get("type") === "all"
+      && !url.searchParams.has("category")
+      && !url.searchParams.has("cursor")
+      && !url.searchParams.has("q");
+  });
   await page.goto("/oppdag", { waitUntil: "domcontentloaded" });
   await expect(page).toHaveTitle("Oppdag | Handleplan");
   await expect(page.getByRole("heading", { name: "Oppdag" })).toBeVisible();
+  const initialDiscoveryResponse = await initialDiscoveryResponsePromise;
+  expect(initialDiscoveryResponse.status()).toBe(200);
+  expect(initialDiscoveryResponse.headers()[responseScanHeader]).toBe("passed-v1");
+  const initialDiscovery = publicDiscoveryResponseSchemaFor(initialDiscoveryRequest)
+    .parse(await initialDiscoveryResponse.json());
+  expect(initialDiscovery.products.length).toBeGreaterThan(0);
+  await expect(page.getByRole("heading", {
+    name: initialDiscovery.products[0]!.catalog.displayName,
+  })).toBeVisible();
+  await expect(page.getByText(/^[1-9]\d* (?:vare|varer) på denne siden$/u)).toBeVisible();
+  // The exact-image gate proves both required user modes without manufacturing
+  // an immediate navigation-time cancellation. Focused component coverage owns
+  // the intentional supersession behavior when a real browse is still pending.
   const discoveryQuery = page.getByLabel("Filtrer varene (valgfritt)");
   await discoveryQuery.fill("Handleplan verifisert lettmelk");
+  const uiDiscoveryResponsePromise = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "GET"
+      && url.pathname === "/api/discovery/search"
+      && url.searchParams.get("q") === discoveryRequest.query;
+  });
   await page.getByRole("button", { name: "Søk", exact: true }).click();
+  const uiDiscoveryResponse = await uiDiscoveryResponsePromise;
+  expect(uiDiscoveryResponse.status()).toBe(200);
+  expect(uiDiscoveryResponse.headers()[responseScanHeader]).toBe("passed-v1");
+  publicDiscoveryResponseSchemaFor(discoveryRequest).parse(await uiDiscoveryResponse.json());
   await expect(page.getByRole("heading", {
     name: "Treff for «Handleplan verifisert lettmelk»",
   })).toBeVisible();
@@ -598,7 +715,24 @@ test("the exact production image searches and plans from governed PostgreSQL evi
   await expect(page.getByText(/Kilder: CI verifisert varekatalog, CI verifisert offisielt tilbud, CI verifisert ordinærpris\./u))
     .toBeVisible();
   await expect(priceProvenance).toContainText("1 offisielt tilbud er brukt i valgt plan.");
-  expect(browserErrors).toEqual([]);
+  await page.waitForTimeout(100);
+  let completedDiagnostics = 0;
+  let stableDiagnosticChecks = 0;
+  while (stableDiagnosticChecks < 2) {
+    if (completedDiagnostics < pendingServerFailureDiagnostics.length) {
+      const batch = pendingServerFailureDiagnostics.slice(completedDiagnostics);
+      completedDiagnostics = pendingServerFailureDiagnostics.length;
+      await Promise.all(batch);
+      stableDiagnosticChecks = 0;
+    } else {
+      stableDiagnosticChecks += 1;
+    }
+    await page.waitForTimeout(25);
+  }
+  expect({ browserErrors, serverFailureDiagnostics }).toEqual({
+    browserErrors: [],
+    serverFailureDiagnostics: [],
+  });
 });
 
 test("a strict saved trip survives a test-only transformed worker generation and a hard origin outage", async ({ page }) => {

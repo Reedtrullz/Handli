@@ -485,6 +485,38 @@ describe("Oppdag discovery workspace", () => {
     expect(screen.getByRole("heading", { name: "Varekatalog og prisgrunnlag" })).toBeVisible();
   });
 
+  it("aborts a superseded initial browse and ignores its late rejection", async () => {
+    const user = userEvent.setup();
+    let initialSignal: AbortSignal | undefined;
+    let rejectInitial!: (reason?: unknown) => void;
+    const initialResponse = new Promise<PublicDiscoveryResponse>((_resolve, reject) => {
+      rejectInitial = reject;
+    });
+    const search = vi.fn<DiscoverySearch>((request, signal) => {
+      if (request.query === undefined) {
+        initialSignal = signal;
+        return initialResponse;
+      }
+      return Promise.resolve(responseForRequest(request));
+    });
+    render(<DiscoveryWorkspace searchDiscovery={search} storage={memoryStorage()} />);
+    await waitFor(() => expect(initialSignal).toBeDefined());
+
+    await user.type(screen.getByLabelText("Filtrer varene (valgfritt)"), "kaffe");
+    await user.click(screen.getByRole("button", { name: "Søk" }));
+
+    await waitFor(() => expect(initialSignal?.aborted).toBe(true));
+    expect(await screen.findByRole("heading", { name: "Treff for «kaffe»" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "TINE Lettmelk 1 % 1 l" })).toBeVisible();
+    expect(screen.getByText("2 varer på denne siden")).toBeVisible();
+    rejectInitial(new Error("late private dependency detail"));
+    await initialResponse.catch(() => undefined);
+    expect(screen.getByRole("heading", { name: "Treff for «kaffe»" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "TINE Lettmelk 1 % 1 l" })).toBeVisible();
+    expect(screen.getByText("2 varer på denne siden")).toBeVisible();
+    expect(screen.queryByText("Kunne ikke hente katalogen akkurat nå.")).not.toBeInTheDocument();
+  });
+
   it("filters by an opaque observed category without combining it with text search", async () => {
     const user = userEvent.setup();
     const search = successfulSearch();
