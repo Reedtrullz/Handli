@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://handle.reidar.tech/schemas/v1-candidate-manifest.schema.json",
   "title": "Handleplan v1 release candidate evidence manifest",
-  "$comment": "The promotion_candidate shape is reserved for future evidence architecture. The repository semantic verifier intentionally rejects every promotion_candidate today.",
+  "$comment": "The promotion_candidate shape uses a source commit followed by exactly one evidence-only commit. The repository semantic verifier still rejects final promotion until independent live cryptographic verification and gate-specific trust policy are implemented.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -35,12 +35,12 @@
       "pattern": "^[a-z0-9][a-z0-9.-]*$"
     },
     "mode": {
-      "description": "draft_unverified is supported. promotion_candidate is a reserved static shape that the semantic verifier always rejects.",
+      "description": "draft_unverified is supported. promotion_candidate receives strict two-commit preflight validation but remains ineligible until independent live trust verification is implemented.",
       "enum": ["draft_unverified", "promotion_candidate"]
     },
     "createdAt": { "type": "string", "format": "date-time" },
     "releaseDecision": {
-      "description": "eligible is reserved by the schema and is not an outcome the current verifier can return.",
+      "description": "eligible is reserved by the schema and can be declared only by a promotion candidate that passes the complete external release workflow; the current repository verifier still fails closed before returning it.",
       "enum": ["blocked", "eligible"]
     },
     "source": { "$ref": "#/$defs/source" },
@@ -121,7 +121,7 @@
             "type": "object",
             "properties": {
               "treeState": { "const": "clean" },
-              "commitBinding": { "const": "exact" }
+              "commitBinding": { "const": "source_exact_evidence_append" }
             }
           },
           "image": {
@@ -165,7 +165,9 @@
           "pattern": "^[0-9a-f]{40}$"
         },
         "treeState": { "enum": ["clean", "dirty"] },
-        "commitBinding": { "enum": ["exact", "baseline_only"] }
+        "commitBinding": {
+          "enum": ["exact", "baseline_only", "source_exact_evidence_append"]
+        }
       }
     },
     "image": {

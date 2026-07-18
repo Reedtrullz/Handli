@@ -62,7 +62,6 @@ function promotionFixture() {
     trackedFiles.add(path);
     return write(root, path, value);
   };
-  const commitSha = sha256("fixture commit").slice(0, 40);
   const migrationSha = writeTracked("deploy/migrations/001_fixture.sql", "select 1;\n");
   const registrySha = writeTracked("docs/data/source-registry.v1.json", {
     $schema: "./source-registry.v1.schema.json",
@@ -164,6 +163,20 @@ function promotionFixture() {
     },
   };
   const coverageSha = writeTracked("docs/data/launch-coverage.v1.json", coverage);
+
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "release-fixture@invalid.example"], {
+    cwd: root,
+  });
+  execFileSync("git", ["config", "user.name", "Release fixture"], { cwd: root });
+  execFileSync("git", ["add", "deploy", "docs/data"], { cwd: root });
+  execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "source"], {
+    cwd: root,
+  });
+  const commitSha = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
 
   const ociManifestPath = `${candidateDirectory}/image.oci-manifest.json`;
   const ociManifestSha = writeTracked(ociManifestPath, {
@@ -301,7 +314,7 @@ function promotionFixture() {
     source: {
       commitSha,
       treeState: "clean",
-      commitBinding: "exact",
+      commitBinding: "source_exact_evidence_append",
     },
     image: {
       repository,
@@ -479,7 +492,7 @@ test("the draft writer refuses overwrite and removes its file after binding drif
           writeFileSync(outputPath, "{}\n");
         },
       }),
-      /candidate manifest must be stored/u,
+      /schema validation failed/u,
     );
     assert.equal(readFileSync(resolve(root, changedPath), "utf8"), "{}\n");
   } finally {
@@ -585,14 +598,90 @@ test("a draft can identify an unverified backup without claiming a restore", () 
 
 test("even a structurally complete fixture cannot pass as a promotion", () => {
   withPromotionFixture(({ commitSha, manifest, root, trackedFiles }) => {
+    const evidenceCommitSha = sha256("fixture evidence commit").slice(0, 40);
     assert.throws(
       () => verifyCandidateManifest(manifest, {
-        repositoryCommit: commitSha,
+        repositoryCommit: evidenceCommitSha,
         root,
+        sourceCandidateEvidencePaths: [],
+        sourceCommitIsAncestor: true,
+        sourceToEvidenceChangedPaths: [
+          `docs/evidence/v1/${manifest.candidateId}/release-candidate.v1.json`,
+        ],
+        sourceToEvidenceCommitCount: 1,
         trackedFiles,
         worktreeDirty: false,
       }),
       /promotion verification is intentionally unsupported/u,
+    );
+  });
+});
+
+test("promotion requires one append-only evidence commit after the immutable source", () => {
+  withPromotionFixture(({ commitSha, manifest, root, trackedFiles }) => {
+    const baseOptions = {
+      repositoryCommit: sha256("fixture evidence commit").slice(0, 40),
+      root,
+      sourceCandidateEvidencePaths: [],
+      sourceCommitIsAncestor: true,
+      sourceToEvidenceChangedPaths: [
+        `docs/evidence/v1/${manifest.candidateId}/release-candidate.v1.json`,
+      ],
+      sourceToEvidenceCommitCount: 1,
+      trackedFiles,
+      worktreeDirty: false,
+    };
+
+    assert.throws(
+      () => verifyCandidateManifest(manifest, {
+        ...baseOptions,
+        repositoryCommit: commitSha,
+      }),
+      /distinct source commit followed by one evidence commit/u,
+    );
+    assert.throws(
+      () => verifyCandidateManifest(manifest, {
+        ...baseOptions,
+        sourceToEvidenceCommitCount: 2,
+      }),
+      /exactly one evidence commit/u,
+    );
+    assert.throws(
+      () => verifyCandidateManifest(manifest, {
+        ...baseOptions,
+        sourceCandidateEvidencePaths: [
+          `docs/evidence/v1/${manifest.candidateId}/preexisting.json`,
+        ],
+      }),
+      /must not pre-exist in the source commit/u,
+    );
+    assert.throws(
+      () => verifyCandidateManifest(manifest, {
+        ...baseOptions,
+        sourceToEvidenceChangedPaths: [
+          `docs/evidence/v1/${manifest.candidateId}/release-candidate.v1.json`,
+          "apps/web/app/page.tsx",
+        ],
+      }),
+      /may change only its candidate evidence directory/u,
+    );
+  });
+});
+
+test("file verification derives the one-commit source-to-evidence boundary from Git", () => {
+  withPromotionFixture(({ manifest, root }) => {
+    const manifestPath = `docs/evidence/v1/${manifest.candidateId}/release-candidate.v1.json`;
+    write(root, manifestPath, manifest);
+    execFileSync("git", ["add", "docs/evidence"], { cwd: root });
+    execFileSync(
+      "git",
+      ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "evidence"],
+      { cwd: root },
+    );
+
+    assert.throws(
+      () => verifyManifestFile(manifestPath, root, { requirePromotion: true }),
+      /promotion verification is intentionally unsupported until registry and signature proofs/u,
     );
   });
 });

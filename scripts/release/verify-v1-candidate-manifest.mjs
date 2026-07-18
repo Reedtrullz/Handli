@@ -713,6 +713,10 @@ function assertBoundDocumentSchema(label, validate, document) {
 export function verifyCandidateManifest(manifest, {
   root = repositoryRoot,
   repositoryCommit,
+  sourceCandidateEvidencePaths,
+  sourceCommitIsAncestor,
+  sourceToEvidenceChangedPaths,
+  sourceToEvidenceCommitCount,
   trackedFiles,
   worktreeDirty,
 } = {}) {
@@ -726,11 +730,13 @@ export function verifyCandidateManifest(manifest, {
   if (promotion && !(trackedFiles instanceof Set)) {
     fail("promotion verification requires the tracked file set at candidate HEAD");
   }
-  if (manifest.source.commitSha !== repositoryCommit) {
+  if (!promotion && manifest.source.commitSha !== repositoryCommit) {
     fail("source commit does not match the repository HEAD");
   }
   const expectedTreeState = worktreeDirty ? "dirty" : "clean";
-  const expectedCommitBinding = worktreeDirty ? "baseline_only" : "exact";
+  const expectedCommitBinding = promotion
+    ? "source_exact_evidence_append"
+    : worktreeDirty ? "baseline_only" : "exact";
   if (manifest.source.treeState !== expectedTreeState) {
     fail(`source treeState must be ${expectedTreeState}`);
   }
@@ -896,8 +902,34 @@ export function verifyCandidateManifest(manifest, {
   }
 
   if (promotion) {
+    const evidencePrefix = `docs/evidence/v1/${manifest.candidateId}/`;
+    const expectedManifestPath = `${evidencePrefix}release-candidate.v1.json`;
+    if (manifest.source.commitSha === repositoryCommit) {
+      fail("promotion requires a distinct source commit followed by one evidence commit");
+    }
+    if (sourceCommitIsAncestor !== true) {
+      fail("promotion source commit is not an ancestor of the evidence commit");
+    }
+    if (sourceToEvidenceCommitCount !== 1) {
+      fail("promotion requires exactly one evidence commit after the source commit");
+    }
+    if (!Array.isArray(sourceCandidateEvidencePaths)) {
+      fail("promotion verification requires the source candidate-evidence path set");
+    }
+    if (sourceCandidateEvidencePaths.length > 0) {
+      fail("promotion candidate evidence must not pre-exist in the source commit");
+    }
+    if (!Array.isArray(sourceToEvidenceChangedPaths) || sourceToEvidenceChangedPaths.length === 0) {
+      fail("promotion evidence commit must add candidate-local evidence files");
+    }
+    if (!sourceToEvidenceChangedPaths.includes(expectedManifestPath)) {
+      fail("promotion evidence commit must add the candidate manifest");
+    }
+    if (sourceToEvidenceChangedPaths.some((path) => !path.startsWith(evidencePrefix))) {
+      fail("promotion evidence commit may change only its candidate evidence directory");
+    }
     fail(
-      "promotion verification is intentionally unsupported until source and evidence commits are split, registry and signature proofs are verified live, and G1-G12 use gate-specific evidence contracts",
+      "promotion verification is intentionally unsupported until registry and signature proofs are verified live by an independent trust policy and G1-G12 use externally reviewed gate-specific evidence contracts",
     );
   }
   if (manifest.releaseDecision !== "blocked") {
@@ -910,7 +942,7 @@ export function verifyCandidateManifest(manifest, {
   };
 }
 
-function repositoryState(root) {
+function repositoryState(root, manifest) {
   const commit = execFileSync("git", ["rev-parse", "HEAD"], {
     cwd: root,
     encoding: "utf8",
@@ -923,10 +955,58 @@ function repositoryState(root) {
     cwd: root,
     encoding: "utf8",
   });
-  return {
+  const state = {
     commit,
     dirty: status.length > 0,
     trackedFiles: new Set(tracked.split("\0").filter((path) => path.length > 0)),
+  };
+  if (manifest.mode !== "promotion_candidate") return state;
+
+  const sourceCommit = manifest.source.commitSha;
+  const evidencePrefix = `docs/evidence/v1/${manifest.candidateId}/`;
+  let sourceCommitIsAncestor = false;
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", sourceCommit, commit], {
+      cwd: root,
+      stdio: "ignore",
+    });
+    sourceCommitIsAncestor = true;
+  } catch {
+    // The semantic verifier emits the bounded fail-closed reason below.
+  }
+  if (!sourceCommitIsAncestor) {
+    return {
+      ...state,
+      sourceCandidateEvidencePaths: [],
+      sourceCommitIsAncestor,
+      sourceToEvidenceChangedPaths: [],
+      sourceToEvidenceCommitCount: 0,
+    };
+  }
+
+  const sourceToEvidenceCommitCount = Number.parseInt(execFileSync(
+    "git",
+    ["rev-list", "--count", `${sourceCommit}..${commit}`],
+    { cwd: root, encoding: "utf8" },
+  ).trim(), 10);
+  const changed = execFileSync(
+    "git",
+    ["diff", "--name-only", "-z", "--diff-filter=ACMRTUXBD", sourceCommit, commit, "--"],
+    { cwd: root, encoding: "utf8" },
+  );
+  const sourceCandidateEvidence = execFileSync(
+    "git",
+    ["ls-tree", "-r", "--name-only", "-z", sourceCommit, "--", evidencePrefix],
+    { cwd: root, encoding: "utf8" },
+  );
+  return {
+    ...state,
+    sourceCandidateEvidencePaths: sourceCandidateEvidence
+      .split("\0")
+      .filter((path) => path.length > 0),
+    sourceCommitIsAncestor,
+    sourceToEvidenceChangedPaths: changed.split("\0").filter((path) => path.length > 0),
+    sourceToEvidenceCommitCount,
   };
 }
 
@@ -937,13 +1017,16 @@ export function verifyManifestFile(
 ) {
   const resolvedPath = checkedRepositoryFile(root, manifestPath, "candidate manifest");
   const manifest = JSON.parse(readFileSync(resolvedPath, "utf8"));
+  // Validate untrusted manifest strings before using the source commit or
+  // candidate ID as arguments and pathspecs in repository-state commands.
+  assertManifestSchema(manifest);
   if (
     requirePromotion
     && (manifest.mode !== "promotion_candidate" || manifest.releaseDecision !== "eligible")
   ) {
     fail("the selected workflow input is not an eligible promotion_candidate manifest");
   }
-  const state = repositoryState(root);
+  const state = repositoryState(root, manifest);
   const expectedManifestPath = `docs/evidence/v1/${manifest.candidateId}/release-candidate.v1.json`;
   if (manifestPath !== expectedManifestPath) {
     fail(`candidate manifest must be stored at ${expectedManifestPath}`);
@@ -954,6 +1037,10 @@ export function verifyManifestFile(
   return verifyCandidateManifest(manifest, {
     repositoryCommit: state.commit,
     root,
+    sourceCandidateEvidencePaths: state.sourceCandidateEvidencePaths,
+    sourceCommitIsAncestor: state.sourceCommitIsAncestor,
+    sourceToEvidenceChangedPaths: state.sourceToEvidenceChangedPaths,
+    sourceToEvidenceCommitCount: state.sourceToEvidenceCommitCount,
     trackedFiles: state.trackedFiles,
     worktreeDirty: state.dirty,
   });

@@ -12,9 +12,12 @@ outcome today:
   but then the full commit is explicitly a `baseline_only` reference. Missing
   image, CI, test, scan, backup, regional, signature, and provenance evidence is
   represented as missing or unverified—not as a fabricated identifier.
-- `promotion_candidate` is a reserved static shape. The verifier may report a
-  more specific malformed-evidence error first, but it always rejects this mode
-  and can never return `eligible`.
+- `promotion_candidate` receives strict two-commit preflight validation. The
+  source commit must be followed by exactly one clean evidence-only commit that
+  adds a previously absent candidate directory and changes nothing outside it.
+  The verifier may report a more specific malformed-evidence error first, but
+  it still rejects final promotion until independent live cryptographic and
+  gate-specific trust verification exists.
 
 The historical
 [cross-browser-remediated source-neutral implementation draft](../evidence/v1/v1-source-neutral-cross-browser-remediation-2026-07-17/release-candidate.v1.json)
@@ -35,9 +38,10 @@ Repository-local JSON and hashes cannot prove the external facts required to
 authorize a release. Promotion remains unsupported until all of the following
 exist and are independently reviewed:
 
-1. a two-commit evidence design, where one immutable source commit produces the
-   image and a later evidence commit retains proofs without claiming that those
-   later files were present in the source commit;
+1. independent review of the implemented two-commit evidence design, where one
+   immutable source commit produces the image and exactly one later
+   evidence-only commit retains proofs without claiming that those later files
+   were present in the source commit;
 2. live registry verification of the immutable OCI manifest, its config, and
    its layers, rather than trusting a repository-authored readback wrapper;
 3. real signature and DSSE/in-toto verification against a pinned key or workload
@@ -83,10 +87,13 @@ The command reads `git rev-parse HEAD` and the complete porcelain worktree
 status itself. A caller cannot mark a dirty checkout clean through manifest
 fields. It then applies the Draft 2020-12
 [schema](../release/v1-candidate-manifest.schema.json) and these semantic rules.
-The promotion-only rules below are defensive static checks, not a path to a
+The promotion-only rules below are defensive static checks, not yet a path to a
 successful release decision:
 
-1. the full commit, clean/dirty state, and exact/baseline binding agree with Git;
+1. the evidence checkout is clean; the source commit is its ancestor; exactly
+   one commit separates them; the candidate directory did not exist in the
+   source; and every changed path is inside that newly added candidate
+   directory;
 2. every repository SQL migration is listed once, in lexical order, with its
    exact SHA-256;
 3. source-registry and launch-coverage versions and file bytes match their own
