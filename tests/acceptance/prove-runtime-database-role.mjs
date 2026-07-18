@@ -19,6 +19,9 @@ const reviewSessionId = `access-session:${"d".repeat(64)}`;
 const reviewEvidenceProof = "c".repeat(64);
 const reviewCaptureChecksum = "a".repeat(64);
 const reviewEvidenceLocator = "runtime-review-boundary-evidence";
+const reviewPdfCaptureChecksum = "b".repeat(64);
+const reviewPdfEvidenceLocator = "runtime-review-boundary-pdf-evidence";
+const injectedPdfEvidenceProof = "f".repeat(64);
 const webTableSelects = [
   "catalog_observations",
   "canonical_products",
@@ -114,6 +117,13 @@ const webColumnSelects = {
     "status",
     "terminalized_at",
   ],
+  official_offer_publication_health_facts: [
+    "id",
+    "last_publish_success_at",
+    "newest_eligible_evidence_at",
+    "persisted_at",
+    "source_id",
+  ],
   source_health_snapshots: [
     "geographic_scope_id",
     "id",
@@ -121,6 +131,7 @@ const webColumnSelects = {
     "last_discovery_success_at",
     "last_publish_success_at",
     "newest_eligible_evidence_at",
+    "persisted_at",
     "recorded_at",
     "source_id",
     "status",
@@ -334,7 +345,11 @@ async function expectDenied(operation, label) {
   );
 }
 
-function evidenceCropReference(candidateId) {
+function evidenceCropReference(
+  candidateId,
+  captureChecksum = reviewCaptureChecksum,
+  evidenceLocator = reviewEvidenceLocator,
+) {
   const separator = Buffer.from([0]);
   const digest = createHash("sha256")
     .update(Buffer.concat([
@@ -342,9 +357,9 @@ function evidenceCropReference(candidateId) {
       separator,
       Buffer.from(String(candidateId), "utf8"),
       separator,
-      Buffer.from(reviewCaptureChecksum, "utf8"),
+      Buffer.from(captureChecksum, "utf8"),
       separator,
-      Buffer.from(reviewEvidenceLocator, "utf8"),
+      Buffer.from(evidenceLocator, "utf8"),
     ]))
     .digest("hex");
   return `review-crop:${digest}`;
@@ -458,8 +473,6 @@ async function assertExactSequenceAndFunctionGrants(client, role) {
         "private_review_decide_v2(p_candidate_id bigint, p_expected_version integer, p_action text, p_actor_id text, p_reviewer_session_id text, p_evidence_proof_sha256 text, p_reason text, p_target_kind text, p_target_gtin text, p_target_family_slug text, p_pricing_kind text, p_offer_price_ore integer, p_before_price_ore integer, p_multibuy_quantity integer, p_multibuy_total_ore integer, p_eligibility_kind text, p_membership_program_id text, p_valid_from timestamp with time zone, p_valid_until timestamp with time zone, p_channels text[])",
         "private_review_record_evidence_render_v1(p_candidate_id bigint, p_expected_version integer, p_capture_checksum text, p_crop_reference text, p_presentation text, p_rights_classification text, p_actor_id text, p_reviewer_session_id text, p_evidence_proof_sha256 text, p_expires_at timestamp with time zone)",
       ] : role === operationsRole ? [
-        "append_operations_alert_evaluation_v1(p_evaluated_at timestamp with time zone, p_source_roster jsonb, p_assessments jsonb)",
-        "operations_alert_export_rows_v1(p_after_event_id bigint, p_result_limit integer)",
         "operations_dashboard_rows_v1(p_source_ids text[], p_result_limit integer)",
       ] : [],
     `${role} function execution must match the explicit allowlist exactly`,
@@ -475,6 +488,7 @@ let createdDatabase = false;
 let proofError;
 let proofResult;
 let reviewBoundaryCandidateId;
+let reviewPdfBoundaryCandidateId;
 let reviewBoundaryValidFrom;
 let reviewBoundaryValidUntil;
 
@@ -849,6 +863,62 @@ try {
     `;
     reviewBoundaryCandidateId = reviewCandidate?.id;
     assert.ok(reviewBoundaryCandidateId, "private review candidate fixture must persist");
+
+    const [reviewPdfCapture] = await ownershipAdmin`
+      insert into publication_captures (
+        publication_id, blob_key, checksum, mime_type, byte_length,
+        rights_classification, retrieved_at, capture_permission_id,
+        capture_permission_capabilities
+      ) values (
+        ${reviewPublication.id}, 'runtime-review-boundary/capture.pdf',
+        ${reviewPdfCaptureChecksum}, 'application/pdf', 256, 'private_review',
+        clock_timestamp(), ${reviewPermission.id},
+        '["capture", "discover", "extract"]'::jsonb
+      )
+      returning id, retrieved_at
+    `;
+    const [reviewPdfExtraction] = await ownershipAdmin`
+      insert into extraction_runs (
+        capture_id, extractor_version, status, started_at, completed_at, counts,
+        extraction_method, extraction_permission_id, permission_capabilities,
+        source_started_at, source_completed_at, empty_result
+      ) values (
+        ${reviewPdfCapture.id}, 'runtime-review-boundary-pdf-v1', 'completed',
+        ${reviewPdfCapture.retrieved_at}, ${reviewPdfCapture.retrieved_at},
+        '{"candidates": 1}'::jsonb, 'structured', ${reviewPermission.id},
+        '["capture", "discover", "extract"]'::jsonb,
+        ${reviewPdfCapture.retrieved_at}, ${reviewPdfCapture.retrieved_at},
+        'not-empty'
+      )
+      returning id
+    `;
+    const reviewPdfCandidateEnvelope = {
+      ...reviewCandidateEnvelope,
+      candidate: {
+        ...candidatePayload,
+        candidateKey: "runtime-review-boundary-pdf-candidate",
+        provenance: {
+          ...candidatePayload.provenance,
+          evidenceLocator: reviewPdfEvidenceLocator,
+        },
+      },
+    };
+    const [reviewPdfCandidate] = await ownershipAdmin`
+      insert into extracted_offer_candidates (
+        extraction_run_id, candidate_key, normalized_fields, confidence,
+        status, anomaly_codes
+      ) values (
+        ${reviewPdfExtraction.id}, 'runtime-review-boundary-pdf-candidate',
+        ${ownershipAdmin.json(reviewPdfCandidateEnvelope)},
+        92, 'pending', '["OCR_REVIEW_REQUIRED"]'::jsonb
+      )
+      returning id
+    `;
+    reviewPdfBoundaryCandidateId = reviewPdfCandidate?.id;
+    assert.ok(
+      reviewPdfBoundaryCandidateId,
+      "private review PDF candidate fixture must persist",
+    );
   } finally {
     await ownershipAdmin.unsafe("drop table if exists worker_owned_migration_probe");
     await ownershipAdmin.unsafe("drop table if exists web_owned_migration_probe");
@@ -959,8 +1029,8 @@ try {
     alert_ledger_access: false,
     sequence_usage: false,
     dashboard_execute: true,
-    alert_append_execute: true,
-    alert_export_execute: true,
+    alert_append_execute: false,
+    alert_export_execute: false,
     generic_guard_execute: false,
     trigger_function_execute: false,
     migration_role_member: false,
@@ -977,6 +1047,7 @@ try {
     "data_sources",
     "handleplan_schema_migrations",
     "latest_price_evidence",
+    "official_offer_publication_health_facts",
     "private_review_evidence_renders",
     "publication_captures",
     "source_health_snapshots",
@@ -1191,6 +1262,162 @@ try {
     `,
     "review role must not update an approved offer into public state",
   );
+  await assert.rejects(
+    () => review`
+      select *
+      from public.private_review_record_evidence_render_v1(
+        ${reviewPdfBoundaryCandidateId}::bigint,
+        0::integer,
+        ${reviewPdfCaptureChecksum}::text,
+        ${evidenceCropReference(
+          reviewPdfBoundaryCandidateId,
+          reviewPdfCaptureChecksum,
+          reviewPdfEvidenceLocator,
+        )}::text,
+        'full_capture'::text,
+        'private_review'::text,
+        ${reviewActorId}::text,
+        ${reviewSessionId}::text,
+        ${"1".repeat(64)}::text,
+        date_trunc('milliseconds', clock_timestamp() + interval '120 seconds')
+      )
+    `,
+    /HP_REVIEW_EVIDENCE_UNAVAILABLE/,
+    "review role must not create an approval receipt for a PDF capture",
+  );
+
+  const pdfBoundaryAdmin = postgres(urlForDatabase(proofDatabase), {
+    connect_timeout: 10,
+    idle_timeout: 5,
+    max: 1,
+    onnotice: () => {},
+  });
+  let injectedPdfEvidenceRenderId;
+  try {
+    const [rejectedPdfReceipt] = await pdfBoundaryAdmin`
+      select count(*)::integer as receipt_count
+      from private_review_evidence_renders
+      where candidate_id = ${reviewPdfBoundaryCandidateId}
+        and evidence_proof_sha256 = ${"1".repeat(64)}
+    `;
+    assert.equal(
+      rejectedPdfReceipt?.receipt_count,
+      0,
+      "a rejected PDF recorder call must append no receipt",
+    );
+    await pdfBoundaryAdmin.unsafe(`
+      alter table private_review_evidence_renders
+        drop constraint private_review_evidence_renders_image_mime
+    `);
+    const [injectedPdfEvidenceRender] = await pdfBoundaryAdmin`
+      insert into private_review_evidence_renders (
+        candidate_id, expected_version, capture_checksum, crop_reference,
+        presentation, rights_classification, mime_type, byte_length,
+        actor_id, reviewer_session_id, evidence_proof_sha256,
+        rendered_at, expires_at, created_at
+      )
+      select
+        ${reviewBoundaryCandidateId}, 0, ${reviewCaptureChecksum},
+        ${evidenceCropReference(reviewBoundaryCandidateId)}, 'full_capture',
+        'private_review', 'application/pdf', 128,
+        ${reviewActorId}, ${reviewSessionId}, ${injectedPdfEvidenceProof},
+        timing.rendered_at, timing.rendered_at + interval '120 seconds',
+        timing.rendered_at
+      from lateral (
+        select pg_catalog.clock_timestamp() as rendered_at
+      ) timing
+      returning id
+    `;
+    injectedPdfEvidenceRenderId = injectedPdfEvidenceRender?.id;
+    assert.ok(
+      Number(injectedPdfEvidenceRenderId) > 0,
+      "owner-corruption fixture must inject one non-image receipt",
+    );
+    await pdfBoundaryAdmin.unsafe(`
+      alter table private_review_evidence_renders
+        add constraint private_review_evidence_renders_image_mime
+        check (mime_type in ('image/jpeg', 'image/png', 'image/webp'))
+        not valid
+    `);
+  } finally {
+    await pdfBoundaryAdmin.end({ timeout: 5 });
+  }
+
+  await assert.rejects(
+    () => review`
+      select *
+      from public.private_review_decide_v2(
+        ${reviewBoundaryCandidateId}::bigint,
+        0::integer,
+        'approve'::text,
+        ${reviewActorId}::text,
+        ${reviewSessionId}::text,
+        ${injectedPdfEvidenceProof}::text,
+        'Injected PDF receipt must not authorize approval.'::text,
+        'exact-product'::text,
+        '7038010000010'::text,
+        ${null}::text,
+        'unit'::text,
+        2790::integer,
+        3990::integer,
+        ${null}::integer,
+        ${null}::integer,
+        'public'::text,
+        ${null}::text,
+        ${reviewBoundaryValidFrom}::timestamptz,
+        ${reviewBoundaryValidUntil}::timestamptz,
+        ${review.array(["in-store"])}::text[]
+      )
+    `,
+    /HP_REVIEW_EVIDENCE_UNAVAILABLE/,
+    "v2 must independently reject a non-image receipt even if an owner bypassed the table fence",
+  );
+
+  const pdfBoundaryCleanupAdmin = postgres(urlForDatabase(proofDatabase), {
+    connect_timeout: 10,
+    idle_timeout: 5,
+    max: 1,
+    onnotice: () => {},
+  });
+  try {
+    await pdfBoundaryCleanupAdmin.begin(async (transaction) => {
+      await transaction.unsafe(`
+        alter table private_review_evidence_renders
+          disable trigger private_review_evidence_renders_append_only
+      `);
+      await transaction`
+        delete from private_review_evidence_renders
+        where id = ${injectedPdfEvidenceRenderId}
+      `;
+      await transaction.unsafe(`
+        alter table private_review_evidence_renders
+          enable trigger private_review_evidence_renders_append_only
+      `);
+      await transaction.unsafe(`
+        alter table private_review_evidence_renders
+          validate constraint private_review_evidence_renders_image_mime
+      `);
+    });
+    const [restoredImageBoundary] = await pdfBoundaryCleanupAdmin`
+      select
+        constraint_state.convalidated,
+        trigger_state.tgenabled
+      from pg_catalog.pg_constraint constraint_state
+      cross join pg_catalog.pg_trigger trigger_state
+      where constraint_state.conrelid = 'private_review_evidence_renders'::regclass
+        and constraint_state.conname = 'private_review_evidence_renders_image_mime'
+        and trigger_state.tgrelid = 'private_review_evidence_renders'::regclass
+        and trigger_state.tgname = 'private_review_evidence_renders_append_only'
+    `;
+    assert.deepEqual(
+      restoredImageBoundary,
+      { convalidated: true, tgenabled: "O" },
+      "the corruption proof must restore the validated image fence and append-only trigger",
+    );
+  } finally {
+    await pdfBoundaryCleanupAdmin.end({ timeout: 5 });
+  }
+
   const [reviewEvidenceRender] = await review`
     select *
     from public.private_review_record_evidence_render_v1(
@@ -2444,7 +2671,7 @@ try {
   await web`
     select source_id, permissions
     from source_permissions
-    order by reviewed_at desc, id desc
+    order by created_at desc, id desc
     limit 1
   `;
   await web`
@@ -2591,6 +2818,20 @@ try {
     [...publicOfficialOffers],
     [],
     "inactive official-offer sources must project no public rows",
+  );
+  await web`
+    select id, source_id, last_publish_success_at,
+      newest_eligible_evidence_at, persisted_at
+    from official_offer_publication_health_facts
+    limit 0
+  `;
+  await expectDenied(
+    () => web`
+      select lifecycle_job_id, published_count
+      from official_offer_publication_health_facts
+      limit 0
+    `,
+    "web role must not read lifecycle identities or publication counters",
   );
   await expectDenied(
     () => web`select lease_key from worker_leases limit 1`,
@@ -2880,6 +3121,8 @@ try {
     privateReviewReads: true,
     privateReviewDecisionFunctionOnly: true,
     privateReviewEvidenceApprovalFailClosed: true,
+    privateReviewPdfReceiptDenied: true,
+    privateReviewPdfDecisionDenied: true,
     privateReviewUnrelatedAccessDenied: true,
     privateReviewDirectPublicationDenied: true,
     privateOperationsAggregateOnly: true,

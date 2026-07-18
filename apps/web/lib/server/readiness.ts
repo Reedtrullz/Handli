@@ -2,7 +2,7 @@ import "server-only";
 
 import type { HandleplanDatabase } from "@handleplan/db/client";
 
-export const REQUIRED_DATABASE_MIGRATION = "026_official_offer_publication_runtime.sql" as const;
+export const REQUIRED_DATABASE_MIGRATION = "028_private_review_image_evidence_only.sql" as const;
 
 export interface DatabaseReadinessResult {
   requiredMigration: typeof REQUIRED_DATABASE_MIGRATION;

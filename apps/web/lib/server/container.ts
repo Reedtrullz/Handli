@@ -43,7 +43,11 @@ import type {
   Product,
 } from "@handleplan/domain";
 
-import { readServerEnv, type ServerEnv } from "./env";
+import {
+  allowsLoopbackProductionBrowserFake,
+  readServerEnv,
+  type ServerEnv,
+} from "./env";
 import { DiscoveryService, type DiscoveryServiceContract } from "./discovery-service";
 import {
   DiscoveryImpactService,
@@ -479,7 +483,10 @@ class EmptyPublicSourceStatusReader implements PublicSourceStatusReader {
 
 export function createServerContainer(env: ServerEnv): ServerContainer {
   if (env.mode === "fake") {
-    if (process.env.NODE_ENV === "production") {
+    if (
+      process.env.NODE_ENV === "production"
+      && !allowsLoopbackProductionBrowserFake(process.env)
+    ) {
       throw new Error("Fake server composition is disabled in production");
     }
     const catalog = new InMemoryPublicCatalogIndexReader();

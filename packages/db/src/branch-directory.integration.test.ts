@@ -429,22 +429,71 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       });
     });
 
-    it("lets the latest as-of revocation shadow every older approval", async () => {
-      await admin.sql`
+    it("lets later future-dated and backdated revocations block current branches while preserving the earlier snapshot", async () => {
+      const permissionRunId = await createRun("permission-order-baseline");
+      await addBranch({
+        chain: "extra",
+        externalId: `${nonce}:permission-order-extra`,
+        name: "Extra Permission Baseline",
+        runId: permissionRunId,
+      });
+      await addCoverage({ chain: "extra", runId: permissionRunId, state: "complete" });
+      await completeRun(permissionRunId);
+      const snapshotAt = await databaseClock();
+      const reader = new PostgresBranchDirectory(web.db);
+      const baseline = await reader.loadEligibleBranches({
+        eligibleChainIds: ["extra"],
+        evaluatedAt: snapshotAt,
+        marketContext,
+      });
+      expect(baseline).toMatchObject({ complete: true });
+
+      const [futureRevocation] = await admin.sql`
         insert into source_permissions (
           source_id, decision, reviewed_at, permissions, notes
         ) values (
           ${sourceId},
           'revoked',
-          ${new Date().toISOString()},
+          ${new Date(snapshotAt.getTime() + 24 * 60 * 60_000).toISOString()},
           '{"physicalStore":true}'::jsonb,
-          'branch directory revocation proof'
+          'branch directory future-dated revocation proof'
         )
+        returning created_at > ${snapshotAt.toISOString()}::timestamptz as created_later
       `;
-
-      await expect(new PostgresBranchDirectory(web.db).loadEligibleBranches({
+      expect(futureRevocation?.created_later).toBe(true);
+      const afterFutureAt = await databaseClock();
+      await expect(reader.loadEligibleBranches({
         eligibleChainIds: ["extra"],
-        evaluatedAt,
+        evaluatedAt: afterFutureAt,
+        marketContext,
+      })).resolves.toMatchObject({ branches: [], complete: false });
+
+      const [revocation] = await admin.sql`
+        insert into source_permissions (
+          source_id, decision, reviewed_at, permissions, notes, created_at
+        ) values (
+          ${sourceId},
+          'revoked',
+          ${new Date(now - 20 * 60_000).toISOString()},
+          '{"physicalStore":true}'::jsonb,
+          'branch directory backdated revocation proof',
+          '2000-01-01T00:00:00Z'
+        )
+        returning created_at > ${snapshotAt.toISOString()}::timestamptz as created_later
+      `;
+      expect(revocation?.created_later).toBe(true);
+
+      await expect(reader.loadEligibleBranches({
+        eligibleChainIds: ["extra"],
+        evaluatedAt: snapshotAt,
+        marketContext,
+      })).resolves.toEqual(baseline);
+
+      const currentAt = await databaseClock();
+
+      await expect(reader.loadEligibleBranches({
+        eligibleChainIds: ["extra"],
+        evaluatedAt: currentAt,
         marketContext,
       })).resolves.toEqual({
         branches: [],

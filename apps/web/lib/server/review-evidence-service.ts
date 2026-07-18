@@ -26,12 +26,14 @@ import {
 } from "./review-evidence-proof";
 import { ReviewServiceError } from "./review-service";
 
+type RenderedReviewEvidenceMimeType = "image/jpeg" | "image/png" | "image/webp";
+
 export interface RenderedPrivateReviewEvidence {
   readonly byteLength: number;
   readonly bytes: Uint8Array;
   readonly challengeToken: string;
   readonly expiresAt: string;
-  readonly mimeType: "application/pdf" | "image/jpeg" | "image/png" | "image/webp";
+  readonly mimeType: RenderedReviewEvidenceMimeType;
   readonly presentation: "full_capture";
   readonly verifiedAt: string;
 }
@@ -55,6 +57,14 @@ function finiteNow(now: () => Date): Date {
     throw new ReviewServiceError("UNAVAILABLE");
   }
   return new Date(value);
+}
+
+function isRenderedReviewEvidenceMimeType(
+  mimeType: string,
+): mimeType is RenderedReviewEvidenceMimeType {
+  return mimeType === "image/jpeg"
+    || mimeType === "image/png"
+    || mimeType === "image/webp";
 }
 
 function mapEvidenceError(error: unknown): never {
@@ -99,11 +109,15 @@ export class ReviewEvidenceService implements ReviewEvidenceServiceContract {
       if (locator.rightsClassification === "extract_only") {
         throw new ReviewServiceError("EVIDENCE_UNAVAILABLE");
       }
+      if (!isRenderedReviewEvidenceMimeType(locator.mimeType)) {
+        throw new ReviewServiceError("EVIDENCE_UNAVAILABLE");
+      }
+      const renderedMimeType = locator.mimeType;
       const verified = await this.reader.read(locator, signal ?? new AbortController().signal);
       if (
         verified.byteLength !== locator.byteLength
         || verified.checksumSha256 !== locator.checksumSha256
-        || verified.mimeType !== locator.mimeType
+        || verified.mimeType !== renderedMimeType
       ) {
         throw new ReviewServiceError("CORRUPT_RECORD");
       }
@@ -121,7 +135,7 @@ export class ReviewEvidenceService implements ReviewEvidenceServiceContract {
         bytes: verified.bytes,
         challengeToken: challenge.token,
         expiresAt: challenge.expiresAt,
-        mimeType: verified.mimeType,
+        mimeType: renderedMimeType,
         presentation: "full_capture",
         verifiedAt: at.toISOString(),
       });
@@ -169,11 +183,7 @@ export class ReviewEvidenceService implements ReviewEvidenceServiceContract {
       // Browser image decode/load is an explicit acknowledgement gate. PDF
       // render completion is not observable with the current browser contract,
       // so PDF approval remains fail-closed.
-      if (![
-        "image/jpeg",
-        "image/png",
-        "image/webp",
-      ].includes(locator.mimeType)) {
+      if (!isRenderedReviewEvidenceMimeType(locator.mimeType)) {
         throw new ReviewServiceError("EVIDENCE_UNAVAILABLE");
       }
       const proof = this.proofCodec.issue(binding, principal);

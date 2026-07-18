@@ -33,7 +33,14 @@ describe("PostgresSourceAccessReader", () => {
     });
     const rendered = (client.mock.calls[0]?.[0] as readonly string[]).join("?");
     expect(rendered).toContain("source.permission_reviewed_at <= clock_timestamp()");
+    expect(rendered).toContain("source.permission_reviewed_at = permission.reviewed_at");
+    expect(rendered).toContain(
+      "source.permission_expires_at is not distinct from permission.valid_until",
+    );
+    expect(rendered).toContain("created_at <= clock_timestamp()");
     expect(rendered).toContain("reviewed_at <= clock_timestamp()");
+    expect(rendered).toContain("order by created_at desc, id desc");
+    expect(rendered).not.toContain("order by reviewed_at desc");
   });
 
   it("returns undefined for a missing source and rejects unbounded identities", async () => {

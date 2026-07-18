@@ -12,15 +12,15 @@ describe("database readiness", () => {
     const checkMigration = vi.fn(async () => true);
     const probe = new BoundedDatabaseReadinessProbe({
       checkMigration,
-      requiredMigration: "026_official_offer_publication_runtime.sql",
+      requiredMigration: "028_private_review_image_evidence_only.sql",
       timeoutMs: 100,
     });
 
     await expect(probe.check()).resolves.toEqual({
-      requiredMigration: "026_official_offer_publication_runtime.sql",
+      requiredMigration: "028_private_review_image_evidence_only.sql",
     });
     expect(checkMigration).toHaveBeenCalledWith(
-      "026_official_offer_publication_runtime.sql",
+      "028_private_review_image_evidence_only.sql",
       expect.any(AbortSignal),
     );
   });
@@ -28,7 +28,7 @@ describe("database readiness", () => {
   it("fails closed when the required migration is absent", async () => {
     const probe = new BoundedDatabaseReadinessProbe({
       checkMigration: async () => false,
-      requiredMigration: "026_official_offer_publication_runtime.sql",
+      requiredMigration: "028_private_review_image_evidence_only.sql",
       timeoutMs: 100,
     });
 
@@ -43,7 +43,7 @@ describe("database readiness", () => {
         dependencySignal = signal;
         return await new Promise<boolean>(() => undefined);
       },
-      requiredMigration: "026_official_offer_publication_runtime.sql",
+      requiredMigration: "028_private_review_image_evidence_only.sql",
       timeoutMs: 25,
     });
 

@@ -16,12 +16,15 @@ outcome today:
   more specific malformed-evidence error first, but it always rejects this mode
   and can never return `eligible`.
 
-The current
+The historical
 [cross-browser-remediated source-neutral implementation draft](../evidence/v1/v1-source-neutral-cross-browser-remediation-2026-07-17/release-candidate.v1.json)
 demonstrates the first mode. It binds the signed source commit, enumerates all
-26 current migrations, records no supported regions, and leaves all twelve
+26 migrations that were current at that baseline, records no supported
+regions, and leaves all twelve
 release gates incomplete. Its adjacent local verification note is diagnostic
-context, not retained candidate-current release proof. The preceding typecheck,
+context, not retained candidate-current release proof. The implementation has
+advanced beyond that artifact and requires a new exact-source candidate.
+The preceding typecheck,
 PostgreSQL, and CI remediation, full implementation, and V1-17 drafts are
 preserved as historical, immutable milestones. None of the drafts is a release
 or a claim about production.

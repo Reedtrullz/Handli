@@ -92,6 +92,8 @@ describe("forward-only v1 migrations", () => {
       "024_operations_runtime_boundary.sql",
       "025_private_review_evidence_renderer.sql",
       "026_official_offer_publication_runtime.sql",
+      "027_official_offer_publication_health.sql",
+      "028_private_review_image_evidence_only.sql",
     ]);
   });
 
@@ -101,7 +103,7 @@ describe("forward-only v1 migrations", () => {
       .sort();
     expect(files[0]).toBe("001_price_cache.sql");
     const guardedFiles = files.slice(1);
-    expect(guardedFiles.at(-1)).toBe("026_official_offer_publication_runtime.sql");
+    expect(guardedFiles.at(-1)).toBe("028_private_review_image_evidence_only.sql");
     const source = (
       await Promise.all(
         guardedFiles.map((file) => readFile(path.join(migrationsDirectory, file), "utf8")),
@@ -1207,8 +1209,8 @@ describe("forward-only v1 migrations", () => {
     expect(deploy).not.toContain(
       'deploy "$previous_revision" "$revision" "$previous_compatibility_mode"',
     );
-    expect(deploy).toContain(
-      'deploy "$previous_revision" "$revision" legacy "$previous_fallback_image"',
+    expect(deploy).toMatch(
+      /deploy "\$previous_revision" "\$revision" legacy \\\n\s+"\$previous_fallback_image" "\$loaded_image_id"/,
     );
     expect(deploy).toContain("record_immutable_deployment_state");
     expect(deploy).toContain(

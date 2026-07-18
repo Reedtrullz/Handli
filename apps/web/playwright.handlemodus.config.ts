@@ -36,6 +36,10 @@ export default defineConfig({
   },
   webServer: {
     command: "node tests/handlemodus/start-production-server.mjs",
+    env: {
+      HANDLEPLAN_HANDLEMODUS_PARENT_POISON: "handleplan-handlemodus-parent-env-poison-v1",
+      KASSAL_API_KEY: "handleplan-handlemodus-parent-env-poison-v1",
+    },
     gracefulShutdown: { signal: "SIGTERM", timeout: 5_000 },
     ignoreHTTPSErrors: true,
     reuseExistingServer: false,

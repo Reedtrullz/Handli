@@ -398,13 +398,37 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       ).resolves.toEqual([]);
     });
 
-    it("database-stamps later permission decisions so old snapshots cannot be replayed", async () => {
+    it("selects future-dated and backdated permission decisions by persistence order without replaying old snapshots", async () => {
       const [snapshotClock] = await first.sql`
         select clock_timestamp() as snapshot_at
       `;
       const snapshotAt = databaseDate(snapshotClock!.snapshot_at);
       const baseline = await firstReader.getMany([gtins.milk], snapshotAt);
       expect(baseline).toHaveLength(1);
+
+      const [futureRevocation] = await first.sql`
+        insert into source_permissions (
+          source_id, decision, reviewed_at, valid_until, permissions, notes
+        ) values (
+          ${catalogSourceId}, 'revoked',
+          ${new Date(snapshotAt.getTime() + 24 * 60 * 60_000).toISOString()},
+          null, '{"catalog":true}'::jsonb,
+          ${`future-revocation-${nonceDigits}`}
+        )
+        returning created_at > ${snapshotAt.toISOString()}::timestamptz as created_later
+      `;
+      expect(futureRevocation?.created_later).toBe(true);
+      await expect(firstReader.getMany([gtins.milk], snapshotAt)).resolves.toEqual(baseline);
+      const [afterFutureClock] = await first.sql`
+        select clock_timestamp() + interval '1 millisecond' as current_at
+      `;
+      const afterFutureAt = databaseDate(afterFutureClock!.current_at);
+      await expect(firstReader.getMany([gtins.milk], afterFutureAt)).resolves.toEqual([]);
+      await expect(publicReader.search(gtins.milk, 20, afterFutureAt)).resolves.toEqual([]);
+      await expect(publicReader.readDiscoveryPage({
+        limit: 10,
+        query: gtins.milk,
+      }, afterFutureAt)).resolves.toMatchObject({ entries: [] });
 
       const [revocation] = await first.sql`
         insert into source_permissions (
@@ -425,16 +449,43 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       expect(revocation!.created_later).toBe(true);
       await expect(firstReader.getMany([gtins.milk], snapshotAt)).resolves.toEqual(baseline);
       await expect(publicReader.search(gtins.milk, 20, snapshotAt)).resolves.toHaveLength(1);
+      await expect(publicReader.readDiscoveryPage({
+        limit: 10,
+        query: gtins.milk,
+      }, snapshotAt)).resolves.toMatchObject({
+        entries: [expect.objectContaining({ product: expect.objectContaining({ gtin: gtins.milk }) })],
+      });
 
-      await first.sql`
-        insert into source_permissions (
-          source_id, decision, reviewed_at, valid_until, permissions, notes
-        ) values (
-          ${catalogSourceId}, 'approved', clock_timestamp(),
-          clock_timestamp() + interval '1 day', '{"catalog":true}'::jsonb,
-          ${`restore-approval-${nonceDigits}`}
-        )
+      const [currentClock] = await first.sql`
+        select clock_timestamp() + interval '1 millisecond' as current_at
       `;
+      const currentAt = databaseDate(currentClock!.current_at);
+      await expect(firstReader.getMany([gtins.milk], currentAt)).resolves.toEqual([]);
+      await expect(publicReader.search(gtins.milk, 20, currentAt)).resolves.toEqual([]);
+      await expect(publicReader.readDiscoveryPage({
+        limit: 10,
+        query: gtins.milk,
+      }, currentAt)).resolves.toMatchObject({ entries: [] });
+
+      await first.sql.begin(async (transaction) => {
+        const [restored] = await transaction`
+          insert into source_permissions (
+            source_id, decision, reviewed_at, valid_until, permissions, notes
+          ) values (
+            ${catalogSourceId}, 'approved', clock_timestamp(),
+            clock_timestamp() + interval '1 day', '{"catalog":true}'::jsonb,
+            ${`restore-approval-${nonceDigits}`}
+          )
+          returning reviewed_at, valid_until
+        `;
+        if (restored === undefined) throw new Error("Missing restored catalog permission");
+        await transaction`
+          update data_sources
+          set permission_reviewed_at = ${restored.reviewed_at},
+              permission_expires_at = ${restored.valid_until}
+          where id = ${catalogSourceId}
+        `;
+      });
     });
 
     it("does not let a later source approval or identity edit rewrite an old snapshot", async () => {

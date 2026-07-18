@@ -126,6 +126,22 @@ describe("ReviewEvidenceService", () => {
     expect(recordEvidenceRender).not.toHaveBeenCalled();
   });
 
+  it("rejects PDF rendering before reading or returning private bytes", async () => {
+    const pdfLocator = { ...locator, mimeType: "application/pdf" as const };
+    const read = vi.fn<PrivateReviewEvidenceReader["read"]>();
+    const service = new ReviewEvidenceService(
+      repository({ getPrivateCaptureLocator: async () => pdfLocator }),
+      reader({ read }),
+      new ReviewEvidenceChallengeCodec(SECRET, () => NOW),
+      new ReviewEvidenceProofCodec(SECRET, () => NOW),
+      () => NOW,
+    );
+
+    await expect(service.render(pdfLocator.candidateId, principal))
+      .rejects.toEqual(new ReviewServiceError("EVIDENCE_UNAVAILABLE"));
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("issues and records an approval proof only after a current image challenge and full digest acknowledgement", async () => {
     const recordEvidenceRender = vi.fn<ReviewQueueRepository["recordEvidenceRender"]>()
       .mockImplementation(async (input) => ({

@@ -72,9 +72,10 @@ and verifies owner/mode/link count, size, MIME signature, and full checksum
 before an Access-authenticated reviewer can view the file. The GET response has
 no actionable approval proof. Supported images require a complete browser read,
 client SHA-256, successful decode, and a candidate/session-bound acknowledgement
-before the server records a one-time proof for approval or correction. PDF may
-be viewed privately but remains fail-closed for approval until bounded page
-rendering exists; rejection remains available without artwork. This is
+before the server records a one-time proof for approval or correction. PDF
+captures are not fetched or rendered in v1 and remain fail-closed for approval
+and correction at the database recorder, receipt constraint, and decision
+transaction; rejection remains available without artwork. This is
 repository functionality, not evidence of human sight, a configured Access
 policy, a rights-approved live source, a deployed capture volume, or production
 review.

@@ -8,6 +8,15 @@ app_root=${HANDLEPLAN_APP_ROOT:-/opt/apps/handleplan}
 repository_url=${HANDLEPLAN_REPOSITORY_URL:-https://github.com/Reedtrullz/Handli.git}
 target_revision=${1:-}
 expected_current_revision=${2:-}
+rollback_failure_mode=${HANDLEPLAN_ROLLBACK_FAILURE_MODE:-restore}
+
+case "$rollback_failure_mode" in
+  restore|closed) ;;
+  *)
+    echo "Rollback failure mode must be restore or closed" >&2
+    exit 2
+    ;;
+esac
 
 valid_deployment_revision "$target_revision" || {
   echo "Usage: $0 <previously-verified target SHA> <expected current SHA>" >&2
@@ -32,7 +41,6 @@ test -L "$operations_root/current" \
   echo "Missing exact current operations release" >&2
   exit 1
 }
-acquire_deployment_operation_lock "$state_dir"
 cleanup_early_deployment_lock() {
   release_deployment_operation_lock || true
 }
@@ -40,6 +48,17 @@ trap cleanup_early_deployment_lock EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+trap '' HUP INT TERM
+acquire_deployment_operation_lock "$state_dir"
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+pending_deployment_manifest="$state_dir/pending-deployment"
+if [ -e "$pending_deployment_manifest" ] \
+  || [ -L "$pending_deployment_manifest" ]; then
+  echo "Explicit rollback refuses unresolved pending deployment state" >&2
+  exit 1
+fi
 load_deployment_state "$state_dir"
 test "$previous_revision" = "$expected_current_revision" || {
   echo "Rollback expected-current guard does not match committed deployment state" >&2
@@ -218,6 +237,14 @@ restore_committed_runtime() {
   }
   echo "Rollback failed; restored the previously committed immutable runtime" >&2
 }
+close_failed_pending_rollback() {
+  remove_all_runtimes "$target_revision" "$target_image_id" || {
+    echo "Pending rejection could not prove all application runtimes absent" >&2
+    return 1
+  }
+  rollback_candidate_may_exist=0
+  echo "Pending rejection failed to restore its predecessor; all application runtimes were left down" >&2
+}
 cleanup_on_exit() {
   exit_status=$?
   trap - EXIT
@@ -226,7 +253,11 @@ cleanup_on_exit() {
     && [ "$rollback_candidate_may_exist" -eq 1 ] \
     && [ "$rollback_committed" -ne 1 ]; then
     exit_cleanup_running=1
-    restore_committed_runtime || true
+    if [ "$rollback_failure_mode" = "closed" ]; then
+      close_failed_pending_rollback || true
+    else
+      restore_committed_runtime || true
+    fi
   fi
   if ! release_deployment_operation_lock; then
     exit_status=1

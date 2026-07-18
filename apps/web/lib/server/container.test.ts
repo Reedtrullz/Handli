@@ -19,18 +19,40 @@ import { FamilyCandidateService } from "./family-candidate-service";
 import { PriceService } from "./price-service";
 import { SourceStatusService } from "./source-status-service";
 
+const browserEvidenceRuntimeProofKey = Symbol.for(
+  "handleplan.e2e.loopback-production-browser-fake-runtime.v1",
+);
+
 const MARKET_CONTEXT = {
   contractVersion: 1,
   countryCode: "NO",
   kind: "national",
 } as const;
 
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  Reflect.deleteProperty(globalThis, browserEvidenceRuntimeProofKey);
+});
 
 describe("fake server container", () => {
   it("rejects direct fake composition in production", () => {
     vi.stubEnv("NODE_ENV", "production");
     expect(() => createServerContainer({ mode: "fake" })).toThrow(/production/i);
+  });
+
+  it("allows direct fake composition only inside the bound loopback browser harness", () => {
+    const sentinel = `handleplan-e2e-${"a".repeat(48)}`;
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("HANDLEPLAN_MODE", "fake");
+    vi.stubEnv("HANDLEPLAN_E2E_SENTINEL", sentinel);
+    vi.stubEnv("HANDLEPLAN_E2E_FAKE_PRODUCTION_TOKEN", sentinel);
+    vi.stubEnv("HANDLEPLAN_E2E_PUBLIC_ORIGIN", "https://127.0.0.1:3109");
+    vi.stubEnv("HOSTNAME", "127.0.0.1");
+    vi.stubEnv("KASSAL_API_KEY", sentinel);
+    vi.stubEnv("PORT", "3108");
+    Reflect.set(globalThis, browserEvidenceRuntimeProofKey, sentinel);
+
+    expect(createServerContainer({ mode: "fake" }).planService).toBeDefined();
   });
 
   it("does not read a credential-shaped value or call upstream in fake mode", async () => {

@@ -387,6 +387,81 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       );
     });
 
+    it("blocks current family eligibility on later future-dated and backdated source revocations", async () => {
+      const [snapshotClock] = await connection.sql`
+        select clock_timestamp() as snapshot_at
+      `;
+      const snapshotAt = databaseDate(snapshotClock!.snapshot_at);
+      const baseline = await reader.getMany(["family:melk"], 20, snapshotAt);
+      expect(baseline.length).toBeGreaterThan(0);
+
+      const [futureRevocation] = await connection.sql`
+        insert into source_permissions (
+          source_id, decision, reviewed_at, valid_until, permissions, notes
+        ) values (
+          ${sourceId}, 'revoked',
+          ${new Date(snapshotAt.getTime() + 24 * 60 * 60_000).toISOString()},
+          null, '{}'::jsonb, ${`family-future-revocation-${nonce}`}
+        )
+        returning created_at > ${snapshotAt.toISOString()}::timestamptz as created_later
+      `;
+      expect(futureRevocation?.created_later).toBe(true);
+      const [afterFutureClock] = await connection.sql`
+        select clock_timestamp() + interval '1 millisecond' as current_at
+      `;
+      await expect(reader.getMany(
+        ["family:melk"],
+        20,
+        databaseDate(afterFutureClock!.current_at),
+      )).resolves.toEqual([]);
+
+      const [revocation] = await connection.sql`
+        insert into source_permissions (
+          source_id, decision, reviewed_at, valid_until, permissions, notes,
+          created_at
+        ) values (
+          ${sourceId}, 'revoked',
+          ${new Date(now - 60 * 60_000).toISOString()}, null,
+          '{}'::jsonb, ${`family-backdated-revocation-${nonce}`},
+          '2000-01-01T00:00:00Z'
+        )
+        returning created_at > ${snapshotAt.toISOString()}::timestamptz as created_later
+      `;
+      expect(revocation?.created_later).toBe(true);
+      await expect(reader.getMany(["family:melk"], 20, snapshotAt)).resolves.toEqual(
+        baseline,
+      );
+
+      const [currentClock] = await connection.sql`
+        select clock_timestamp() + interval '1 millisecond' as current_at
+      `;
+      await expect(reader.getMany(
+        ["family:melk"],
+        20,
+        databaseDate(currentClock!.current_at),
+      )).resolves.toEqual([]);
+
+      await connection.sql.begin(async (transaction) => {
+        const [restored] = await transaction`
+          insert into source_permissions (
+            source_id, decision, reviewed_at, valid_until, permissions, notes
+          ) values (
+            ${sourceId}, 'approved', clock_timestamp(),
+            clock_timestamp() + interval '1 day', '{"catalog":true}'::jsonb,
+            ${`family-restored-approval-${nonce}`}
+          )
+          returning reviewed_at, valid_until
+        `;
+        if (restored === undefined) throw new Error("Missing restored family permission");
+        await transaction`
+          update data_sources
+          set permission_reviewed_at = ${restored.reviewed_at},
+              permission_expires_at = ${restored.valid_until}
+          where id = ${sourceId}
+        `;
+      });
+    });
+
     it("enforces immutable provenance and seals published definition sets", async () => {
       const aliasProductId = products.get("alias");
       if (aliasProductId === undefined) throw new Error("Missing alias product fixture");

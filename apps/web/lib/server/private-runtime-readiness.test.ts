@@ -61,14 +61,15 @@ const operationsSnapshot = {
 } as unknown as OperationsRuntimeSnapshotV1;
 
 describe("private runtime database readiness", () => {
-  it("proves review capability and the 026 marker without reopening the migration ledger", async () => {
+  it("proves review capability and the 028 marker without reopening private state", async () => {
     const database = databaseReturning([{
       decision_v1_execute: false,
       decision_v2_execute: true,
       evidence_render_execute: true,
       lifecycle_execute: false,
-      migration_026_marker: true,
+      migration_028_marker: true,
       migration_ledger_select: false,
+      publication_health_select: false,
       queue_execute: true,
       role_name: "handleplan_review",
     }]);
@@ -78,14 +79,17 @@ describe("private runtime database readiness", () => {
     expect(database.calls).toHaveLength(1);
     const sql = database.calls[0]?.strings.join("?") ?? "";
     expect(sql).toContain("has_table_privilege");
+    expect(sql).not.toMatch(/pg_constraint\s+constraint\b/iu);
     expect(sql).not.toMatch(/from\s+public\.handleplan_schema_migrations/iu);
     expect(database.calls[0]?.values).toEqual([
       "public.private_review_candidate_rows_v1(bigint,timestamp with time zone,text,text,integer,integer,integer,integer,text,timestamp with time zone,bigint,integer)",
       "public.private_review_record_evidence_render_v1(bigint,integer,text,text,text,text,text,text,text,timestamp with time zone)",
       "public.private_review_decide_v1(bigint,integer,text,text,text,text,text,text,text,integer,integer,integer,integer,text,text,timestamp with time zone,timestamp with time zone,text[])",
       "public.private_review_decide_v2(bigint,integer,text,text,text,text,text,text,text,text,text,integer,integer,integer,integer,text,text,timestamp with time zone,timestamp with time zone,text[])",
+      "public.official_offer_publication_health_facts",
+      "public.private_review_evidence_renders",
       "public.official_offer_lifecycle_reconcile_v1(text,text,text,timestamp with time zone,text,integer,boolean)",
-      "public.official_offer_lifecycle_reconcile_v1(text,text,text,timestamp with time zone,text,integer,boolean)",
+      "public.official_offer_publication_health_facts",
     ]);
   });
 
@@ -95,8 +99,9 @@ describe("private runtime database readiness", () => {
       decision_v2_execute: true,
       evidence_render_execute: true,
       lifecycle_execute: false,
-      migration_026_marker: true,
+      migration_028_marker: true,
       migration_ledger_select: false,
+      publication_health_select: false,
       queue_execute: true,
       role_name: "handleplan_web",
     }]);
@@ -105,8 +110,9 @@ describe("private runtime database readiness", () => {
       decision_v2_execute: true,
       evidence_render_execute: true,
       lifecycle_execute: false,
-      migration_026_marker: false,
+      migration_028_marker: false,
       migration_ledger_select: false,
+      publication_health_select: false,
       queue_execute: true,
       role_name: "handleplan_review",
     }]);
@@ -115,8 +121,9 @@ describe("private runtime database readiness", () => {
       decision_v2_execute: true,
       evidence_render_execute: true,
       lifecycle_execute: false,
-      migration_026_marker: true,
+      migration_028_marker: true,
       migration_ledger_select: false,
+      publication_health_select: false,
       queue_execute: true,
       role_name: "handleplan_review",
     }]);
@@ -132,12 +139,15 @@ describe("private runtime database readiness", () => {
     )).resolves.toBe(false);
   });
 
-  it("keeps operations off the ledger while proving its role, 026 marker, and aggregate read", async () => {
+  it("keeps operations read-only while proving its role, 028 marker, and aggregate read", async () => {
     const database = databaseReturning([{
+      alert_append_execute: false,
+      alert_export_execute: false,
       dashboard_execute: true,
       lifecycle_execute: false,
       migration_ledger_select: false,
-      migration_026_marker: true,
+      migration_028_marker: true,
+      publication_health_select: false,
       role_name: "handleplan_operations",
     }]);
     const operationsService: OperationsRuntimeServiceContract = {
@@ -153,22 +163,30 @@ describe("private runtime database readiness", () => {
     const sql = database.calls[0]?.strings.join("?") ?? "";
     expect(sql).toContain("has_function_privilege");
     expect(sql).toContain("has_table_privilege");
-    expect(sql).toContain("to_regprocedure");
+    expect(sql).toContain("to_regclass");
+    expect(sql).not.toMatch(/pg_constraint\s+constraint\b/iu);
     expect(sql).not.toMatch(/from\s+public\.handleplan_schema_migrations/iu);
     expect(database.calls[0]?.values).toEqual([
       "public.operations_dashboard_rows_v1(text[],integer)",
+      "public.append_operations_alert_evaluation_v1(timestamp with time zone,jsonb,jsonb)",
+      "public.operations_alert_export_rows_v1(bigint,integer)",
+      "public.official_offer_publication_health_facts",
+      "public.private_review_evidence_renders",
       "public.official_offer_lifecycle_reconcile_v1(text,text,text,timestamp with time zone,text,integer,boolean)",
-      "public.official_offer_lifecycle_reconcile_v1(text,text,text,timestamp with time zone,text,integer,boolean)",
+      "public.official_offer_publication_health_facts",
     ]);
     expect(operationsService.read).toHaveBeenCalledWith(expect.any(AbortSignal));
   });
 
-  it("does not call the operations aggregate when role capability or 026 marker is absent", async () => {
+  it("does not call the operations aggregate when capability or 028 marker is absent", async () => {
     const database = databaseReturning([{
+      alert_append_execute: false,
+      alert_export_execute: false,
       dashboard_execute: true,
       lifecycle_execute: false,
       migration_ledger_select: false,
-      migration_026_marker: false,
+      migration_028_marker: false,
+      publication_health_select: false,
       role_name: "handleplan_operations",
     }]);
     const operationsService: OperationsRuntimeServiceContract = {

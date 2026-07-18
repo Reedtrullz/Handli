@@ -101,6 +101,30 @@ describe("GET /api/review/candidates/:candidateId/evidence", () => {
     expect(render).toHaveBeenCalledWith("review-candidate:42", principal, expect.any(AbortSignal));
   });
 
+  it("rejects an unsupported PDF response from the service without returning bytes", async () => {
+    const render = vi.fn(async () => ({
+      byteLength: bytes.byteLength,
+      bytes,
+      challengeToken,
+      expiresAt: "2099-07-17T12:02:00.000Z",
+      mimeType: "application/pdf",
+      presentation: "full_capture",
+      verifiedAt: "2099-07-17T12:00:00.000Z",
+    }));
+    const response = await createReviewEvidenceHandler(
+      () => service(render as unknown as ReviewEvidenceServiceContract["render"]),
+      async () => principal,
+    )(new Request(
+      "https://handle.reidar.tech/api/review/candidates/review-candidate:42/evidence",
+    ), "review-candidate:42");
+
+    expect(response.status).toBe(409);
+    expect(response.headers.get("content-type")).toBe("application/json; charset=utf-8");
+    expect(response.headers.get("content-disposition")).toBeNull();
+    expect(response.headers.get("x-handleplan-review-evidence-challenge")).toBeNull();
+    await expect(response.json()).resolves.toEqual({ code: "EVIDENCE_UNAVAILABLE" });
+  });
+
   it("makes a challenge obtained before body abort non-actionable", async () => {
     const acknowledge = vi.fn<ReviewEvidenceServiceContract["acknowledge"]>();
     const render = vi.fn<ReviewEvidenceServiceContract["render"]>().mockResolvedValue({

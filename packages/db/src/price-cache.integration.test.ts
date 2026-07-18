@@ -584,15 +584,27 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
         (await evidenceReaderAtDatabaseNow()).getMany([eligibleEan]),
       ).resolves.toEqual([]);
 
-      await connection.sql`
-        insert into source_permissions (
-          source_id, decision, reviewed_at, valid_until, permissions, notes
-        ) values (
-          'kassalapp', 'approved', statement_timestamp(),
-          statement_timestamp() + interval '1 hour',
-          '{"ordinaryPrice": true}'::jsonb, ${`reader-approved-${integrationNonce}`}
-        )
-      `;
+      await connection.sql.begin(async (transaction) => {
+        const [approvedPermission] = await transaction`
+          insert into source_permissions (
+            source_id, decision, reviewed_at, valid_until, permissions, notes
+          ) values (
+            'kassalapp', 'approved', statement_timestamp(),
+            statement_timestamp() + interval '1 hour',
+            '{"ordinaryPrice": true}'::jsonb, ${`reader-approved-${integrationNonce}`}
+          )
+          returning reviewed_at, valid_until
+        `;
+        if (approvedPermission === undefined) {
+          throw new Error("Missing approved price-reader permission");
+        }
+        await transaction`
+          update data_sources
+          set permission_reviewed_at = ${approvedPermission.reviewed_at},
+              permission_expires_at = ${approvedPermission.valid_until}
+          where id = 'kassalapp'
+        `;
+      });
 
       const approvedReader = await evidenceReaderAtDatabaseNow();
       await expect(approvedReader.getMany([eligibleEan, quarantined.ean])).resolves.toEqual([
@@ -746,9 +758,9 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
         insert into source_permissions (
           source_id, decision, reviewed_at, permissions, notes
         ) values (
-          'kassalapp', 'revoked', statement_timestamp(),
+          'kassalapp', 'blocked', statement_timestamp() + interval '1 day',
           '{"ordinaryPrice": true}'::jsonb,
-          ${`reader-revoked-${integrationNonce}`}
+          ${`reader-future-blocked-${integrationNonce}`}
         )
       `;
       await expect(

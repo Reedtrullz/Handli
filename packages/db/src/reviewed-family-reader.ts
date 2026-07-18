@@ -558,9 +558,8 @@ export class PostgresReviewedFamilyReader implements ReviewedFamilyReader {
             candidate.permissions
           from source_permissions candidate
           where candidate.source_id = source.id
-            and candidate.reviewed_at <= ${atIso}::timestamptz
             and candidate.created_at <= ${atIso}::timestamptz
-          order by candidate.reviewed_at desc, candidate.id desc
+          order by candidate.created_at desc, candidate.id desc
           limit 1
         ) permission on true
         where observation.retrieved_at >= ${freshnessStartsAtIso}::timestamptz
@@ -568,6 +567,9 @@ export class PostgresReviewedFamilyReader implements ReviewedFamilyReader {
           and observation.retrieved_at <= run.completed_at
           and observation.created_at <= ${atIso}::timestamptz
           and permission.decision = 'approved'
+          and permission.reviewed_at <= ${atIso}::timestamptz
+          and source.permission_reviewed_at = permission.reviewed_at
+          and source.permission_expires_at is not distinct from permission.valid_until
           and (permission.valid_until is null or permission.valid_until > ${atIso}::timestamptz)
           and permission.permissions @> '{"catalog": true}'::jsonb
       ), representatives as (

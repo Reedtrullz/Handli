@@ -12,7 +12,7 @@ import {
 
 const NOW = "2026-07-17T12:00:00.000Z";
 const REVISION = "a".repeat(40);
-const MIGRATION = "026_official_offer_publication_runtime.sql";
+const MIGRATION = "028_private_review_image_evidence_only.sql";
 const ACCESS_ID = "sentinel-access-id";
 const ACCESS_SECRET = "placeholder";
 

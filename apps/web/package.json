@@ -2,7 +2,7 @@
   "name": "web",
   "private": true,
   "scripts": {
-    "build": "next build",
+    "build": "node ../../scripts/e2e/public-build-binding.mjs build",
     "dev": "next dev",
     "lint": "eslint .",
     "test:handlemodus:browser": "playwright test --config playwright.handlemodus.config.ts",

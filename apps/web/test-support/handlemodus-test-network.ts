@@ -129,3 +129,17 @@ export async function setHandlemodusTestNetworkOffline(
     "Handlemodus test network control",
   );
 }
+
+/** Returns a normal upstream 503 while leaving the application socket alive. */
+export async function setHandlemodusTestNetworkUnavailable(
+  request: APIRequestContext,
+  unavailable: boolean,
+): Promise<void> {
+  await expectNoContent(
+    await request.post(
+      `${CONTROL_BASE_URL}/unavailable?enabled=${unavailable ? "1" : "0"}`,
+      { headers: CONTROL_HEADERS },
+    ),
+    "Handlemodus test upstream-unavailable control",
+  );
+}

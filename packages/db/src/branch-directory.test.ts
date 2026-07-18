@@ -101,7 +101,13 @@ describe("PostgresBranchDirectory", () => {
     expect(query.sql).toContain("source.public_state_changed_at <=");
     expect(query.sql).toContain("source.runtime_state = 'approved'");
     expect(query.sql).toContain("permission.created_at <=");
+    expect(query.sql).toContain("order by permission.created_at desc, permission.id desc");
+    expect(query.sql).not.toContain("order by permission.reviewed_at desc");
     expect(query.sql).toContain("permission.decision = 'approved'");
+    expect(query.sql).toContain("source.permission_reviewed_at = permission.reviewed_at");
+    expect(query.sql).toContain(
+      "source.permission_expires_at is not distinct from permission.valid_until",
+    );
     expect(query.sql).toContain("permission.permissions @> '{\"physicalStore\":true}'::jsonb");
     expect(query.sql).toContain("coverage.state = 'complete'");
     expect(query.sql).toContain("coverage.created_at <=");

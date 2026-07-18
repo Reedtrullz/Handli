@@ -27,11 +27,19 @@ import {
   writeDraftManifest,
 } from "../../scripts/release/generate-v1-draft-manifest.mjs";
 
-const draftPath = resolve(
-  repositoryRoot,
-  "docs/evidence/v1/v1-source-neutral-cross-browser-remediation-2026-07-17/release-candidate.v1.json",
-);
-const draft = JSON.parse(readFileSync(draftPath, "utf8"));
+// Generate repository-current draft bytes in memory. Historical evidence is
+// immutable and must not become a mutable fixture whenever the forward-only
+// migration set advances.
+const repositoryCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+  cwd: repositoryRoot,
+  encoding: "utf8",
+}).trim();
+const draft = generateDraftManifest({
+  candidateId: "generated-current-test-draft",
+  commitSha: repositoryCommit,
+  createdAt: "2026-07-18T00:00:00Z",
+  root: repositoryRoot,
+});
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -479,14 +487,14 @@ test("the draft writer refuses overwrite and removes its file after binding drif
   }
 });
 
-test("the repository draft binds current files while remaining explicitly blocked", () => {
+test("a generated repository-current draft binds files while remaining explicitly blocked", () => {
   const result = verifyCandidateManifest(draft, {
     repositoryCommit: draft.source.commitSha,
     root: repositoryRoot,
     worktreeDirty: true,
   });
   assert.deepEqual(result, {
-    candidateId: "v1-source-neutral-cross-browser-remediation-2026-07-17",
+    candidateId: "generated-current-test-draft",
     mode: "draft_unverified",
     releaseDecision: "blocked",
   });

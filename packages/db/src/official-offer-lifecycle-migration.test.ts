@@ -17,13 +17,15 @@ const trustFenceMigrationPath = path.join(
 const migrationRunner = path.join(repositoryRoot, "deploy", "migrate.mjs");
 
 describe("official-offer publication runtime migration", () => {
-  it("is the forward-only migration after renderer and operations boundaries", async () => {
+  it("precedes the publication-health hardening migration", async () => {
     const files = (await readdir(migrationsDirectory))
       .filter((file) => /^\d{3}_[a-z0-9_]+\.sql$/u.test(file))
       .sort();
-    expect(files.at(-3)).toBe("024_operations_runtime_boundary.sql");
-    expect(files.at(-2)).toBe("025_private_review_evidence_renderer.sql");
-    expect(files.at(-1)).toBe("026_official_offer_publication_runtime.sql");
+    expect(files.at(-5)).toBe("024_operations_runtime_boundary.sql");
+    expect(files.at(-4)).toBe("025_private_review_evidence_renderer.sql");
+    expect(files.at(-3)).toBe("026_official_offer_publication_runtime.sql");
+    expect(files.at(-2)).toBe("027_official_offer_publication_health.sql");
+    expect(files.at(-1)).toBe("028_private_review_image_evidence_only.sql");
   });
 
   it("owns an inactive policy, dedicated lease and immutable job boundary", async () => {

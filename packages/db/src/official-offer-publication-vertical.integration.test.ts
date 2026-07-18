@@ -19,6 +19,7 @@ import {
 } from "./official-offer-lifecycle";
 import { PostgresPublicOfficialOfferReader } from "./public-official-offer-reader";
 import { PostgresReviewQueueRepository } from "./review-queue";
+import { PostgresPublicSourceStatusReader } from "./source-status-reader";
 
 const runDatabaseIntegration = process.env.RUN_DB_INTEGRATION === "1";
 const temporalRaceApplicationName = "handleplan-offer-temporal-race";
@@ -83,27 +84,36 @@ describe.skipIf(!runDatabaseIntegration).sequential(
   () => {
     let admin: DatabaseConnection;
     let contender: DatabaseConnection;
+    let operations: DatabaseConnection;
     let publisher: DatabaseConnection;
     let review: DatabaseConnection;
     let web: DatabaseConnection;
+    let worker: DatabaseConnection;
 
     beforeAll(() => {
       if (!process.env.DATABASE_URL) {
         throw new Error("DATABASE_URL is required when RUN_DB_INTEGRATION=1");
       }
-      if (!process.env.REVIEW_DATABASE_URL || !process.env.WEB_DATABASE_URL) {
+      if (
+        !process.env.APP_DATABASE_URL
+        || !process.env.OPERATIONS_DATABASE_URL
+        || !process.env.REVIEW_DATABASE_URL
+        || !process.env.WEB_DATABASE_URL
+      ) {
         throw new Error(
-          "REVIEW_DATABASE_URL and WEB_DATABASE_URL are required for the publication vertical",
+          "APP_DATABASE_URL, OPERATIONS_DATABASE_URL, REVIEW_DATABASE_URL, and WEB_DATABASE_URL are required for the publication vertical",
         );
       }
       admin = createDatabase(process.env.DATABASE_URL);
       contender = createDatabase(process.env.DATABASE_URL);
+      operations = createDatabase(process.env.OPERATIONS_DATABASE_URL);
       publisher = createDatabase(withApplicationName(
-        process.env.DATABASE_URL,
+        process.env.APP_DATABASE_URL,
         temporalRaceApplicationName,
       ));
       review = createDatabase(process.env.REVIEW_DATABASE_URL);
       web = createDatabase(process.env.WEB_DATABASE_URL);
+      worker = createDatabase(process.env.APP_DATABASE_URL);
     });
 
     afterAll(async () => {
@@ -117,13 +127,15 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       await Promise.all([
         admin?.close(),
         contender?.close(),
+        operations?.close(),
         publisher?.close(),
         review?.close(),
         web?.close(),
+        worker?.close(),
       ]);
     });
 
-    it("keeps reviewed offers gated and preserves as-of truth across a publication lock race", async () => {
+    it("rolls back mismatched publication health, replays once, and preserves as-of truth across a publication lock race", async () => {
       const suffix = randomUUID();
       const sourceId = `offer-vertical-${suffix}`.slice(0, 64);
       const actor = {
@@ -185,6 +197,27 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       if (permission === undefined || scope === undefined) {
         throw new Error("Offer publication vertical setup did not return identifiers");
       }
+
+      // A later publication proves only the publish boundary. It must never
+      // turn this deliberately old discovery/capture snapshot into a fresh
+      // fully healthy source signal.
+      const staleHealthRecordedAt = new Date(
+        initialNow.getTime() - 48 * 60 * 60_000,
+      );
+      await admin.sql`
+        insert into source_health_snapshots (
+          source_id, geographic_scope_id, status,
+          last_discovery_success_at, last_capture_success_at,
+          last_publish_success_at, newest_eligible_evidence_at,
+          review_queue_count, oldest_review_age_seconds, details, recorded_at
+        ) values (
+          ${sourceId}, null, 'healthy',
+          ${staleHealthRecordedAt.toISOString()},
+          ${staleHealthRecordedAt.toISOString()},
+          null, ${staleHealthRecordedAt.toISOString()},
+          0, null, '{}'::jsonb, ${staleHealthRecordedAt.toISOString()}
+        )
+      `;
 
       const products = await Promise.all(["exact", "ocr"].map(async (kind) => {
         const gtin = validGtin13(`${suffix}:${kind}`);
@@ -338,7 +371,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         set enabled = true, updated_at = clock_timestamp()
         where policy_key = 'official-offer-publication-v1'
       `;
-      const lifecycle = new PostgresOfficialOfferLifecycleRepository(admin.db);
+      const lifecycle = new PostgresOfficialOfferLifecycleRepository(worker.db);
       const lifecycleRequest = async (
         label: string,
       ): Promise<OfficialOfferLifecycleRequestV1> => ({
@@ -463,6 +496,121 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         throw new Error("Missing reviewed offer for temporal publication race");
       }
 
+      // Prove the publication-health trigger is part of the lifecycle
+      // transaction, rather than a best-effort observer. Deliberately claim
+      // that two offers were published after transitioning only one; the
+      // trigger must reject the mismatch and PostgreSQL must roll back every
+      // write made by the attempted lifecycle transaction.
+      const rollbackJobId = `${sourceId}:publication-health-mismatch`;
+      const [offerBeforeMismatch] = await admin.sql<Array<{
+        status: string;
+        updated_at: Date;
+      }>>`
+        select status, updated_at
+        from approved_offers
+        where id = ${offerToLock.id}
+      `;
+      if (offerBeforeMismatch === undefined) {
+        throw new Error("Missing reviewed offer before atomic rollback proof");
+      }
+      await expect(admin.sql.begin(async (transaction) => {
+        const [transition] = await transaction<Array<{ updated_at: Date }>>`
+          update approved_offers
+          set status = 'published', updated_at = clock_timestamp()
+          where id = ${offerToLock.id}
+          returning updated_at
+        `;
+        if (transition === undefined) {
+          throw new Error("Atomic rollback proof did not transition an offer");
+        }
+        const [clocks] = await transaction<Array<{
+          created_at: Date;
+          evaluated_at: Date;
+          lease_expires_at: Date;
+        }>>`
+          select
+            clock_timestamp() as created_at,
+            ${databaseDate(transition.updated_at).toISOString()}::timestamptz
+              - interval '1 second' as evaluated_at,
+            clock_timestamp() + interval '1 hour' as lease_expires_at
+        `;
+        if (clocks === undefined) {
+          throw new Error("Atomic rollback proof did not obtain database clocks");
+        }
+        const lifecycleCounts = {
+          batchLimit: 50,
+          expiredCount: 0,
+          expiryExamined: 0,
+          publicationExamined: 2,
+          publishedCount: 2,
+          revokedCount: 0,
+          skippedCount: 0,
+        };
+        await transaction`
+          insert into worker_job_results (
+            job_id, source_id, job_kind, scheduled_at, run_id, status,
+            started_at, completed_at, counts, result_hash
+          ) values (
+            ${rollbackJobId}, ${sourceId}, 'official-offer-lifecycle-reconcile',
+            ${databaseDate(clocks.evaluated_at).toISOString()},
+            ${`vertical-run:publication-health-mismatch:${suffix}`}, 'succeeded',
+            ${databaseDate(clocks.evaluated_at).toISOString()},
+            ${databaseDate(clocks.created_at).toISOString()},
+            ${JSON.stringify(lifecycleCounts)}::jsonb,
+            ${digest(`${rollbackJobId}:worker-result`)}
+          )
+        `;
+        await transaction`
+          insert into official_offer_lifecycle_job_results (
+            job_id, source_id, lease_token, lease_expires_at, evaluated_at,
+            batch_limit, publication_requested, publication_authorized,
+            publication_state, expiry_examined, expired_count, revoked_count,
+            publication_examined, published_count, skipped_count,
+            result_sha256, created_at
+          ) values (
+            ${rollbackJobId}, ${sourceId}, ${digest(`${rollbackJobId}:lease`)},
+            ${databaseDate(clocks.lease_expires_at).toISOString()},
+            ${databaseDate(clocks.evaluated_at).toISOString()},
+            50, true, true, 'evaluated', 0, 0, 0, 2, 2, 0,
+            ${digest(`${rollbackJobId}:lifecycle-result`)},
+            ${databaseDate(clocks.created_at).toISOString()}
+          )
+        `;
+      })).rejects.toThrow(/HP_OFFER_PUBLICATION_HEALTH_MISMATCH/iu);
+
+      const [offerAfterMismatch] = await admin.sql<Array<{
+        status: string;
+        updated_at: Date;
+      }>>`
+        select status, updated_at
+        from approved_offers
+        where id = ${offerToLock.id}
+      `;
+      expect(offerAfterMismatch?.status).toBe("approved");
+      expect(databaseDate(offerAfterMismatch?.updated_at).getTime())
+        .toBe(databaseDate(offerBeforeMismatch.updated_at).getTime());
+      const [rolledBackRows] = await admin.sql<Array<{
+        health_fact_count: number;
+        lifecycle_result_count: number;
+        worker_result_count: number;
+      }>>`
+        select
+          (select count(*)::integer
+           from official_offer_publication_health_facts
+           where lifecycle_job_id = ${rollbackJobId}) as health_fact_count,
+          (select count(*)::integer
+           from official_offer_lifecycle_job_results
+           where job_id = ${rollbackJobId}) as lifecycle_result_count,
+          (select count(*)::integer
+           from worker_job_results
+           where job_id = ${rollbackJobId}) as worker_result_count
+      `;
+      expect(rolledBackRows).toEqual({
+        health_fact_count: 0,
+        lifecycle_result_count: 0,
+        worker_result_count: 0,
+      });
+
       let confirmPublicationLock!: () => void;
       let releasePublicationLock!: () => void;
       const publicationLockHeld = new Promise<void>((resolve) => {
@@ -517,6 +665,81 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       expect(transitionedOffers).toHaveLength(2);
       expect(transitionedOffers.every(({ updated_at: updatedAt }) =>
         databaseDate(updatedAt).getTime() > preCommitAsOf.getTime())).toBe(true);
+
+      const [publicationHealth] = await admin.sql<Array<{
+        last_publish_success_at: Date;
+        newest_eligible_evidence_at: Date;
+        published_count: number;
+      }>>`
+        select published_count, last_publish_success_at, newest_eligible_evidence_at
+        from official_offer_publication_health_facts
+        where lifecycle_job_id = ${publishRequest.jobId}
+      `;
+      expect(publicationHealth?.published_count).toBe(2);
+      expect(databaseDate(publicationHealth?.last_publish_success_at).getTime())
+        .toBeGreaterThan(preCommitAsOf.getTime());
+      expect(databaseDate(publicationHealth?.newest_eligible_evidence_at).getTime())
+        .toBeLessThanOrEqual(databaseDate(publicationHealth?.last_publish_success_at).getTime());
+
+      await expect(worker.sql`
+        select lifecycle_job_id from official_offer_publication_health_facts limit 1
+      `).rejects.toThrow(/permission denied/iu);
+      await expect(operations.sql`
+        select source_id from official_offer_publication_health_facts limit 1
+      `).rejects.toThrow(/permission denied/iu);
+      const [operationsCapabilities] = await operations.sql<Array<{
+        alert_append_execute: boolean;
+        alert_export_execute: boolean;
+      }>>`
+        select
+          has_function_privilege(
+            current_user,
+            'append_operations_alert_evaluation_v1(timestamptz,jsonb,jsonb)',
+            'EXECUTE'
+          ) as alert_append_execute,
+          has_function_privilege(
+            current_user,
+            'operations_alert_export_rows_v1(bigint,integer)',
+            'EXECUTE'
+          ) as alert_export_execute
+      `;
+      expect(operationsCapabilities).toEqual({
+        alert_append_execute: false,
+        alert_export_execute: false,
+      });
+      const [operationsHealth] = await operations.sql<Array<{
+        health_state: string;
+        last_publish_success_at: Date;
+        newest_eligible_evidence_at: Date;
+      }>>`
+        select health_state, last_publish_success_at, newest_eligible_evidence_at
+        from public.operations_dashboard_rows_v1(
+          ${operations.sql.array([sourceId])}::text[],
+          1::integer
+        )
+      `;
+      expect(operationsHealth?.health_state).toBe("degraded");
+      expect(databaseDate(operationsHealth?.last_publish_success_at).getTime())
+        .toBe(databaseDate(publicationHealth?.last_publish_success_at).getTime());
+      expect(databaseDate(operationsHealth?.newest_eligible_evidence_at).getTime())
+        .toBe(databaseDate(publicationHealth?.newest_eligible_evidence_at).getTime());
+
+      const sourceStatus = await new PostgresPublicSourceStatusReader(web.db)
+        .read(100, await databaseNow());
+      const publishedSourceStatus = sourceStatus.entries.find(({ source }) =>
+        source.id === sourceId);
+      expect(publishedSourceStatus?.health).toMatchObject({
+        freshness: "current",
+        lastSuccess: {
+          captureAt: staleHealthRecordedAt.toISOString(),
+          discoveryAt: staleHealthRecordedAt.toISOString(),
+          eligibleEvidenceAt: databaseDate(
+            publicationHealth?.newest_eligible_evidence_at,
+          ).toISOString(),
+          publishAt: databaseDate(publicationHealth?.last_publish_success_at).toISOString(),
+        },
+        state: "degraded",
+      });
       await expect(publicReader.getMany(
         extractionRows.map(({ productId }) => `product:${productId}`),
         preCommitAsOf,
@@ -526,6 +749,27 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         databaseAsOf: published.databaseAsOf,
         outcome: "replayed",
         replayed: true,
+      });
+      const [publicationReplayRows] = await admin.sql<Array<{
+        health_fact_count: number;
+        lifecycle_result_count: number;
+        worker_result_count: number;
+      }>>`
+        select
+          (select count(*)::integer
+           from official_offer_publication_health_facts
+           where lifecycle_job_id = ${publishRequest.jobId}) as health_fact_count,
+          (select count(*)::integer
+           from official_offer_lifecycle_job_results
+           where job_id = ${publishRequest.jobId}) as lifecycle_result_count,
+          (select count(*)::integer
+           from worker_job_results
+           where job_id = ${publishRequest.jobId}) as worker_result_count
+      `;
+      expect(publicationReplayRows).toEqual({
+        health_fact_count: 1,
+        lifecycle_result_count: 1,
+        worker_result_count: 1,
       });
 
       const publicSnapshot = await publicReader.getMany(

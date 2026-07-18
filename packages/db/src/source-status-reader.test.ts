@@ -97,11 +97,32 @@ describe("PostgresPublicSourceStatusReader", () => {
     expect(query.parameters).toContain(AT.toISOString());
     expect(query.parameters).toContain(51);
     expect(query.sql).toContain("partition by health.source_id, health.geographic_scope_id");
+    expect(query.sql).toContain("official_offer_publication_health_facts fact");
+    expect(query.sql).toContain("where publication_health_rank = 1");
+    expect(query.sql).toContain("publication_health.last_publish_success_at");
+    expect(query.sql).toContain("and health.geographic_scope_id is null");
+    expect(query.sql).toMatch(
+      /publication_health\.persisted_at > health\.persisted_at[\s\S]*?\) then 'degraded'/iu,
+    );
+    expect(query.sql).toContain("health.recorded_at <= health.persisted_at");
+    expect(query.sql).toContain("order by health.persisted_at desc, health.id desc");
+    expect(query.sql).not.toContain(
+      "publication_health.last_publish_success_at > health.recorded_at",
+    );
+    expect(query.sql).not.toContain(
+      "when health.status = 'healthy' then 'healthy'",
+    );
     expect(query.sql).not.toContain("health.*");
     expect(query.sql).toContain("where health_rank = 1");
     expect(query.sql).toContain("run.status <> 'running'");
     expect(query.sql).toContain("where ingestion_rank = 1");
     expect(query.sql).toContain("permission_rank = 1");
+    expect(query.sql).toContain("order by permission.created_at desc, permission.id desc");
+    expect(query.sql).not.toContain("order by permission.reviewed_at desc");
+    expect(query.sql).toContain("source.permission_reviewed_at = permission.reviewed_at");
+    expect(query.sql).toContain(
+      "source.permission_expires_at is not distinct from permission.valid_until",
+    );
     expect(query.sql).toContain("), false) as governance_approved");
     expect(query.sql).toContain("source.public_state_changed_at <=");
     expect(query.sql).toContain("scope.id::text as scope_database_id");

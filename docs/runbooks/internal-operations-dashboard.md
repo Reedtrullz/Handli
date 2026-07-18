@@ -260,11 +260,12 @@ all of the following are evidenced:
    Bind the exact roster version, canonical entries, required signals/job
    kinds, and SHA-256 to the candidate release/coverage manifest; no production
    default or database-derived roster is permitted.
-2. Candidate-current PostgreSQL proof must confirm that `handleplan_operations`
-   has only CONNECT, schema USAGE, and EXECUTE on
-   `operations_dashboard_rows_v1`, `append_operations_alert_evaluation_v1`, and
-   `operations_alert_export_rows_v1`, while public/review/worker roles cannot
-   invoke them and operations cannot select any table or sequence.
+2. While scheduling remains disabled, candidate-current PostgreSQL proof must
+   confirm that `handleplan_operations` has only CONNECT, schema USAGE, and
+   EXECUTE on `operations_dashboard_rows_v1`. Migration 027 explicitly removes
+   its alert append/export capabilities and direct publication-health access.
+   Alert activation must provision a separately reviewed scheduler/delivery
+   identity and readiness contract; do not expand the read-only dashboard role.
 3. Candidate-current Cloudflare proof must confirm the distinct operations
    application/audience and denial for missing, forged, expired, wrong issuer,
    wrong audience, wrong host, public paths, and review credentials. Unit tests

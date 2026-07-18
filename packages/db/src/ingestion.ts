@@ -20,6 +20,7 @@ import {
   sourcePermissions,
   sourceRecordOutcomes,
 } from "./schema";
+import { SOURCE_GOVERNANCE_ADVISORY_LOCK_SEED } from "./source-governance-lock";
 
 export type SupportedChain = "bunnpris" | "extra" | "rema-1000";
 export type SourceRecordOutcomeState = "accepted" | "quarantined" | "unknown";
@@ -136,7 +137,9 @@ export function catalogCanonicalMutationDecision(input: {
     && input.canonical.packageUnit === input.incoming.packageUnit
     && input.canonical.unitsPerPack === (input.incoming.unitsPerPack ?? 1);
   if (input.canonical.status === "retired") return "review";
-  if (input.canonical.status === "quarantined") return "activate";
+  if (input.canonical.status === "quarantined") {
+    return input.sourceAccessApproved ? "activate" : "review";
+  }
   if (fieldsMatch) return "none";
   if (
     !input.sourceAccessApproved
@@ -229,6 +232,16 @@ export type IngestionWriteResult = {
   inserted: number;
   received: number;
 };
+
+type SourceIngestionCapability =
+  | "catalog"
+  | "ordinaryPrice"
+  | "physicalStore"
+  | "priceHistory";
+
+const SOURCE_ACCESS_REVIEW_REQUIRED = "SOURCE_ACCESS_REVIEW_REQUIRED";
+const INGESTION_LOCK_TIMEOUT_MS = 5_000;
+const INGESTION_STATEMENT_TIMEOUT_MS = 60_000;
 
 function throwIfIngestionCancelled(signal?: AbortSignal): void {
   if (signal?.aborted) throw new Error("Ingestion operation cancelled");
@@ -764,7 +777,29 @@ function evidenceKeyForPrice(
 export function claimEligibilityForRunType(
   runType: string,
 ): "historical_eligible" | "ordinary_only" {
-  return runType === "historical-prices" ? "historical_eligible" : "ordinary_only";
+  if (runType === "historical-prices") return "historical_eligible";
+  if (runType === "benchmark-prices") return "ordinary_only";
+  throw new TypeError("Price persistence requires an exact supported ingestion run type");
+}
+
+function priceCapabilityForRunType(runType: string): SourceIngestionCapability {
+  if (runType === "benchmark-prices") return "ordinaryPrice";
+  if (runType === "historical-prices") return "priceHistory";
+  throw new TypeError("Price persistence requires an exact supported ingestion run type");
+}
+
+function quarantineAcceptedOutcomes(
+  original: readonly SourceRecordOutcomeInput[],
+  normalized: readonly SourceRecordOutcomeInput[],
+): SourceRecordOutcomeInput[] {
+  return normalized.map((outcome, index) =>
+    original[index]?.outcomeState === "accepted"
+      ? {
+          ...outcome,
+          outcomeState: "quarantined",
+          reason: SOURCE_ACCESS_REVIEW_REQUIRED,
+        }
+      : outcome);
 }
 
 export class PostgresIngestionRepository {
@@ -865,8 +900,15 @@ export class PostgresIngestionRepository {
     outcomes: readonly CatalogIngestionOutcome[],
     signal?: AbortSignal,
   ): Promise<IngestionWriteResult> {
+    if (handle.runType !== "catalog") {
+      throw new TypeError("Catalog persistence requires a catalog ingestion run");
+    }
     requireBoundedOutcomeBatch(outcomes);
     return this.withRunningRun(handle, async (transaction) => {
+      const containsAcceptedCatalogMutation = outcomes.some(
+        (outcome) => outcome.outcomeState === "accepted",
+      );
+      let catalogSourceAccessApproved = false;
       for (const outcome of outcomes) {
         throwIfIngestionCancelled(signal);
         validateSourceRecordOutcome(outcome);
@@ -875,6 +917,27 @@ export class PostgresIngestionRepository {
         requireBoundedString(outcome.sourceRecordId, "sourceRecordId", 128);
         if (canonicalGtin(outcome.subjectEan) === undefined) {
           throw new TypeError("Accepted catalog records require a valid GTIN");
+        }
+      }
+
+      // Source governance is the outermost lock for the whole rights-sensitive
+      // batch. Sorted unique GTIN locks follow it before any product row is
+      // touched. That gives same-source and cross-source catalog writers one
+      // canonical lock order even when their input batches are reversed.
+      if (containsAcceptedCatalogMutation) {
+        await this.lockSourceGovernance(transaction, handle.sourceId);
+        catalogSourceAccessApproved = await this.sourceAllowsCapabilities(
+          transaction,
+          handle.sourceId,
+          ["catalog"],
+        );
+        if (catalogSourceAccessApproved) {
+          const acceptedGtins = [...new Set(
+            outcomes
+              .filter((outcome) => outcome.outcomeState === "accepted")
+              .map((outcome) => outcome.subjectEan),
+          )].sort();
+          await this.lockProductGtins(transaction, acceptedGtins);
         }
       }
 
@@ -892,10 +955,28 @@ export class PostgresIngestionRepository {
           inserted += audit.inserted;
           continue;
         }
+        // Current catalog authority gates the complete accepted persistence
+        // path. A governance change that won the outer source lock leaves only
+        // an append-only review outcome: no canonical resolution, identifier
+        // verification, source link or catalog observation is allowed.
+        if (!catalogSourceAccessApproved) {
+          const audit = await this.auditOutcomesWithin(
+            transaction,
+            handle,
+            [{
+              ...normalized,
+              outcomeState: "quarantined",
+              reason: "CATALOG_CORRECTION_REVIEW_REQUIRED",
+            }],
+            signal,
+          );
+          inserted += audit.inserted;
+          continue;
+        }
         const resolution = await this.resolveProductByGtin(
           transaction,
           outcome.subjectEan,
-          { handle, outcome },
+          { handle, outcome, sourceAccessApproved: true },
         );
         if (resolution.reviewRequired) {
           const audit = await this.auditOutcomesWithin(
@@ -942,9 +1023,10 @@ export class PostgresIngestionRepository {
     outcomes: readonly PriceIngestionOutcome[],
     signal?: AbortSignal,
   ): Promise<IngestionWriteResult> {
+    const capability = priceCapabilityForRunType(handle.runType);
+    const claimEligibility = claimEligibilityForRunType(handle.runType);
     requireBoundedOutcomeBatch(outcomes);
     return this.withRunningRun(handle, async (transaction) => {
-      const claimEligibility = claimEligibilityForRunType(handle.runType);
       for (const outcome of outcomes) {
         throwIfIngestionCancelled(signal);
         validateSourceRecordOutcome(outcome);
@@ -962,6 +1044,27 @@ export class PostgresIngestionRepository {
       }
 
       const normalized = outcomes.map(normalizePriceOutcome);
+      await this.lockSourceGovernance(transaction, handle.sourceId);
+      const sourceAccessApproved = await this.sourceAllowsCapabilities(
+        transaction,
+        handle.sourceId,
+        [capability],
+      );
+      if (!sourceAccessApproved) {
+        return this.auditOutcomesWithin(
+          transaction,
+          handle,
+          quarantineAcceptedOutcomes(outcomes, normalized),
+          signal,
+        );
+      }
+
+      const subjectGtins = [...new Set(outcomes.flatMap((outcome) =>
+        outcome.subjectChain !== undefined && outcome.subjectEan !== undefined
+          ? [outcome.subjectEan]
+          : []))].sort();
+      await this.lockProductGtins(transaction, subjectGtins);
+
       const audit = await this.auditOutcomesWithin(transaction, handle, normalized, signal);
       for (let index = 0; index < outcomes.length; index += 1) {
         throwIfIngestionCancelled(signal);
@@ -1063,6 +1166,9 @@ export class PostgresIngestionRepository {
     coverage: readonly PhysicalStoreCoverageInput[],
     signal?: AbortSignal,
   ): Promise<IngestionWriteResult> {
+    if (handle.runType !== "physical-stores") {
+      throw new TypeError("Physical-store persistence requires a physical-stores ingestion run");
+    }
     requireBoundedOutcomeBatch(outcomes);
     validatePhysicalStoreCoverage(coverage);
     return this.withRunningRun(handle, async (transaction) => {
@@ -1112,6 +1218,21 @@ export class PostgresIngestionRepository {
       }
 
       const normalized = outcomes.map(normalizePhysicalStoreIngestionOutcome);
+      await this.lockSourceGovernance(transaction, handle.sourceId);
+      const sourceAccessApproved = await this.sourceAllowsCapabilities(
+        transaction,
+        handle.sourceId,
+        ["physicalStore"],
+      );
+      if (!sourceAccessApproved) {
+        return this.auditOutcomesWithin(
+          transaction,
+          handle,
+          quarantineAcceptedOutcomes(outcomes, normalized),
+          signal,
+        );
+      }
+
       const audit = await this.auditOutcomesWithin(transaction, handle, normalized, signal);
       for (let index = 0; index < outcomes.length; index += 1) {
         throwIfIngestionCancelled(signal);
@@ -1254,6 +1375,7 @@ export class PostgresIngestionRepository {
     catalog?: {
       handle: IngestionRunHandle;
       outcome: AcceptedCatalogIngestionOutcome;
+      sourceAccessApproved: true;
     },
   ): Promise<{ productId: number; reviewRequired: boolean }> {
     if (canonicalGtin(ean) === undefined) {
@@ -1332,19 +1454,7 @@ export class PostgresIngestionRepository {
               .orderBy(desc(catalogObservations.retrievedAt), desc(catalogObservations.id))
               .limit(1)
           : [];
-        const fieldsDiffer = catalogCanonicalMutationDecision({
-          canonical: canonical as CatalogCanonicalSnapshot,
-          incoming: catalog.outcome.product,
-          sourceAccessApproved: false,
-        }) !== "none";
-        const sourceAccessApproved = canonical.status === "active"
-          && fieldsDiffer
-          && isSameMatchedSource
-          ? await this.sourceAllowsCatalogCorrection(
-              transaction,
-              catalog.handle.sourceId,
-            )
-          : false;
+        const identifierNeedsVerification = identifier.verifiedAt === null;
         const mutation = catalogCanonicalMutationDecision({
           canonical: canonical as CatalogCanonicalSnapshot,
           incoming: catalog.outcome.product,
@@ -1355,11 +1465,14 @@ export class PostgresIngestionRepository {
                 },
               }
             : {}),
-          sourceAccessApproved,
+          sourceAccessApproved: catalog.sourceAccessApproved,
         });
         if (mutation === "review") {
           return { productId: identifier.productId, reviewRequired: true };
         }
+        // Matching canonical fields are idempotent, but turning an unverified
+        // GTIN into public identity evidence remains behind the batch's exact
+        // source-governance decision.
         if (mutation === "activate" || mutation === "correct") {
           await transaction
             .update(canonicalProducts)
@@ -1374,7 +1487,7 @@ export class PostgresIngestionRepository {
             })
             .where(eq(canonicalProducts.id, identifier.productId));
         }
-        if (identifier.verifiedAt === null) {
+        if (identifierNeedsVerification) {
           await transaction
             .update(productIdentifiers)
             .set({ confidence: 100, verifiedAt: catalog.outcome.product.retrievedAt })
@@ -1401,7 +1514,7 @@ export class PostgresIngestionRepository {
               displayName: catalogProduct.displayName,
               packageAmount: catalogProduct.packageAmount,
               packageUnit: catalogProduct.packageUnit,
-              status: "active",
+              status: catalog?.sourceAccessApproved === true ? "active" : "quarantined",
               unitsPerPack: catalogProduct.unitsPerPack ?? 1,
               updatedAt: catalogProduct.retrievedAt,
             },
@@ -1416,51 +1529,85 @@ export class PostgresIngestionRepository {
       value: ean,
       verifiedAt: catalogProduct?.retrievedAt,
     });
-    return { productId: product.id, reviewRequired: false };
+    return {
+      productId: product.id,
+      reviewRequired: catalogProduct !== undefined && catalog?.sourceAccessApproved !== true,
+    };
   }
 
-  private async sourceAllowsCatalogCorrection(
+  private async sourceAllowsCapabilities(
     transaction: IngestionTransaction,
     sourceId: string,
+    capabilities: readonly SourceIngestionCapability[],
   ): Promise<boolean> {
-    const [source] = await transaction
+    if (capabilities.length < 1) return false;
+    await this.lockSourceGovernance(transaction, sourceId);
+    const requiredPermissions = JSON.stringify(Object.fromEntries(
+      capabilities.map((capability) => [capability, true]),
+    ));
+    const [authorization] = await transaction
       .select({
         approved: sql<boolean>`
           ${dataSources.runtimeState} = 'approved'
           and ${dataSources.permissionReviewedAt} is not null
           and ${dataSources.permissionReviewedAt} <= clock_timestamp()
+          and ${dataSources.permissionReviewedAt} = ${sourcePermissions.reviewedAt}
+          and ${dataSources.permissionExpiresAt} is not distinct from ${sourcePermissions.validUntil}
           and (
             ${dataSources.permissionExpiresAt} is null
             or ${dataSources.permissionExpiresAt} > clock_timestamp()
           )
-        `,
-      })
-      .from(dataSources)
-      .where(eq(dataSources.id, sourceId))
-      .limit(1);
-    if (source?.approved !== true) return false;
-
-    const [permission] = await transaction
-      .select({
-        approved: sql<boolean>`
-          ${sourcePermissions.decision} = 'approved'
+          and ${sourcePermissions.createdAt} <= clock_timestamp()
+          and ${sourcePermissions.reviewedAt} <= clock_timestamp()
+          and ${sourcePermissions.decision} = 'approved'
           and (
             ${sourcePermissions.validUntil} is null
             or ${sourcePermissions.validUntil} > clock_timestamp()
           )
-          and ${sourcePermissions.permissions} @> '{"catalog": true}'::jsonb
+          and ${sourcePermissions.permissions} @> ${requiredPermissions}::jsonb
         `,
       })
-      .from(sourcePermissions)
+      .from(dataSources)
+      .innerJoin(
+        sourcePermissions,
+        eq(sourcePermissions.sourceId, dataSources.id),
+      )
       .where(
         and(
-          eq(sourcePermissions.sourceId, sourceId),
-          sql`${sourcePermissions.reviewedAt} <= clock_timestamp()`,
+          eq(dataSources.id, sourceId),
+          sql`${sourcePermissions.createdAt} <= clock_timestamp()`,
         ),
       )
-      .orderBy(desc(sourcePermissions.reviewedAt), desc(sourcePermissions.id))
+      .orderBy(desc(sourcePermissions.createdAt), desc(sourcePermissions.id))
       .limit(1);
-    return permission?.approved === true;
+    return authorization?.approved === true;
+  }
+
+  private async lockSourceGovernance(
+    transaction: IngestionTransaction,
+    sourceId: string,
+  ): Promise<void> {
+    await transaction.execute(sql`
+      select pg_catalog.pg_advisory_xact_lock(
+        pg_catalog.hashtextextended(
+          ${sourceId},
+          ${SOURCE_GOVERNANCE_ADVISORY_LOCK_SEED}
+        )
+      )
+    `);
+  }
+
+  private async lockProductGtins(
+    transaction: IngestionTransaction,
+    gtins: readonly string[],
+  ): Promise<void> {
+    for (const gtin of gtins) {
+      await transaction.execute(sql`
+        select pg_catalog.pg_advisory_xact_lock(
+          pg_catalog.hashtextextended(${gtin}, 0)
+        )
+      `);
+    }
   }
 
   private async linkSourceProduct(
@@ -1582,6 +1729,22 @@ export class PostgresIngestionRepository {
   ): Promise<T> {
     throwIfIngestionCancelled(signal);
     return this.db.transaction(async (transaction) => {
+      // Keep every persistence statement and advisory-lock wait bounded well
+      // inside the shortest five-minute worker job. set_config(..., true) is
+      // transaction-local, so pooled sessions cannot retain these limits.
+      await transaction.execute(sql`
+        select
+          pg_catalog.set_config(
+            'lock_timeout',
+            ${`${INGESTION_LOCK_TIMEOUT_MS}ms`},
+            true
+          ),
+          pg_catalog.set_config(
+            'statement_timeout',
+            ${`${INGESTION_STATEMENT_TIMEOUT_MS}ms`},
+            true
+          )
+      `);
       await this.verifyFence(transaction, context, "initial");
       throwIfIngestionCancelled(signal);
       const result = await callback(transaction);

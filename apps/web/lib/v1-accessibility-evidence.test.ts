@@ -35,6 +35,71 @@ describe("V1 automated accessibility evidence policy", () => {
     }
   });
 
+  it("separates deterministic public fixtures from production service-worker proof", () => {
+    expect(publicPlaywrightConfig.use?.serviceWorkers).toBe("block");
+    expect(handlemodusPlaywrightConfig.use?.serviceWorkers).toBe("allow");
+    const handlemodusWebServer = Array.isArray(handlemodusPlaywrightConfig.webServer)
+      ? undefined
+      : handlemodusPlaywrightConfig.webServer;
+    expect(handlemodusWebServer?.env?.KASSAL_API_KEY).toBe(
+      "handleplan-handlemodus-parent-env-poison-v1",
+    );
+    expect(source("apps/web/tests/handlemodus/start-production-server.mjs"))
+      .toContain("for (const name of Object.keys(process.env)) delete process.env[name]");
+    expect(publicPlaywrightConfig.globalTeardown).toBe(
+      "./tests/e2e/verify-public-harness.mjs",
+    );
+    const publicWebServer = Array.isArray(publicPlaywrightConfig.webServer)
+      ? undefined
+      : publicPlaywrightConfig.webServer;
+    expect(publicWebServer).toBeDefined();
+    expect(publicWebServer?.url).toBe("https://127.0.0.1:3109/api/ready");
+
+    const environment = publicWebServer?.env;
+    expect(environment?.HANDLEPLAN_MODE).toBe("fake");
+    expect(environment?.HANDLEPLAN_E2E_PUBLIC_ORIGIN).toBe("https://127.0.0.1:3109");
+    expect(environment?.HANDLEPLAN_E2E_SENTINEL).toMatch(/^handleplan-e2e-[0-9a-f]{48}$/u);
+    expect(environment?.HANDLEPLAN_E2E_FAKE_PRODUCTION_TOKEN)
+      .toBe(environment?.HANDLEPLAN_E2E_SENTINEL);
+    expect(environment?.KASSAL_API_KEY).toBe(environment?.HANDLEPLAN_E2E_SENTINEL);
+    expect(source("tests/e2e/install-public-fake-capability.mjs")).toContain(
+      'Symbol.for("handleplan.e2e.loopback-production-browser-fake-runtime.v1")',
+    );
+    expect(source("apps/web/package.json")).toContain(
+      '"build": "node ../../scripts/e2e/public-build-binding.mjs build"',
+    );
+    expect(source("tests/e2e/start-https-server.mjs")).not.toContain("cpSync");
+    expect(source("apps/web/tests/handlemodus/start-production-server.mjs"))
+      .not.toContain("cpSync");
+    expect(source("tests/e2e/start-https-server.mjs")).toContain(
+      "assertPublicBuildBinding(repositoryRoot)",
+    );
+    expect(source("tests/e2e/start-https-server.mjs")).toContain(
+      'const responseScanHeader = "x-handleplan-e2e-response-scan"',
+    );
+    expect(source("tests/e2e/start-https-server.mjs")).toContain(
+      "harnessState.inFlightRequests += 1",
+    );
+    expect(source("tests/e2e/start-https-server.mjs")).toContain(
+      'const allowedMethods = new Set(["GET", "HEAD", "POST"])',
+    );
+    expect(source("tests/e2e/start-https-server.mjs")).toContain(
+      "void shutdown()",
+    );
+    const teardown = source("tests/e2e/verify-public-harness.mjs");
+    expect(teardown).toContain('path: "/api/_handleplan-e2e/leak-probe"');
+    expect(teardown).toContain('path: "/api/_handleplan-e2e/leak-header-probe"');
+    expect(teardown).toContain('method: "TRACE"');
+    expect(teardown).toContain("status.expectedLeakProbeRejections <= 0");
+    expect(teardown).toContain("status.expectedBodyLeakProbeRejections <= 0");
+    expect(teardown).toContain("status.expectedHeaderLeakProbeRejections <= 0");
+    expect(teardown).toContain(
+      "status.expectedBodyLeakProbeRejections + status.expectedHeaderLeakProbeRejections",
+    );
+    expect(teardown).toContain("status.expectedMethodProbeRejections <= 0");
+    expect(teardown).toContain("status.apiResponsesScanned <= 0");
+  });
+
   it("keeps whole-page WCAG 2.2 A and AA scans unfiltered", () => {
     const evidence = [
       source("apps/web/test-support/accessibility-evidence.ts"),

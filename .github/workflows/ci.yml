@@ -10,6 +10,9 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -34,6 +37,7 @@ jobs:
           # The exact first parent is built and booted after current migrations
           # on push CI; this is the minimum history required for that proof.
           fetch-depth: 2
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0, Node 24 action runtime
         with:
           node-version: 22.22.3
@@ -100,8 +104,10 @@ jobs:
         run: node tests/acceptance/prove-runtime-database-role.mjs
       - name: Run PostgreSQL integration tests
         env:
+          APP_DATABASE_URL: postgresql://handleplan_app:ci_app_url_safe_0000000000000000001@127.0.0.1:5432/handleplan
           DATABASE_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
           DATABASE_MIGRATION_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
+          OPERATIONS_DATABASE_URL: postgresql://handleplan_operations:ci_operations_url_safe_000000000001@127.0.0.1:5432/handleplan
           RUN_DB_INTEGRATION: "1"
           RUN_OFFICIAL_OFFER_DB_INTEGRATION: "1"
           REVIEW_DATABASE_URL: postgresql://handleplan_review:ci_review_url_safe_00000000000000001@127.0.0.1:5432/handleplan
@@ -132,7 +138,8 @@ jobs:
           git archive --format=tar --output="$previous_archive" "$previous_revision"
           test "$(wc -c < "$previous_archive" | tr -d '[:space:]')" -gt 0
           test "$(wc -c < "$previous_archive" | tr -d '[:space:]')" -le 134217728
-          docker build --build-arg APP_COMMIT_SHA="$previous_revision" \
+          docker build --platform=linux/amd64 \
+            --build-arg APP_COMMIT_SHA="$previous_revision" \
             --tag "$previous_image" - < "$previous_archive"
           docker run --detach --name "$previous_container" --network host \
             --read-only --cap-drop ALL --security-opt no-new-privileges:true \
@@ -140,8 +147,7 @@ jobs:
             --env APP_COMMIT_SHA="$previous_revision" \
             --env DATABASE_URL="postgresql://handleplan_web:$WEB_DATABASE_PASSWORD@127.0.0.1:5432/handleplan" \
             --env NEXT_TELEMETRY_DISABLED=1 --env NODE_ENV=production \
-            --env PORT=3014 --entrypoint node "$previous_image" \
-            /app/apps/web/server.js >/dev/null
+            --env PORT=3014 "$previous_image" >/dev/null
           previous_ready=0
           attempts=0
           while [ "$attempts" -lt 24 ]; do
@@ -168,15 +174,23 @@ jobs:
       - run: corepack pnpm typecheck
       - run: corepack pnpm lint
       - run: corepack pnpm test
-      - run: corepack pnpm build
+      - name: Build the revision-bound public host artifact
+        env:
+          APP_COMMIT_SHA: ${{ github.sha }}
+        run: corepack pnpm build
+      - name: Prove the public browser harness fails closed on upstream exit
+        env:
+          APP_COMMIT_SHA: ${{ github.sha }}
+        run: corepack pnpm e2e:public-lifecycle
       - name: Test immutable CI image handoff
         run: node --test tests/operations/deployment-artifact-handoff.test.mjs
       - name: Validate deployment assets
+        id: validate-deployment-assets
         env:
           APP_COMMIT_SHA: ${{ github.sha }}
           APP_DATABASE_PASSWORD: ci_app_url_safe_0000000000000000001
-          HANDLEPLAN_IMAGE: handleplan:ci
-          HANDLEPLAN_MIGRATION_IMAGE: handleplan:ci
+          HANDLEPLAN_IMAGE: handleplan:${{ github.sha }}
+          HANDLEPLAN_MIGRATION_IMAGE: handleplan:${{ github.sha }}
           KASSAL_API_KEY: ci-placeholder
           OPERATIONS_ACCESS_AUDIENCE: ci_operations_access_audience_0001
           OPERATIONS_ACCESS_ISSUER: https://ci.cloudflareaccess.com
@@ -202,10 +216,45 @@ jobs:
             caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
           docker compose -f deploy/compose.production.yml config -q
           test "$(git rev-parse HEAD)" = "$APP_COMMIT_SHA"
+          test "$HANDLEPLAN_IMAGE" = "handleplan:$APP_COMMIT_SHA"
+          test "$HANDLEPLAN_MIGRATION_IMAGE" = "$HANDLEPLAN_IMAGE"
           git archive --format=tar --output=.artifacts/security/handleplan-source.tar "$APP_COMMIT_SHA"
-          docker build --build-arg APP_COMMIT_SHA="$APP_COMMIT_SHA" -t "$HANDLEPLAN_IMAGE" - < .artifacts/security/handleplan-source.tar
+          docker build --platform=linux/amd64 \
+            --build-arg APP_COMMIT_SHA="$APP_COMMIT_SHA" \
+            -t "$HANDLEPLAN_IMAGE" - < .artifacts/security/handleplan-source.tar
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$HANDLEPLAN_IMAGE")" = "$APP_COMMIT_SHA"
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$HANDLEPLAN_IMAGE")" = 'linux/amd64'
+          image_id=$(docker image inspect --format '{{.Id}}' "$HANDLEPLAN_IMAGE")
+          printf '%s\n' "$image_id" | grep -Eq '^sha256:[0-9a-f]{64}$'
           docker image save --output .artifacts/security/handleplan-image.docker.tar "$HANDLEPLAN_IMAGE"
+          docker image rm "$HANDLEPLAN_IMAGE"
+          if docker image inspect "$HANDLEPLAN_IMAGE" >/dev/null 2>&1; then
+            echo "Revision tag survived the isolated archive reload boundary" >&2
+            exit 1
+          fi
+          docker image load --input .artifacts/security/handleplan-image.docker.tar
+          test "$(docker image inspect --format '{{.Id}}' "$HANDLEPLAN_IMAGE")" = "$image_id"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$HANDLEPLAN_IMAGE")" = "$APP_COMMIT_SHA"
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$HANDLEPLAN_IMAGE")" = 'linux/amd64'
+          image_verification=.artifacts/security/handleplan-production-image-verification.json
+          node scripts/operations/verify-production-image.mjs \
+            --image-reference "$HANDLEPLAN_IMAGE" \
+            --expected-image-id "$image_id" \
+            --expected-revision "$APP_COMMIT_SHA" \
+            --archive .artifacts/security/handleplan-image.docker.tar \
+            > "$image_verification"
+          runtime_source_digest_sha256=$(jq -er '.runtimeSourceDigestSha256' "$image_verification")
+          runtime_source_file_count=$(jq -er '.runtimeSourceFileCount' "$image_verification")
+          runtime_shipment_digest_sha256=$(jq -er '.shipmentDigestSha256' "$image_verification")
+          runtime_shipment_entry_count=$(jq -er '.shipmentEntryCount' "$image_verification")
+          test "$(jq -er '.platform' "$image_verification")" = 'linux/amd64'
+          for proof_digest in "$runtime_source_digest_sha256" "$runtime_shipment_digest_sha256"; do
+            printf '%s\n' "$proof_digest" | grep -Eq '^[0-9a-f]{64}$'
+          done
+          for proof_count in "$runtime_source_file_count" "$runtime_shipment_entry_count"; do
+            printf '%s\n' "$proof_count" | grep -Eq '^[1-9][0-9]{0,15}$'
+          done
+          jq -c . "$image_verification"
           corepack pnpm security:provenance
           artifact_dir=.artifacts/deployment
           install -d -m 700 "$artifact_dir"
@@ -213,17 +262,20 @@ jobs:
           install -m 600 .artifacts/security/handleplan-image.docker.tar "$artifact_dir/handleplan-image.docker.tar"
           install -m 600 .artifacts/security/handleplan.provenance.json "$artifact_dir/handleplan.provenance.json"
           install -m 600 .artifacts/security/handleplan.spdx.json "$artifact_dir/handleplan.spdx.json"
-          image_id=$(docker image inspect --format '{{.Id}}' "$HANDLEPLAN_IMAGE")
-          printf '%s\n' "$image_id" | grep -Eq '^sha256:[0-9a-f]{64}$'
           image_archive_sha256=$(sha256sum "$artifact_dir/handleplan-image.docker.tar" | awk '{print $1}')
           source_archive_sha256=$(sha256sum "$artifact_dir/handleplan-source.tar" | awk '{print $1}')
           provenance_sha256=$(sha256sum "$artifact_dir/handleplan.provenance.json" | awk '{print $1}')
           sbom_sha256=$(sha256sum "$artifact_dir/handleplan.spdx.json" | awk '{print $1}')
           printf '%s\n' \
-            'format=handleplan-ci-image-bundle-v1' \
+            'format=handleplan-ci-image-bundle-v3' \
             "revision=$APP_COMMIT_SHA" \
-            "image_reference=handleplan:$APP_COMMIT_SHA" \
+            "image_reference=$HANDLEPLAN_IMAGE" \
             "image_id=$image_id" \
+            'platform=linux/amd64' \
+            "runtime_source_digest_sha256=$runtime_source_digest_sha256" \
+            "runtime_source_file_count=$runtime_source_file_count" \
+            "runtime_shipment_digest_sha256=$runtime_shipment_digest_sha256" \
+            "runtime_shipment_entry_count=$runtime_shipment_entry_count" \
             "image_archive_sha256=$image_archive_sha256" \
             "source_archive_sha256=$source_archive_sha256" \
             "provenance_sha256=$provenance_sha256" \
@@ -231,8 +283,161 @@ jobs:
             "ci_run_id=$GITHUB_RUN_ID" \
             "ci_run_attempt=$GITHUB_RUN_ATTEMPT" \
             > "$artifact_dir/handleplan-image-bundle.v1"
-          test "$(wc -l < "$artifact_dir/handleplan-image-bundle.v1" | tr -d '[:space:]')" -eq 10
+          test "$(wc -l < "$artifact_dir/handleplan-image-bundle.v1" | tr -d '[:space:]')" -eq 15
+          bundle_manifest_sha256=$(sha256sum "$artifact_dir/handleplan-image-bundle.v1" | awk '{print $1}')
+          node scripts/operations/verify-ci-image-bundle.mjs \
+            "$artifact_dir/handleplan-image-bundle.v1" \
+            "$bundle_manifest_sha256" \
+            "$APP_COMMIT_SHA" \
+            "$image_id" \
+            "$GITHUB_RUN_ID" \
+            "$GITHUB_RUN_ATTEMPT"
+          printf 'image_id=%s\n' "$image_id" >> "$GITHUB_OUTPUT"
+          printf 'bundle_manifest_sha256=%s\n' "$bundle_manifest_sha256" >> "$GITHUB_OUTPUT"
           sha256sum "$artifact_dir"/*
+      - name: Prove the packaged migrator and worker from the exact image
+        env:
+          APP_COMMIT_SHA: ${{ github.sha }}
+          APP_DATABASE_PASSWORD: ci_app_url_safe_0000000000000000001
+          DATABASE_MIGRATION_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
+          EXPECTED_IMAGE_ID: ${{ steps.validate-deployment-assets.outputs.image_id }}
+          HANDLEPLAN_IMAGE: handleplan:${{ github.sha }}
+          OPERATIONS_DATABASE_PASSWORD: ci_operations_url_safe_000000000001
+          REVIEW_DATABASE_PASSWORD: ci_review_url_safe_00000000000000001
+          WEB_DATABASE_PASSWORD: ci_web_url_safe_0000000000000000001
+        run: |
+          set -eu
+          worker_container="handleplan-ci-worker-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          cleanup_private_runtime_proof() {
+            docker rm -f "$worker_container" >/dev/null 2>&1 || true
+          }
+          trap cleanup_private_runtime_proof EXIT HUP INT TERM
+          test "$(docker image inspect --format '{{.Id}}' "$HANDLEPLAN_IMAGE")" = "$EXPECTED_IMAGE_ID"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$EXPECTED_IMAGE_ID")" = "$APP_COMMIT_SHA"
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$EXPECTED_IMAGE_ID")" = 'linux/amd64'
+          migration_pass=0
+          while [ "$migration_pass" -lt 2 ]; do
+            docker run --rm --network host --read-only \
+              --cap-drop ALL --security-opt no-new-privileges:true \
+              --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+              --entrypoint node \
+              --env APP_DATABASE_PASSWORD="$APP_DATABASE_PASSWORD" \
+              --env DATABASE_MIGRATION_URL="$DATABASE_MIGRATION_URL" \
+              --env NODE_ENV=production \
+              --env OPERATIONS_DATABASE_PASSWORD="$OPERATIONS_DATABASE_PASSWORD" \
+              --env REVIEW_DATABASE_PASSWORD="$REVIEW_DATABASE_PASSWORD" \
+              --env WEB_DATABASE_PASSWORD="$WEB_DATABASE_PASSWORD" \
+              "$EXPECTED_IMAGE_ID" /app/deploy/migrate.mjs
+            migration_pass=$((migration_pass + 1))
+          done
+          docker run --detach --name "$worker_container" --network host --read-only \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+            --entrypoint node \
+            --env APP_COMMIT_SHA="$APP_COMMIT_SHA" \
+            --env DATABASE_URL="postgresql://handleplan_app:$APP_DATABASE_PASSWORD@127.0.0.1:5432/handleplan" \
+            --env KASSAL_BASE_URL=https://127.0.0.1:1 \
+            --env KASSAL_SOURCE_ACCESS=blocked \
+            --env NODE_ENV=production \
+            --env OFFICIAL_OFFER_FOUNDATION_ENABLED=false \
+            --env OFFICIAL_OFFER_PRIVATE_CAPTURE_ROOT=/tmp/private-captures \
+            --env WORKER_CYCLE_INTERVAL_MS=15000 \
+            --env WORKER_LEASE_TTL_MS=30000 \
+            --env WORKER_SHUTDOWN_GRACE_MS=5000 \
+            --env WORKER_TARGET_LIMIT=1 \
+            "$EXPECTED_IMAGE_ID" /app/apps/worker/dist/main.mjs >/dev/null
+          test "$(docker inspect --format '{{.Image}}' "$worker_container")" = "$EXPECTED_IMAGE_ID"
+          test "$(docker inspect --format '{{.Config.Image}}' "$worker_container")" = "$EXPECTED_IMAGE_ID"
+          test "$(docker inspect --format '{{json .Config.Entrypoint}}' "$worker_container")" = '["node"]'
+          test "$(docker inspect --format '{{json .Config.Cmd}}' "$worker_container")" = '["/app/apps/worker/dist/main.mjs"]'
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$worker_container")" = true
+          test "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$worker_container")" = host
+          test "$(docker inspect --format '{{json .Mounts}}' "$worker_container")" = '[]'
+          test "$(docker inspect --format '{{.RestartCount}}' "$worker_container")" = 0
+          worker_ready=0
+          attempts=0
+          while [ "$attempts" -lt 45 ]; do
+            if [ "$(docker inspect --format '{{.State.Running}}' "$worker_container")" != true ]; then
+              echo "Exact-image worker exited before readiness" >&2
+              exit 1
+            fi
+            worker_health=$(curl --max-time 2 --silent --show-error \
+              http://127.0.0.1:3005/health || true)
+            if [ "${#worker_health}" -gt 0 ] \
+              && [ "${#worker_health}" -le 65536 ] \
+              && printf '%s' "$worker_health" | jq -e --arg revision "$APP_COMMIT_SHA" '
+                .schemaVersion == 1
+                and .revision == $revision
+                and .live == true
+                and .ready == true
+                and (.status == "ok" or .status == "degraded")
+                and .scheduler.completedCycles >= 1
+                and .scheduler.failedCycles == 0
+                and .scheduler.lastCycle != null
+                and .scheduler.lastCycle.leaseAcquired == true
+              ' >/dev/null; then
+              worker_ready=1
+              break
+            fi
+            attempts=$((attempts + 1))
+            sleep 1
+          done
+          test "$worker_ready" -eq 1
+          docker stop --time 15 "$worker_container" >/dev/null
+          test "$(docker inspect --format '{{.State.Running}}' "$worker_container")" = false
+          test "$(docker inspect --format '{{.State.ExitCode}}' "$worker_container")" = 0
+          test "$(docker inspect --format '{{.RestartCount}}' "$worker_container")" = 0
+          docker rm "$worker_container" >/dev/null
+          printf 'exact-image-private-runtime-proof=ok image=%s migrations=2 worker_cycles>=1\n' \
+            "$EXPECTED_IMAGE_ID"
+      - name: Seed the governed exact-image browser fixture from the host
+        env:
+          APP_COMMIT_SHA: ${{ github.sha }}
+          HANDLEPLAN_IMAGE_DATABASE_URL: postgresql://handleplan_web:ci_web_url_safe_0000000000000000001@127.0.0.1:5432/handleplan
+          HANDLEPLAN_IMAGE_SEED_APP_DATABASE_URL: postgresql://handleplan_app:ci_app_url_safe_0000000000000000001@127.0.0.1:5432/handleplan
+          HANDLEPLAN_IMAGE_SEED_DATABASE_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
+          HANDLEPLAN_IMAGE_SEED_REVIEW_DATABASE_URL: postgresql://handleplan_review:ci_review_url_safe_00000000000000001@127.0.0.1:5432/handleplan
+          RUN_PRODUCTION_IMAGE_DATABASE_SEED: "1"
+        run: >-
+          corepack pnpm --filter @handleplan/db exec vitest run
+          src/production-image-database-seed.integration.test.ts
+          --no-file-parallelism
+      - run: corepack pnpm exec playwright install --with-deps chromium firefox webkit
+      - name: Prove the exact production image in Chromium, Firefox, and WebKit
+        env:
+          APP_COMMIT_SHA: ${{ github.sha }}
+          HANDLEPLAN_IMAGE_DATABASE_URL: postgresql://handleplan_web:ci_web_url_safe_0000000000000000001@127.0.0.1:5432/handleplan
+          HANDLEPLAN_IMAGE_SEED_APP_DATABASE_URL: postgresql://handleplan_app:ci_app_url_safe_0000000000000000001@127.0.0.1:5432/handleplan
+          HANDLEPLAN_IMAGE_SEED_DATABASE_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
+          HANDLEPLAN_IMAGE_SEED_REVIEW_DATABASE_URL: postgresql://handleplan_review:ci_review_url_safe_00000000000000001@127.0.0.1:5432/handleplan
+          HANDLEPLAN_IMAGE_ID: ${{ steps.validate-deployment-assets.outputs.image_id }}
+          HANDLEPLAN_IMAGE_REFERENCE: handleplan:${{ github.sha }}
+        run: corepack pnpm e2e:image
+      - name: Prove revision-bound Handlemodus in Chromium, Firefox, and WebKit
+        env:
+          APP_COMMIT_SHA: ${{ github.sha }}
+        run: corepack pnpm e2e:handlemodus
+      - name: Prove the revision-bound public host artifact in Chromium, Firefox, and WebKit
+        env:
+          APP_COMMIT_SHA: ${{ github.sha }}
+        run: corepack pnpm exec playwright test
+      - name: Reconfirm the exact image and frozen bundle before upload
+        env:
+          APP_COMMIT_SHA: ${{ github.sha }}
+          EXPECTED_BUNDLE_MANIFEST_SHA256: ${{ steps.validate-deployment-assets.outputs.bundle_manifest_sha256 }}
+          EXPECTED_IMAGE_ID: ${{ steps.validate-deployment-assets.outputs.image_id }}
+          HANDLEPLAN_IMAGE: handleplan:${{ github.sha }}
+        run: |
+          set -eu
+          test "$(docker image inspect --format '{{.Id}}' "$HANDLEPLAN_IMAGE")" = "$EXPECTED_IMAGE_ID"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$EXPECTED_IMAGE_ID")" = "$APP_COMMIT_SHA"
+          node scripts/operations/verify-ci-image-bundle.mjs \
+            .artifacts/deployment/handleplan-image-bundle.v1 \
+            "$EXPECTED_BUNDLE_MANIFEST_SHA256" \
+            "$APP_COMMIT_SHA" \
+            "$EXPECTED_IMAGE_ID" \
+            "$GITHUB_RUN_ID" \
+            "$GITHUB_RUN_ATTEMPT"
       - name: Upload exact CI image bundle
         id: upload-image-bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -242,6 +447,3 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
-      - run: corepack pnpm exec playwright install --with-deps chromium firefox webkit
-      - run: corepack pnpm e2e:handlemodus
-      - run: corepack pnpm exec playwright test

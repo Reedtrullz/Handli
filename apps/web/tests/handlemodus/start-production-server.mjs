@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer as createHttpServer, request as requestHttp } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { tmpdir } from "node:os";
@@ -7,8 +7,15 @@ import { pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
 import path from "node:path";
 
+import {
+  assertExpectedPublicBuildRevision,
+  assertPublicBuildBinding,
+} from "../../../../scripts/e2e/public-build-binding.mjs";
+
 const projectRoot = process.cwd();
+const repositoryRoot = path.resolve(projectRoot, "../..");
 const standaloneRoot = path.join(projectRoot, ".next", "standalone", "apps", "web");
+const standaloneServer = path.join(standaloneRoot, "server.js");
 const publicTarget = path.join(standaloneRoot, "public");
 const staticTarget = path.join(standaloneRoot, ".next", "static");
 const hostname = "127.0.0.1";
@@ -33,11 +40,41 @@ const controlHeaderName = "x-handleplan-test-control";
 const controlHeaderValue = "v1";
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
-for (const target of [publicTarget, staticTarget]) {
-  rmSync(target, { force: true, recursive: true });
+const binding = assertPublicBuildBinding(repositoryRoot);
+const expectedRevision = assertExpectedPublicBuildRevision(binding);
+for (const requiredPath of [standaloneServer, publicTarget, staticTarget]) {
+  if (!existsSync(requiredPath)) {
+    throw new Error(`Handlemodus browser tests require a sealed standalone build: missing ${requiredPath}`);
+  }
 }
-cpSync(path.join(projectRoot, "public"), publicTarget, { recursive: true });
-cpSync(path.join(projectRoot, ".next", "static"), staticTarget, { recursive: true });
+
+const parentPoison = "handleplan-handlemodus-parent-env-poison-v1";
+if (
+  process.env.HANDLEPLAN_HANDLEMODUS_PARENT_POISON !== parentPoison
+  || process.env.KASSAL_API_KEY !== parentPoison
+) {
+  throw new Error("Handlemodus parent-environment poison control is incomplete");
+}
+const runtimePath = process.env.PATH ?? "";
+const hostTemporaryDirectory = tmpdir();
+for (const name of Object.keys(process.env)) delete process.env[name];
+Object.assign(process.env, {
+  APP_COMMIT_SHA: expectedRevision,
+  CI: "true",
+  HOME: projectRoot,
+  HOSTNAME: hostname,
+  LANG: "C.UTF-8",
+  LC_ALL: "C.UTF-8",
+  NEXT_TELEMETRY_DISABLED: "1",
+  NODE_ENV: "production",
+  PATH: runtimePath,
+  PORT: String(upstreamPort),
+  TMPDIR: hostTemporaryDirectory,
+  TZ: "UTC",
+});
+if (Object.values(process.env).includes(parentPoison)) {
+  throw new Error("Handlemodus standalone runtime inherited its parent poison control");
+}
 
 const tlsDirectory = mkdtempSync(path.join(tmpdir(), "handleplan-handlemodus-tls-"));
 const keyPath = path.join(tlsDirectory, "key.pem");
@@ -59,7 +96,7 @@ const certificate = spawnSync("openssl", [
   keyPath,
   "-out",
   certificatePath,
-], { encoding: "utf8" });
+], { encoding: "utf8", env: { ...process.env } });
 if (certificate.status !== 0) {
   rmSync(tlsDirectory, { force: true, recursive: true });
   const detail = certificate.error instanceof Error
@@ -82,11 +119,11 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   });
 }
 
-process.env.HOSTNAME = hostname;
-process.env.PORT = String(upstreamPort);
-await import(pathToFileURL(path.join(standaloneRoot, "server.js")).href);
+process.env.TMPDIR = tlsDirectory;
+await import(pathToFileURL(standaloneServer).href);
 
 let networkOffline = false;
+let networkUnavailable = false;
 const fixtures = new Map();
 const capturedRequestBodies = new Map();
 
@@ -191,6 +228,10 @@ function parseFixtures(value) {
 async function handleApplicationRequest(request, response) {
   if (networkOffline) {
     request.socket.destroy();
+    return;
+  }
+  if (networkUnavailable) {
+    writeEmpty(response, 503);
     return;
   }
 
@@ -325,12 +366,28 @@ const control = createHttpServer((request, response) => {
       return;
     }
 
+    if (request.method === "POST" && requestUrl.pathname === "/unavailable") {
+      const values = requestUrl.searchParams.getAll("enabled");
+      if (
+        !hasOnlySearchParameter(requestUrl, "enabled")
+        || values.length !== 1
+        || !["0", "1"].includes(values[0])
+      ) {
+        writeJson(response, 400, { error: "one unavailable flag is required" });
+        return;
+      }
+      networkUnavailable = values[0] === "1";
+      writeEmpty(response, 204);
+      return;
+    }
+
     if (request.method === "POST" && requestUrl.pathname === "/reset") {
       if (requestUrl.search !== "") {
         writeJson(response, 400, { error: "reset does not accept a query" });
         return;
       }
       networkOffline = false;
+      networkUnavailable = false;
       fixtures.clear();
       capturedRequestBodies.clear();
       writeEmpty(response, 204);

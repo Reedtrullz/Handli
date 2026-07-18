@@ -213,7 +213,7 @@ function officialOfferPrice(offer: OfficialOffer): number {
 
 function officialOfferPriceLabel(offer: OfficialOffer): string {
   return offer.pricing.kind === "unit"
-    ? formatNok(offer.pricing.unitPriceOre)
+    ? `${formatNok(offer.pricing.unitPriceOre)} per pakke`
     : `${offer.pricing.quantity} for ${formatNok(offer.pricing.totalOre)}`;
 }
 
@@ -545,7 +545,7 @@ function DiscoveryWorkspaceClient({
             </div>
           </section>
 
-          <section className="discovery-results" aria-labelledby="discovery-results-title" aria-live="polite">
+          <section className="discovery-results" aria-labelledby="discovery-results-title">
             <div className="discovery-section-heading">
               <div>
                 <h2 id="discovery-results-title">{submittedQuery
@@ -557,7 +557,14 @@ function DiscoveryWorkspaceClient({
                   ? "Siden følger stabil katalognavn-rekkefølge. Historiske avvik bygger bare på validerte 30-dagers medianer."
                   : `Viser ordinærpriser og offisielle tilbud som faktisk gjelder hos ${chainLabels[chain]}.`}</p>
               </div>
-              {effectiveStatus === "ready" ? <span>{visible.length} {visible.length === 1 ? "vare" : "varer"} på denne siden</span> : null}
+              <span
+                aria-atomic="true"
+                aria-live="polite"
+                className="discovery-result-status"
+                role="status"
+              >{effectiveStatus === "ready"
+                  ? `${visible.length} ${visible.length === 1 ? "vare" : "varer"} på denne siden`
+                  : ""}</span>
             </div>
 
             {effectiveStatus === "loading" ? <div className="discovery-message" role="status">Henter kontrollert katalog og prisgrunnlag …</div> : null}
@@ -651,15 +658,20 @@ function DiscoveryWorkspaceClient({
                           </div>
                         </div>
 
-                        {offers.map((offer) => {
+                        {offers.map((offer, offerIndex) => {
                           const beforeTotal = officialOfferBeforeTotal(offer);
                           const offerTotal = officialOfferPrice(offer);
                           const savingsOre = beforeTotal === undefined ? undefined : beforeTotal - offerTotal;
                           const savingsBasisPoints = officialOfferSavingsBasisPoints(offer);
+                          const chainLabel = chainLabels[offer.chainId as Chain];
                           return (
-                            <section className="official-offer-panel" aria-label={`Offisielt tilbud hos ${chainLabels[offer.chainId as Chain]}`} key={offer.id}>
+                            <section
+                              aria-label={`Offisielt tilbud ${offerIndex + 1} hos ${chainLabel}: ${officialOfferPriceLabel(offer)}. ${offerConditions(offer)}`}
+                              className="official-offer-panel"
+                              key={offer.id}
+                            >
                               <div>
-                                <p>Offisielt tilbud • {chainLabels[offer.chainId as Chain]}</p>
+                                <p>Offisielt tilbud • {chainLabel}</p>
                                 <strong>{officialOfferPriceLabel(offer)}</strong>
                                 <span>{offerConditions(offer)}</span>
                               </div>

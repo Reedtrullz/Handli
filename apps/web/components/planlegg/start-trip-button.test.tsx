@@ -99,7 +99,7 @@ describe("StartTripButton", () => {
   it("does not claim success or persist a trip until the offline shell is proven", async () => {
     const user = userEvent.setup();
     const tripRepository = repository();
-    const ensureOfflineReady = vi.fn(async () => {
+    const ensureOfflineReady = vi.fn(async (): Promise<void> => {
       throw new Error("private service worker detail");
     });
     renderButton({ ensureOfflineReady, repository: tripRepository });
@@ -110,7 +110,15 @@ describe("StartTripButton", () => {
     expect(tripRepository.start).not.toHaveBeenCalled();
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("ikke klart for bruk uten nett");
+    expect(alert).toHaveTextContent("Hele offline-pakken hentes og kontrolleres");
     expect(alert).not.toHaveTextContent("private service worker detail");
+    expect(screen.getByRole("button", { name: "Prøv Handlemodus igjen" })).toBeVisible();
+
+    ensureOfflineReady.mockResolvedValueOnce(undefined);
+    await user.click(screen.getByRole("button", { name: "Prøv Handlemodus igjen" }));
+    expect(ensureOfflineReady).toHaveBeenCalledTimes(2);
+    expect(tripRepository.start).toHaveBeenCalledOnce();
+    expect(await screen.findByRole("status")).toHaveTextContent("lagret på denne enheten");
   });
 
   it("stores a calculated route without storing its origin", async () => {

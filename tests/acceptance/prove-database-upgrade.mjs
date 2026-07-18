@@ -19,7 +19,17 @@ const migrationRunner = resolve(root, "deploy/migrate.mjs");
 const sourceDatabase = "handleplan_ci_v1_03_source";
 const restoreDatabase = "handleplan_ci_v1_03_restore";
 const completionClockDatabase = "handleplan_ci_v1_03_completion_clock";
-const proofDatabases = [sourceDatabase, restoreDatabase, completionClockDatabase];
+const publicationHealthPreconditionDatabase =
+  "handleplan_ci_v1_03_publication_health_precondition";
+const pdfEvidencePreconditionDatabase =
+  "handleplan_ci_v1_03_pdf_evidence_precondition";
+const proofDatabases = [
+  sourceDatabase,
+  restoreDatabase,
+  completionClockDatabase,
+  publicationHealthPreconditionDatabase,
+  pdfEvidencePreconditionDatabase,
+];
 const postgresImage =
   "postgres:16.10-alpine@sha256:ab8380566c3ea09690a9ecaa85a59d82bfc6eb86744151a2a54335866c83a3e9";
 const expectedMigrations = [
@@ -49,6 +59,8 @@ const expectedMigrations = [
   "024_operations_runtime_boundary.sql",
   "025_private_review_evidence_renderer.sql",
   "026_official_offer_publication_runtime.sql",
+  "027_official_offer_publication_health.sql",
+  "028_private_review_image_evidence_only.sql",
 ];
 
 assert.equal(process.env.CI, "true", "database proof requires CI=true");
@@ -1498,8 +1510,8 @@ async function verifyRuntimeRolePolicy(sql) {
     operations_alert_ledger_access: false,
     operations_sequence_usage: false,
     operations_dashboard_execute: true,
-    operations_alert_append_execute: true,
-    operations_alert_export_execute: true,
+    operations_alert_append_execute: false,
+    operations_alert_export_execute: false,
     operations_generic_function_execute: false,
     operations_owner_member: false,
     operations_worker_member: false,
@@ -2042,6 +2054,153 @@ async function databaseExists(sql, database) {
   return rows.length > 0;
 }
 
+async function verifyPublicationHealthUpgradePrecondition(sql, database) {
+  const sourceId = "ci-publication-health-upgrade-history";
+  const jobId = "ci-publication-health-upgrade-history-job";
+  await sql`
+    insert into data_sources (
+      id, display_name, source_kind, runtime_state
+    ) values (
+      ${sourceId}, 'CI historical publication-health upgrade proof',
+      'offer', 'blocked'
+    )
+  `;
+  await sql`
+    insert into worker_job_results (
+      job_id, source_id, job_kind, scheduled_at, run_id, status,
+      started_at, completed_at, counts, result_hash
+    ) values (
+      ${jobId}, ${sourceId}, 'official-offer-lifecycle-reconcile',
+      pg_catalog.clock_timestamp() - interval '2 minutes',
+      'ci-publication-health-upgrade-history-run', 'succeeded',
+      pg_catalog.clock_timestamp() - interval '1 minute',
+      pg_catalog.clock_timestamp(),
+      ${sql.json({
+        accepted: 1,
+        failed: 0,
+        fetched: 1,
+        persisted: 1,
+        quarantined: 0,
+        unknown: 0,
+      })},
+      ${"a".repeat(64)}
+    )
+  `;
+  await sql`
+    insert into official_offer_lifecycle_job_results (
+      job_id, source_id, lease_token, lease_expires_at, evaluated_at,
+      batch_limit, publication_requested, publication_authorized,
+      publication_state, expiry_examined, expired_count, revoked_count,
+      publication_examined, published_count, skipped_count,
+      result_sha256, created_at
+    )
+    select
+      result.job_id, result.source_id, ${"b".repeat(64)},
+      result.completed_at + interval '1 hour', result.started_at,
+      1, true, true, 'evaluated', 0, 0, 0, 1, 1, 0,
+      ${"c".repeat(64)}, result.completed_at
+    from worker_job_results result
+    where result.job_id = ${jobId}
+  `;
+
+  await assert.rejects(
+    runMigrations(database),
+    /pre-existing positive lifecycle results require reviewed health reconciliation/i,
+    "027 must fail closed when 026 contains publication history that cannot be reconciled",
+  );
+
+  const [upgradeState] = await sql`
+    select
+      (select count(*)::integer
+       from official_offer_lifecycle_job_results
+       where published_count > 0) as positive_lifecycle_results,
+      pg_catalog.to_regclass(
+        'public.official_offer_publication_health_facts'
+      ) is not null as health_table_exists,
+      exists (
+        select 1 from handleplan_schema_migrations
+        where id = '027_official_offer_publication_health.sql'
+      ) as migration_recorded
+  `;
+  assert.deepEqual(upgradeState, {
+    positive_lifecycle_results: 1,
+    health_table_exists: false,
+    migration_recorded: false,
+  }, "a rejected 027 upgrade must leave both schema and ledger untouched");
+}
+
+async function verifyPdfEvidenceUpgradePrecondition(sql, database) {
+  await applyFixture(sql, "v1-03-restore-evidence.sql");
+  await sql`
+    insert into private_review_evidence_renders (
+      candidate_id, expected_version, capture_checksum, crop_reference,
+      presentation, rights_classification, mime_type, byte_length,
+      actor_id, reviewer_session_id, evidence_proof_sha256,
+      rendered_at, expires_at, created_at
+    )
+    select
+      candidate.id, 1, capture.checksum,
+      ${`review-crop:${"b".repeat(64)}`}, 'full_capture',
+      capture.rights_classification, capture.mime_type, capture.byte_length,
+      ${`access:${"c".repeat(64)}`},
+      ${`access-session:${"d".repeat(64)}`}, ${"e".repeat(64)},
+      timing.rendered_at, timing.rendered_at + interval '2 minutes',
+      timing.rendered_at
+    from extracted_offer_candidates candidate
+    inner join extraction_runs extraction
+      on extraction.id = candidate.extraction_run_id
+    inner join publication_captures capture
+      on capture.id = extraction.capture_id
+    cross join lateral (
+      select pg_catalog.clock_timestamp() as rendered_at
+    ) timing
+    where candidate.candidate_key = 'ci-proof-candidate-v1-03'
+      and capture.mime_type = 'application/pdf'
+  `;
+
+  await assert.rejects(
+    runMigrations(database),
+    /pre-existing PDF evidence renders require reviewed reconciliation/i,
+    "028 must fail closed rather than reinterpret a historical PDF render receipt",
+  );
+
+  const [upgradeState] = await sql`
+    select
+      (select count(*)::integer
+       from private_review_evidence_renders
+       where mime_type = 'application/pdf') as pdf_render_count,
+      exists (
+        select 1
+        from pg_catalog.pg_constraint
+        where conrelid = 'private_review_evidence_renders'::regclass
+          and conname = 'private_review_evidence_renders_mime'
+          and convalidated
+      ) as historical_constraint_preserved,
+      exists (
+        select 1
+        from pg_catalog.pg_constraint
+        where conrelid = 'private_review_evidence_renders'::regclass
+          and conname = 'private_review_evidence_renders_image_mime'
+      ) as image_constraint_installed,
+      exists (
+        select 1 from handleplan_schema_migrations
+        where id = '028_private_review_image_evidence_only.sql'
+      ) as migration_recorded,
+      pg_catalog.pg_get_functiondef(
+        'private_review_record_evidence_render_v1(bigint,integer,text,text,text,text,text,text,text,timestamptz)'::regprocedure
+      ) as recorder_definition,
+      pg_catalog.pg_get_functiondef(
+        'private_review_decide_v2(bigint,integer,text,text,text,text,text,text,text,text,text,integer,integer,integer,integer,text,text,timestamptz,timestamptz,text[])'::regprocedure
+      ) as decision_definition
+  `;
+  assert.equal(upgradeState.pdf_render_count, 1);
+  assert.equal(upgradeState.historical_constraint_preserved, true);
+  assert.equal(upgradeState.image_constraint_installed, false);
+  assert.equal(upgradeState.migration_recorded, false);
+  assert.match(upgradeState.recorder_definition, /'application\/pdf'/i);
+  assert.doesNotMatch(upgradeState.decision_definition, /v_render\.mime_type/i);
+}
+
 async function createDatabase(sql, database) {
   assert.ok(proofDatabases.includes(database), "refusing to create an unapproved database");
   await sql.unsafe(`create database "${database}"`);
@@ -2065,6 +2224,8 @@ let admin;
 let source;
 let restored;
 let completionClock;
+let publicationHealthPrecondition;
+let pdfEvidencePrecondition;
 let proofError;
 let proofResult;
 
@@ -2097,6 +2258,40 @@ try {
   );
   await completionClock.end({ timeout: 5 });
   completionClock = undefined;
+
+  await createDatabase(admin, publicationHealthPreconditionDatabase);
+  createdDatabases.add(publicationHealthPreconditionDatabase);
+  await runMigrations(
+    publicationHealthPreconditionDatabase,
+    "026_official_offer_publication_runtime.sql",
+  );
+  publicationHealthPrecondition = postgres(
+    urlForDatabase(publicationHealthPreconditionDatabase),
+    { max: 1, onnotice: () => {} },
+  );
+  await verifyPublicationHealthUpgradePrecondition(
+    publicationHealthPrecondition,
+    publicationHealthPreconditionDatabase,
+  );
+  await publicationHealthPrecondition.end({ timeout: 5 });
+  publicationHealthPrecondition = undefined;
+
+  await createDatabase(admin, pdfEvidencePreconditionDatabase);
+  createdDatabases.add(pdfEvidencePreconditionDatabase);
+  await runMigrations(
+    pdfEvidencePreconditionDatabase,
+    "027_official_offer_publication_health.sql",
+  );
+  pdfEvidencePrecondition = postgres(
+    urlForDatabase(pdfEvidencePreconditionDatabase),
+    { max: 1, onnotice: () => {} },
+  );
+  await verifyPdfEvidenceUpgradePrecondition(
+    pdfEvidencePrecondition,
+    pdfEvidencePreconditionDatabase,
+  );
+  await pdfEvidencePrecondition.end({ timeout: 5 });
+  pdfEvidencePrecondition = undefined;
 
   await createDatabase(admin, sourceDatabase);
   createdDatabases.add(sourceDatabase);
@@ -2190,6 +2385,8 @@ try {
     restoredReviewedFamilyDecisions: 1,
     restoredRuntimeRolePolicy: true,
     completionClockUpgradeRollback: true,
+    publicationHealthUpgradeReconciliationGuard: true,
+    pdfEvidenceUpgradeReconciliationGuard: true,
     categoryPathUpgradeValidation: true,
     immutableReviewCandidates: true,
     guardedReviewOfferPublication: true,
@@ -2217,6 +2414,14 @@ try {
   if (completionClock) {
     await attemptCleanup("close completion-clock database connection", () =>
       completionClock.end({ timeout: 5 }));
+  }
+  if (publicationHealthPrecondition) {
+    await attemptCleanup("close publication-health precondition database connection", () =>
+      publicationHealthPrecondition.end({ timeout: 5 }));
+  }
+  if (pdfEvidencePrecondition) {
+    await attemptCleanup("close PDF-evidence precondition database connection", () =>
+      pdfEvidencePrecondition.end({ timeout: 5 }));
   }
   if (admin) {
     for (const database of [...createdDatabases].reverse()) {

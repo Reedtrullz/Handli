@@ -9,7 +9,7 @@ import { createReadyHandler } from "./route";
 describe("GET /api/ready", () => {
   it("returns a no-store dependency-readiness contract", async () => {
     const probe: DatabaseReadinessProbe = {
-      check: async () => ({ requiredMigration: "026_official_offer_publication_runtime.sql" }),
+      check: async () => ({ requiredMigration: "028_private_review_image_evidence_only.sql" }),
     };
 
     const response = await createReadyHandler(async () => probe)();
@@ -18,7 +18,7 @@ describe("GET /api/ready", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     await expect(response.json()).resolves.toEqual({
       database: {
-        requiredMigration: "026_official_offer_publication_runtime.sql",
+        requiredMigration: "028_private_review_image_evidence_only.sql",
         status: "ok",
       },
       status: "ok",
@@ -82,7 +82,7 @@ describe("GET /api/ready", () => {
 
   it("keeps the readiness response independent from telemetry export failure", async () => {
     const response = await createReadyHandler(async () => ({
-      check: async () => ({ requiredMigration: "026_official_offer_publication_runtime.sql" }),
+      check: async () => ({ requiredMigration: "028_private_review_image_evidence_only.sql" }),
     }), {
       dependencyReadinessChecked: (): never => {
         throw new Error("export unavailable");

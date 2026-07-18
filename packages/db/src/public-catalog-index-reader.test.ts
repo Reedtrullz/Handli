@@ -106,6 +106,19 @@ function readerError(code: "CANCELLED" | "INVALID_REQUEST" | "UNAVAILABLE") {
   });
 }
 
+function expectSerializedPermissionSelection(sql: string): void {
+  expect(sql).toContain("candidate_permission.created_at <=");
+  expect(sql).toContain(
+    "order by candidate_permission.created_at desc, candidate_permission.id desc",
+  );
+  expect(sql).not.toContain("order by candidate_permission.reviewed_at desc");
+  expect(sql).toContain("permission.reviewed_at <=");
+  expect(sql).toContain("source.permission_reviewed_at = permission.reviewed_at");
+  expect(sql).toContain(
+    "source.permission_expires_at is not distinct from permission.valid_until",
+  );
+}
+
 describe("PostgresPublicCatalogIndexReader", () => {
   it("browses one deterministic summary per canonical product", async () => {
     const { captures, db } = databaseWith(() => resolvedQuery([row()]));
@@ -127,6 +140,7 @@ describe("PostgresPublicCatalogIndexReader", () => {
     expect(captures[0]!.sql).toContain("source.created_at <=");
     expect(captures[0]!.sql).toContain("source.public_state_changed_at <=");
     expect(captures[0]!.sql).toContain("candidate_permission.created_at <=");
+    expectSerializedPermissionSelection(captures[0]!.sql);
     expect(captures[0]!.sql).toContain("permission.permissions @> '{\"catalog\": true}'::jsonb");
     expect(captures[0]!.sql).toContain("100::smallint as confidence");
     expect(captures[0]!.sql).toContain("'product:' || observation.canonical_product_id::text");
@@ -152,6 +166,7 @@ describe("PostgresPublicCatalogIndexReader", () => {
       .resolves.toMatchObject([{ gtin: GTIN_ALIAS }]);
     expect(captures[0]!.parameters).toContain(GTIN_ALIAS);
     expect(captures[0]!.sql).toContain("'gtin:' || observation.gtin");
+    expectSerializedPermissionSelection(captures[0]!.sql);
   });
 
   it("searches bounded literal text with deterministic relevance and no private output", async () => {
@@ -185,6 +200,7 @@ describe("PostgresPublicCatalogIndexReader", () => {
     await expect(new PostgresPublicCatalogIndexReader(emptyDatabase.db)
       .readDiscoveryPage({ limit: 10 }, AT))
       .resolves.toMatchObject({ entries: [{ categoryPath: [], product: { gtin: GTIN_MILK } }] });
+    expectSerializedPermissionSelection(unknownDatabase.captures[0]!.sql);
   });
 
   it("returns source-scoped opaque category IDs and filters only after latest selection", async () => {
@@ -312,6 +328,7 @@ describe("PostgresPublicCatalogIndexReader", () => {
     expect(captures[0]!.sql.indexOf("where selection_rank = 1"))
       .toBeLessThan(captures[0]!.sql.indexOf("jsonb_array_elements(latest.category_path)"));
     expect(captures[0]!.sql).toContain("where latest.category_path is not null");
+    expectSerializedPermissionSelection(captures[0]!.sql);
   });
 
   it("fails closed on conflicting category facet metadata", async () => {

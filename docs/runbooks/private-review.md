@@ -6,7 +6,9 @@ The repository contains the private `/review` workspace, protected review APIs,
 strict review contracts, an append-only PostgreSQL repository, migration guards,
 and a dedicated least-privilege `handleplan_review` role. Migration 025 adds a
 source-neutral, candidate-bound evidence renderer proof and one-time SQL
-consumption boundary. Production Compose
+consumption boundary. Migration 028 refuses to upgrade over any historical PDF
+render receipt and narrows receipt creation and approval to JPEG, PNG, or WebP.
+Production Compose
 also defines separate public and review processes from the same immutable image,
 with disjoint database credentials and loopback upstreams. This is a
 source-neutral foundation. It does not activate official offers, configure a
@@ -120,6 +122,14 @@ source-permission notes/keys, or read unrelated shopper/price-cache state.
 Upgrade proofs capped before migration 021 retain only the historical grants
 needed to reproduce those older database states.
 
+Migration 028 locks the append-only receipt table, fails before changing schema
+or ledger when any pre-existing PDF receipt exists, then installs a validated
+image-only MIME constraint. It also narrows the render function and adds an
+independent image MIME check to the v2 decision function. Thus a PDF capture
+cannot create a receipt, while even an owner-injected non-image receipt cannot
+authorize approval. Existing publication-capture metadata may still identify a
+PDF for audit and rejection; migration 028 does not rewrite or delete it.
+
 Queue, candidate, crop-locator, and decision reads require all of the following
 at the captured evaluation clock:
 
@@ -162,10 +172,12 @@ The browser must fetch the complete body, compute its SHA-256, and successfully
 decode a supported JPEG, PNG, or WebP blob before sending the bounded challenge
 acknowledgement. The server re-reads the current locator, verifies the challenge
 and submitted digest against the database checksum, and only then records the
-render receipt and returns the approval proof. PDF captures may be read in the
-private sandbox, but PDF approval remains fail-closed until a bounded structural
-page renderer exists; an iframe load event is not accepted as proof. The UI
-labels the view honestly as the full verified capture, not a crop. This proves a
+render receipt and returns the approval proof. PDF captures are rejected by the
+evidence service and route and are neither fetched nor framed by the v1 browser
+UI because a bounded structural page renderer does not exist; direct navigation
+returns `EVIDENCE_UNAVAILABLE`, PDF approval and correction remain fail-closed,
+and rejection stays available. The UI labels a supported image view honestly as
+the full verified capture, not a crop. This proves a
 complete byte delivery and browser decode event in the cooperative UI, not that
 a human actually inspected every part of the artwork.
 
@@ -174,8 +186,10 @@ version, capture checksum, crop reference, rights classification, full-capture
 presentation, pseudonymous actor, and current Access session. PostgreSQL stores
 only its SHA-256 digest. Migration 025 rechecks the current rights/locator,
 appends an immutable render receipt, and lets v2 approve/correct only with one
-unexpired, unconsumed receipt. Consumption is appended in the same transaction
-as the review action. Renderer-gated actions carry
+unexpired, unconsumed receipt. Migration 028 additionally requires the receipt
+to be JPEG, PNG, or WebP at the table, recorder, and decision boundaries.
+Consumption is appended in the same transaction as the review action.
+Renderer-gated actions carry
 `decision_boundary_version = 2`; legacy/direct v1-shaped actions retain marker 1
 and are excluded by the migration-026 public-offer lifecycle. Forged, stale,
 cross-candidate, cross-version, cross-session, wrong-digest, PDF,
@@ -194,9 +208,10 @@ protected against update/delete.
 Queue/detail API responses may contain typed candidate provenance and a
 deterministic `review-crop:<sha256>` reference. They never contain the blob key,
 capture checksum, byte length, reviewer email, raw proof token, or raw capture
-bytes. Raw bytes are available only from the exact Access-protected candidate
-evidence endpoint, with no range/conditional response, redirect, proxy, or cache
-path. The public app has neither renderer secret nor capture mount. Do not expose
+bytes. Supported image bytes are available only from the exact Access-protected
+candidate evidence endpoint, with no range/conditional response, redirect,
+proxy, or cache path. PDF bytes are not returned in v1. The public app has
+neither renderer secret nor capture mount. Do not expose
 this endpoint, artwork, or proof through public catalog, discovery, plan, status,
 or operations APIs.
 
@@ -268,7 +283,6 @@ Local unit/static tests prove the code contracts, not the external system. V1
 still requires live PostgreSQL migration/ACL/concurrency proof, deployed
 Cloudflare policy and JWKS/key-rotation readback, a rights-approved source,
 production private capture storage and a synthetic end-to-end renderer readback,
-bounded PDF page rendering,
 retention/deletion policy,
 backup/restore coverage for private evidence, and an operator incident/offboard
 exercise. The split Compose/Caddy configuration has static repository proof but
@@ -276,4 +290,5 @@ no deployed container-environment, loopback-port, direct-origin, route-isolation
 or external Access-policy readback. Repository tests do not prove that a real
 capture can be rendered or approved on the VPS. Until those gates pass, the
 queue is not production-ready and reviewed offers are not a public ranking
-input.
+input. PDF rendering is intentionally outside v1; adding it requires a new
+bounded page-rendering design and a reviewed forward database boundary.

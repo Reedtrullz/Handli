@@ -66,17 +66,33 @@ test("license inventory excludes platform variants only after a narrow rule matc
 test("secret scanner recognizes high-confidence values without printing them", () => {
   const githubToken = `gh${"p_"}${"a".repeat(36)}`;
   const privateKey = `-----BEGIN ${"PRIVATE KEY"}-----`;
-  const assignment = `client_secret = "${"z".repeat(32)}"`;
+  const assignment = `client_${"secret"} = "${"z".repeat(32)}"`;
   const matches = findSecretMatches([githubToken, privateKey, assignment].join("\n"));
   assert.deepEqual(matches.map((match) => match.rule), [
     "github-token",
     "private-key",
     "sensitive-assignment",
   ]);
-  assert.deepEqual(findSecretMatches('password: "ci_url_safe_0000000000000001"'), []);
+  assert.deepEqual(findSecretMatches(
+    'password: "ci_url_safe_0000000000000001"',
+    { allowFixtureValues: true },
+  ), []);
+  assert.deepEqual(
+    findSecretMatches('password: "ci_url_safe_0000000000000001"')
+      .map((match) => match.rule),
+    ["sensitive-assignment"],
+  );
+  assert.deepEqual(
+    findSecretMatches(
+      'KASSAL_API_KEY: "handleplan-handlemodus-parent-env-poison-v1"',
+      { allowFixtureValues: true },
+    ),
+    [],
+  );
   assert.deepEqual(
     findSecretMatches(
       "REVIEW_DATABASE_URL=postgresql://handleplan_review:ci_review_url_safe_00000000000000001@127.0.0.1:5432/handleplan",
+      { allowFixtureValues: true },
     ),
     [],
   );
@@ -109,6 +125,104 @@ test("secret scanner covers prefixed environment names, encrypted keys, and dece
     findSecretMatches(`KASSAL_API_${"KEY"}=test_${"q".repeat(32)}`).map((match) => match.rule),
     ["sensitive-assignment"],
   );
+  assert.deepEqual(findSecretMatches([
+    'APP_DATABASE_PASSWORD="$APP_DATABASE_PASSWORD"',
+    'KASSAL_API_KEY="${KASSAL_API_KEY:?required}"',
+  ].join("\n")), []);
+  const appDatabasePasswordName = `APP_DATABASE_${"PASSWORD"}`;
+  assert.deepEqual(
+    findSecretMatches(`${appDatabasePasswordName}="\${APP_DATABASE_PASSWORD}suffix"`)
+      .map((match) => match.rule),
+    ["sensitive-assignment"],
+  );
+});
+
+test("secret scanner covers prefixed camelCase credential names without matching ordinary fields", () => {
+  const credentialNames = [
+    `kassalApi${"Key"}`,
+    `reviewEvidenceProof${"Secret"}`,
+    `nestedAuth${"Token"}`,
+  ];
+  const credentialAssignments = [
+    `const ${credentialNames[0]} = "${"k".repeat(32)}";`,
+    `${credentialNames[1]}: "${"s".repeat(32)}"`,
+    `{"${credentialNames[2]}":"${"t".repeat(32)}"}`,
+  ];
+  assert.deepEqual(
+    credentialAssignments.map((assignment) =>
+      findSecretMatches(assignment).map((match) => match.rule)),
+    credentialAssignments.map(() => ["sensitive-assignment"]),
+  );
+
+  const ordinaryAssignments = [
+    `catalogDisplayName: "${"n".repeat(32)}"`,
+    `requestTimeoutLabel = "${"l".repeat(32)}"`,
+    `{"serviceEndpoint":"${"e".repeat(32)}"}`,
+    `locationSelection${"Token"}: "${"c".repeat(32)}"`,
+    `fence${"Token"}: "${"f".repeat(32)}"`,
+    `selection${"Token"}: "${"p".repeat(32)}"`,
+  ];
+  assert.deepEqual(
+    ordinaryAssignments.map((assignment) => findSecretMatches(assignment)),
+    ordinaryAssignments.map(() => []),
+  );
+});
+
+test("secret scanner accepts only non-substituting environment reference forms", () => {
+  const environmentName = `APP_DATABASE_${"PASSWORD"}`;
+  const assignment = (reference) => `${environmentName}="${reference}"`;
+  const bracedReference = (operator = "", value = "") => `\${${environmentName}${operator}${value}}`;
+
+  const allowedReferences = [
+    `$${environmentName}`,
+    bracedReference(),
+    bracedReference("?", "required"),
+    bracedReference(":?", "required"),
+    bracedReference("?"),
+    bracedReference(":?"),
+    bracedReference(":-"),
+  ];
+  assert.deepEqual(findSecretMatches(allowedReferences.map(assignment).join("\n")), []);
+  const protocol = "postgresql";
+  assert.deepEqual(findSecretMatches(allowedReferences.map(
+    (reference) => `${protocol}://runtime_user:${reference}@db.internal/handleplan`,
+  ).join("\n")), []);
+
+  const fallbackValue = `fallback_${"s".repeat(32)}`;
+  const rejectedReferences = [
+    bracedReference(":-", fallbackValue),
+    bracedReference("-", fallbackValue),
+    bracedReference(":+", fallbackValue),
+    bracedReference("+", fallbackValue),
+    bracedReference(":?", fallbackValue),
+    bracedReference("?", fallbackValue),
+  ];
+  assert.deepEqual(
+    rejectedReferences.map((reference) => findSecretMatches(assignment(reference))
+      .map((match) => match.rule)),
+    rejectedReferences.map(() => ["sensitive-assignment"]),
+  );
+
+  const credentialUrls = rejectedReferences.map(
+    (reference) => `${protocol}://runtime_user:${reference}@db.internal/handleplan`,
+  );
+  assert.deepEqual(
+    credentialUrls.map((url) => findSecretMatches(url).map((match) => match.rule)),
+    rejectedReferences.map(() => ["credential-uri"]),
+  );
+
+  const dottedValue = `literal.${"s".repeat(32)}`;
+  const commonAssignmentForms = [
+    `${environmentName}=${bracedReference(":-", fallbackValue)}`,
+    `export ${environmentName}=${dottedValue}`,
+    `{"${environmentName}":"${dottedValue}"}`,
+    `- ${environmentName}: ${bracedReference(":+", fallbackValue)}`,
+  ];
+  assert.deepEqual(
+    commonAssignmentForms.map((value) =>
+      findSecretMatches(value).map((match) => match.rule)),
+    commonAssignmentForms.map(() => ["sensitive-assignment"]),
+  );
 });
 
 test("repository scan does not trust a media filename for plaintext", () => {
@@ -137,7 +251,13 @@ test("secret scanner catches credential-bearing database and broker URLs", () =>
   ]);
   assert.deepEqual(findSecretMatches(
     "postgresql://handleplan:replace_with_url_safe_admin_secret@localhost/handleplan",
+    { allowFixtureValues: true },
   ), []);
+  assert.deepEqual(
+    findSecretMatches("postgresql://production_user:password@production.internal/handleplan")
+      .map((match) => match.rule),
+    ["credential-uri"],
+  );
   assert.deepEqual(
     findSecretMatches(`${"postgresql"}://prod_user:correct-horse@db.internal/handleplan`),
     [{ line: 1, rule: "credential-uri" }],

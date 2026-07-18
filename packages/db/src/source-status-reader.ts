@@ -316,16 +316,16 @@ export class PostgresPublicSourceStatusReader implements PublicSourceStatusReade
           select
             permission.source_id,
             permission.decision,
+            permission.reviewed_at,
             permission.valid_until,
             row_number() over (
               partition by permission.source_id
-              order by permission.reviewed_at desc, permission.id desc
+              order by permission.created_at desc, permission.id desc
             ) as permission_rank
           from source_permissions permission
           where permission.created_at <= ${evaluatedAt}::timestamptz
-            and permission.reviewed_at <= ${evaluatedAt}::timestamptz
         ), latest_permissions as (
-          select source_id, decision, valid_until
+          select source_id, decision, reviewed_at, valid_until
           from ranked_permissions
           where permission_rank = 1
         ), ranked_health as (
@@ -339,16 +339,37 @@ export class PostgresPublicSourceStatusReader implements PublicSourceStatusReade
             health.last_publish_success_at,
             health.newest_eligible_evidence_at,
             health.recorded_at,
+            health.persisted_at,
             row_number() over (
               partition by health.source_id, health.geographic_scope_id
-              order by health.recorded_at desc, health.id desc
+              order by health.persisted_at desc, health.id desc
             ) as health_rank
           from source_health_snapshots health
-          where health.recorded_at <= ${evaluatedAt}::timestamptz
+          where health.persisted_at <= ${evaluatedAt}::timestamptz
+            and health.recorded_at <= health.persisted_at
         ), latest_health as (
           select *
           from ranked_health
           where health_rank = 1
+        ), ranked_publication_health as (
+          select
+            fact.id,
+            fact.source_id,
+            fact.last_publish_success_at,
+            fact.newest_eligible_evidence_at,
+            fact.persisted_at,
+            row_number() over (
+              partition by fact.source_id
+              order by fact.persisted_at desc, fact.id desc
+            ) as publication_health_rank
+          from official_offer_publication_health_facts fact
+          where fact.persisted_at <= ${evaluatedAt}::timestamptz
+            and fact.last_publish_success_at <= fact.persisted_at
+            and fact.newest_eligible_evidence_at <= fact.last_publish_success_at
+        ), latest_publication_health as (
+          select *
+          from ranked_publication_health
+          where publication_health_rank = 1
         ), ranked_terminal_ingestion as (
           select
             run.source_id,
@@ -384,6 +405,9 @@ export class PostgresPublicSourceStatusReader implements PublicSourceStatusReade
               or source.permission_expires_at > ${evaluatedAt}::timestamptz
             )
             and permission.decision = 'approved'
+            and permission.reviewed_at <= ${evaluatedAt}::timestamptz
+            and source.permission_reviewed_at = permission.reviewed_at
+            and source.permission_expires_at is not distinct from permission.valid_until
             and (
               permission.valid_until is null
               or permission.valid_until > ${evaluatedAt}::timestamptz
@@ -394,18 +418,53 @@ export class PostgresPublicSourceStatusReader implements PublicSourceStatusReade
           scope.label as scope_label,
           scope.country_code as scope_country_code,
           scope.status as scope_state,
-          health.status as health_status,
+          case
+            when publication_health.persisted_at is not null
+              and (
+                health.persisted_at is null
+                or publication_health.persisted_at > health.persisted_at
+              ) then 'degraded'
+            else health.status
+          end as health_status,
           health.last_discovery_success_at as health_last_discovery_success_at,
           health.last_capture_success_at as health_last_capture_success_at,
-          health.last_publish_success_at as health_last_publish_success_at,
-          health.newest_eligible_evidence_at as health_newest_eligible_evidence_at,
-          health.recorded_at as health_recorded_at,
+          case
+            when health.last_publish_success_at is null
+              then publication_health.last_publish_success_at
+            when publication_health.last_publish_success_at is null
+              then health.last_publish_success_at
+            else greatest(
+              health.last_publish_success_at,
+              publication_health.last_publish_success_at
+            )
+          end as health_last_publish_success_at,
+          case
+            when health.newest_eligible_evidence_at is null
+              then publication_health.newest_eligible_evidence_at
+            when publication_health.newest_eligible_evidence_at is null
+              then health.newest_eligible_evidence_at
+            else greatest(
+              health.newest_eligible_evidence_at,
+              publication_health.newest_eligible_evidence_at
+            )
+          end as health_newest_eligible_evidence_at,
+          case
+            when publication_health.persisted_at is not null
+              and (
+                health.persisted_at is null
+                or publication_health.persisted_at > health.persisted_at
+              ) then publication_health.last_publish_success_at
+            else health.recorded_at
+          end as health_recorded_at,
           ingestion.status as ingestion_status,
           ingestion.started_at as ingestion_started_at,
           ingestion.completed_at as ingestion_completed_at
         from data_sources source
         left join latest_permissions permission on permission.source_id = source.id
         left join latest_health health on health.source_id = source.id
+        left join latest_publication_health publication_health
+          on publication_health.source_id = source.id
+         and health.geographic_scope_id is null
         left join geographic_scopes scope
           on scope.id = health.geographic_scope_id
          and scope.created_at <= ${evaluatedAt}::timestamptz

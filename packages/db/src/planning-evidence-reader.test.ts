@@ -22,9 +22,9 @@ interface TestRow {
   fetched_at: Date | string | null;
   gtin: string;
   observed_at: Date | string | null;
-  product_id: number;
+  product_id: number | string;
   raw_record_hash: string | null;
-  record_id: number | null;
+  record_id: number | string | null;
   record_type: "coverage" | "price" | "product";
   postal_codes: string[];
   region_codes: string[];
@@ -207,17 +207,29 @@ describe("PostgresPlanningEvidenceReader", () => {
     });
 
     expect(captures).toHaveLength(1);
+    expect(captures[0]!.parameters).not.toContainEqual(expect.any(Date));
+    expect(captures[0]!.parameters.slice(1).every(
+      (value) => typeof value === "string" && value.endsWith("Z"),
+    )).toBe(true);
     const query = captures[0]!.sql.replace(/\s+/g, " ").trim();
+    expect(query).toContain("?::timestamptz");
+    expect(query).toContain("select jsonb_array_elements_text(?::jsonb)");
     expect(query).toContain("from source_permissions");
     expect(query).toContain("ds.created_at <=");
     expect(query).toContain("ds.public_state_changed_at <=");
     expect(query).toContain("permission.created_at <=");
+    expect(query).toContain("order by permission.created_at desc, permission.id desc");
+    expect(query).not.toContain("order by permission.reviewed_at desc");
     expect(query).toContain("pi.public_state_changed_at <=");
     expect(query).toContain("cp.public_state_changed_at <=");
     expect(query).toContain("runtime_state = 'approved'");
     expect(query).toContain("permission_reviewed_at is not null");
     expect(query).toContain("permission_reviewed_at <=");
     expect(query).toContain("permission_expires_at is null");
+    expect(query).toContain("ds.permission_reviewed_at = permission.reviewed_at");
+    expect(query).toContain(
+      "ds.permission_expires_at is not distinct from permission.valid_until",
+    );
     expect(query).toContain("decision = 'approved'");
     expect(query).toContain("ordinaryPrice");
     expect(query).toContain("status = 'completed'");
@@ -274,6 +286,20 @@ describe("PostgresPlanningEvidenceReader", () => {
 
     expect(result.priceEvidence[0]?.observedAt).toBe("2026-07-16T11:00:00.000Z");
     expect(result.coverageChecks[0]?.checkedAt).toBe("2026-07-16T11:30:00.000Z");
+  });
+
+  it("normalizes safe bigint identifiers returned as text by postgres.js", async () => {
+    const { db } = databaseWith(() => resolved([
+      productRow({ product_id: "42" }),
+      priceRow({ product_id: "42", record_id: "101" }),
+      coverageRow({ product_id: "42", record_id: "201" }),
+    ]));
+
+    const result = await new PostgresPlanningEvidenceReader(db).getMany([GTIN], AT);
+
+    expect(result.products).toEqual([{ canonicalProductId: "product:42", gtin: GTIN }]);
+    expect(result.priceEvidence[0]?.id).toBe("price:101");
+    expect(result.coverageChecks[0]?.id).toBe("coverage:201");
   });
 
   it("preserves requested GTIN aliases while deduplicating identical canonical evidence", async () => {
@@ -366,6 +392,13 @@ describe("PostgresPlanningEvidenceReader", () => {
     ]));
     await expect(
       new PostgresPlanningEvidenceReader(malformed.db).getMany([GTIN], AT),
+    ).rejects.toEqual(new PlanningEvidenceReaderError("UNAVAILABLE"));
+
+    const unsafeIdentifier = databaseWith(() => resolved([
+      productRow({ product_id: "9007199254740992" }),
+    ]));
+    await expect(
+      new PostgresPlanningEvidenceReader(unsafeIdentifier.db).getMany([GTIN], AT),
     ).rejects.toEqual(new PlanningEvidenceReaderError("UNAVAILABLE"));
 
     const missingProduct = databaseWith(() => resolved([]));

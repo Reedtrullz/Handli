@@ -328,13 +328,13 @@ export class PostgresBranchDirectory {
           select
             permission.id,
             permission.decision,
+            permission.reviewed_at,
             permission.permissions,
             permission.valid_until
           from public.source_permissions permission
           where permission.source_id = source.id
             and permission.created_at <= ${evaluatedAt}::timestamptz
-            and permission.reviewed_at <= ${evaluatedAt}::timestamptz
-          order by permission.reviewed_at desc, permission.id desc
+          order by permission.created_at desc, permission.id desc
           limit 1
         ) permission on true
         where run.run_type = 'physical-stores'
@@ -346,6 +346,9 @@ export class PostgresBranchDirectory {
           and source.public_state_changed_at <= ${evaluatedAt}::timestamptz
           and source.runtime_state = 'approved'
           and permission.decision = 'approved'
+          and permission.reviewed_at <= ${evaluatedAt}::timestamptz
+          and source.permission_reviewed_at = permission.reviewed_at
+          and source.permission_expires_at is not distinct from permission.valid_until
           and permission.permissions @> '{"physicalStore":true}'::jsonb
           and (
             permission.valid_until is null

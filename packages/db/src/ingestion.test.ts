@@ -104,6 +104,11 @@ describe("ingestion persistence primitives", () => {
       canonical: { ...canonical, status: "quarantined" },
       incoming: { ...incoming, displayName: "Promoted milk" },
       sourceAccessApproved: false,
+    })).toBe("review");
+    expect(catalogCanonicalMutationDecision({
+      canonical: { ...canonical, status: "quarantined" },
+      incoming: { ...incoming, displayName: "Promoted milk" },
+      sourceAccessApproved: true,
     })).toBe("activate");
     expect(catalogCanonicalMutationDecision({
       canonical: { ...canonical, status: "retired" },
@@ -115,7 +120,7 @@ describe("ingestion persistence primitives", () => {
   it("derives historical claim eligibility only from the fenced historical run type", () => {
     expect(claimEligibilityForRunType("historical-prices")).toBe("historical_eligible");
     expect(claimEligibilityForRunType("benchmark-prices")).toBe("ordinary_only");
-    expect(claimEligibilityForRunType("prices")).toBe("ordinary_only");
+    expect(() => claimEligibilityForRunType("prices")).toThrow(/exact supported ingestion run type/i);
   });
 
   it("fails closed when no fencing verifier is configured", () => {

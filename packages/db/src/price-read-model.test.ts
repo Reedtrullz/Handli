@@ -48,6 +48,18 @@ describe("evidence read model cutover", () => {
     ]) {
       expect(source).toContain(clock);
     }
+    expect(source).toContain(
+      "eq(dataSources.permissionReviewedAt, sourcePermissions.reviewedAt)",
+    );
+    expect(source).toContain(
+      "`${dataSources.permissionExpiresAt} is not distinct from ${sourcePermissions.validUntil}`",
+    );
+    expect(source).toContain(
+      "gt(\n                      newerSourcePermissions.createdAt,\n                      sourcePermissions.createdAt",
+    );
+    expect(source).not.toContain(
+      "newerSourcePermissions.reviewedAt,\n                      sourcePermissions.reviewedAt",
+    );
   });
 
   it("compares only aggregate mismatch counts", () => {

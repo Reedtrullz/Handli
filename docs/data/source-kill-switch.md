@@ -1,14 +1,20 @@
 # Source kill switch and revocation procedure
 
 - Status: normative v1 runbook contract
-- Last reviewed: 2026-07-16
+- Last reviewed: 2026-07-18
 - Registry: [source-registry.v1.json](./source-registry.v1.json)
 
 ## Purpose
 
 Every external source has an independent kill-switch key in the source registry. The switch controls fetch scheduling, queued work, normalization, eligibility, cache serving, and downstream ranking as one fail-closed boundary.
 
-This document defines required behavior. Runtime wiring is implemented in later v1 source/domain/operations batches; until that wiring exists, all sources remain disabled by default and none may be represented as activated.
+This document defines required behavior. The Kassalapp v1 path now checks its
+deployment opt-in and current database governance before upstream work, inside
+each rights-sensitive persistence transaction, after persistence, and again in
+public evidence readers. Other registry entries remain disabled unless their
+own runtime path and evidence gates are explicitly wired and verified. This
+implementation does not by itself assert that any source is activated in a
+particular deployment.
 
 ## State and control contract
 

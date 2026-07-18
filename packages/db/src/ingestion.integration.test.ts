@@ -12,6 +12,7 @@ import {
   type PriceIngestionOutcome,
   type SourceRecordOutcomeInput,
 } from "./ingestion";
+import { SOURCE_GOVERNANCE_ADVISORY_LOCK_SEED } from "./source-governance-lock";
 
 const runDatabaseIntegration = process.env.RUN_DB_INTEGRATION === "1";
 const nonce = `${process.pid}-${Date.now()}`;
@@ -40,6 +41,58 @@ function gtin13(variant: number): string {
   }
   return `${body}${(10 - (sum % 10)) % 10}`;
 }
+
+async function waitForAdvisoryLockWaiters(
+  observer: DatabaseConnection,
+  holderPid: number,
+  expectedCount: number,
+): Promise<number[]> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const [state] = await observer.sql`
+      select
+        count(distinct waiting.pid)::integer as waiter_count,
+        coalesce(
+          array_agg(distinct waiting.pid order by waiting.pid)
+            filter (where waiting.pid is not null),
+          array[]::integer[]
+        ) as waiter_pids
+      from pg_catalog.pg_locks waiting
+      inner join pg_catalog.pg_locks held
+        on held.locktype = waiting.locktype
+       and held.database is not distinct from waiting.database
+       and held.classid = waiting.classid
+       and held.objid = waiting.objid
+       and held.objsubid = waiting.objsubid
+      where waiting.locktype = 'advisory'
+        and not waiting.granted
+        and held.granted
+        and held.pid = ${holderPid}
+        and waiting.pid <> held.pid
+    `;
+    if (
+      typeof state?.waiter_count === "number"
+      && state.waiter_count >= expectedCount
+      && Array.isArray(state.waiter_pids)
+    ) {
+      return state.waiter_pids.map(Number);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Expected ${expectedCount} transaction(s) to wait on the held advisory lock`);
+}
+
+async function waitForAdvisoryLockWaiter(
+  observer: DatabaseConnection,
+  holderPid: number,
+): Promise<number> {
+  const [waitingPid] = await waitForAdvisoryLockWaiters(observer, holderPid, 1);
+  if (waitingPid === undefined) {
+    throw new Error("Expected transaction did not wait on the held advisory lock");
+  }
+  return waitingPid;
+}
+
+type GovernanceRace = "kill-switch-only" | "permission-only";
 
 describe.skipIf(!runDatabaseIntegration).sequential(
   "PostgresIngestionRepository integration",
@@ -74,6 +127,158 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       return begun.handle;
     }
 
+    async function seedApprovedSource(
+      sourceId: string,
+      label: string,
+      sourceKind: "catalog" | "ordinary_price" | "store",
+      permissions: Readonly<Record<string, true>>,
+    ): Promise<void> {
+      await connection.sql`
+        insert into data_sources (
+          id, display_name, source_kind, runtime_state,
+          permission_reviewed_at, permission_expires_at
+        ) values (
+          ${sourceId}, ${label}, ${sourceKind}, 'approved',
+          '2026-01-01T00:00:00Z', '2099-01-01T00:00:00Z'
+        )
+      `;
+      await connection.sql`
+        insert into source_permissions (
+          source_id, decision, reviewed_at, valid_until, permissions, notes
+        ) values (
+          ${sourceId}, 'approved', '2026-01-01T00:00:00Z',
+          '2099-01-01T00:00:00Z', ${JSON.stringify(permissions)}::jsonb,
+          ${`ingestion-approved-${sourceId}`}
+        )
+      `;
+    }
+
+    async function seedApprovedCatalogSource(
+      sourceId: string,
+      label: string,
+    ): Promise<void> {
+      await seedApprovedSource(sourceId, label, "catalog", { catalog: true });
+    }
+
+    async function approveExistingSource(
+      sourceId: string,
+      permissions: Readonly<Record<string, true>>,
+    ): Promise<void> {
+      await connection.sql.begin(async (transaction) => {
+        const [permission] = await transaction`
+          insert into source_permissions (
+            source_id, decision, reviewed_at, valid_until, permissions, notes
+          ) values (
+            ${sourceId}, 'approved', clock_timestamp(),
+            clock_timestamp() + interval '1 day', ${JSON.stringify(permissions)}::jsonb,
+            ${`ingestion-race-approved-${sourceId}-${nonce}`}
+          )
+          returning reviewed_at, valid_until
+        `;
+        if (permission === undefined) throw new Error("Missing source approval fixture");
+        await transaction`
+          update data_sources
+          set runtime_state = 'approved',
+              permission_reviewed_at = ${permission.reviewed_at},
+              permission_expires_at = ${permission.valid_until},
+              kill_switch_reason = null
+          where id = ${sourceId}
+        `;
+      });
+    }
+
+    async function racePersistenceAgainstGovernance<T>(
+      sourceId: string,
+      governanceRace: GovernanceRace,
+      mutate: () => Promise<T>,
+    ): Promise<T> {
+      let releaseGovernance!: () => void;
+      const governanceMayCommit = new Promise<void>((resolve) => {
+        releaseGovernance = resolve;
+      });
+      let signalGovernanceReady!: (holderPid: number) => void;
+      let signalGovernanceFailure!: (error: unknown) => void;
+      const governanceReady = new Promise<number>((resolve, reject) => {
+        signalGovernanceReady = resolve;
+        signalGovernanceFailure = reject;
+      });
+      const governance = contender.sql.begin(async (transaction) => {
+        const [session] = await transaction`
+          select pg_backend_pid()::integer as holder_pid
+        `;
+        if (typeof session?.holder_pid !== "number") {
+          throw new Error("Missing governance lock holder PID");
+        }
+        if (governanceRace === "permission-only") {
+          // The INSERT trigger, not this test, acquires the shared governance
+          // lock and stamps persistence order after serialization.
+          await transaction`
+            insert into source_permissions (
+              source_id, decision, reviewed_at, permissions, notes
+            ) values (
+              ${sourceId}, 'revoked', '2098-01-01T00:00:00Z', '{}'::jsonb,
+              ${`ingestion-future-revoked-${sourceId}-${nonce}`}
+            )
+          `;
+        } else {
+          // The UPDATE trigger independently acquires the same lock for a
+          // runtime kill switch without appending a permission decision.
+          await transaction`
+            update data_sources
+            set runtime_state = 'revoked',
+                kill_switch_reason = 'concurrent ingestion governance race proof'
+            where id = ${sourceId}
+          `;
+        }
+        signalGovernanceReady(session.holder_pid);
+        await governanceMayCommit;
+      });
+      void governance.catch(signalGovernanceFailure);
+
+      const holderPid = await governanceReady;
+      const mutation = mutate();
+      let waitError: unknown;
+      try {
+        await waitForAdvisoryLockWaiter(connection, holderPid);
+      } catch (error) {
+        waitError = error;
+      } finally {
+        releaseGovernance();
+      }
+      await governance;
+      const result = await mutation;
+      if (waitError !== undefined) throw waitError;
+      const [boundary] = await connection.sql`
+        select
+          source.runtime_state,
+          permission.decision,
+          permission.reviewed_at > clock_timestamp() as permission_future
+        from data_sources source
+        inner join lateral (
+          select decision, reviewed_at
+          from source_permissions
+          where source_id = source.id
+          order by created_at desc, id desc
+          limit 1
+        ) permission on true
+        where source.id = ${sourceId}
+      `;
+      expect(boundary).toMatchObject(
+        governanceRace === "permission-only"
+          ? {
+              decision: "revoked",
+              permission_future: true,
+              runtime_state: "approved",
+            }
+          : {
+              decision: "approved",
+              permission_future: false,
+              runtime_state: "revoked",
+            },
+      );
+      return result;
+    }
+
     beforeAll(async () => {
       if (!process.env.DATABASE_URL) {
         throw new Error("DATABASE_URL is required when RUN_DB_INTEGRATION=1");
@@ -89,9 +294,42 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         returning id::integer as id
       `;
       scopeId = scope!.id;
+      await connection.sql.begin(async (transaction) => {
+        const [permission] = await transaction`
+          insert into source_permissions (
+            source_id, decision, reviewed_at, valid_until, permissions, notes
+          ) values (
+            'kassalapp', 'approved', clock_timestamp(),
+            clock_timestamp() + interval '1 day',
+            '{"catalog":true,"ordinaryPrice":true,"priceHistory":true,"physicalStore":true}'::jsonb,
+            ${`ingestion-integration-approved-${nonce}`}
+          )
+          returning reviewed_at, valid_until
+        `;
+        if (permission === undefined) {
+          throw new Error("Missing ingestion integration source permission");
+        }
+        await transaction`
+          update data_sources
+          set runtime_state = 'approved',
+              permission_reviewed_at = ${permission.reviewed_at},
+              permission_expires_at = ${permission.valid_until},
+              kill_switch_reason = null
+          where id = 'kassalapp'
+        `;
+      });
     });
 
     afterAll(async () => {
+      if (connection !== undefined) {
+        await connection.sql`
+          update data_sources
+          set runtime_state = 'conditional',
+              permission_reviewed_at = null,
+              permission_expires_at = null
+          where id = 'kassalapp'
+        `;
+      }
       await Promise.all([connection?.close(), contender?.close()]);
     });
 
@@ -355,30 +593,19 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       ).rejects.toThrow(/valid GTIN/i);
     });
 
-    it("applies only newer same-source catalog corrections under current approval", async () => {
-      const sourceId = `catalog-correction-${nonce}`;
-      const ean = gtin13(8);
-      const externalId = `trusted-correction-${nonce}`;
-      await connection.sql`
-        insert into data_sources (
-          id, display_name, source_kind, runtime_state,
-          permission_reviewed_at, permission_expires_at
-        ) values (
-          ${sourceId}, 'Catalog correction integration', 'catalog', 'approved',
-          clock_timestamp() - interval '1 minute', '2099-01-01T00:00:00Z'
-        )
-      `;
-      await connection.sql`
-        insert into source_permissions (
-          source_id, decision, reviewed_at, valid_until, permissions, notes
-        ) values (
-          ${sourceId}, 'approved', clock_timestamp() - interval '30 seconds',
-          '2099-01-01T00:00:00Z', '{"catalog":true}'::jsonb,
-          ${`catalog-correction-approved-${nonce}`}
-        )
-      `;
+    it.each<GovernanceRace>(["permission-only", "kill-switch-only"])(
+      "applies only newer same-source corrections and quarantines after a concurrent %s governance change",
+      async (governanceRace) => {
+      const sourceId = `catalog-correction-${governanceRace}-${nonce}`;
+      const ean = gtin13(governanceRace === "permission-only" ? 8 : 9);
+      const externalId = `trusted-correction-${governanceRace}-${nonce}`;
+      await seedApprovedCatalogSource(sourceId, "Catalog correction integration");
 
-      const initialHandle = await beginRun("catalog-correction-initial", "catalog", sourceId);
+      const initialHandle = await beginRun(
+        `catalog-correction-initial-${governanceRace}`,
+        "catalog",
+        sourceId,
+      );
       await repository.persistCatalogOutcomes(initialHandle, [{
         outcomeState: "accepted",
         product: {
@@ -399,7 +626,11 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         status: "completed",
       });
 
-      const correctedHandle = await beginRun("catalog-correction-newer", "catalog", sourceId);
+      const correctedHandle = await beginRun(
+        `catalog-correction-newer-${governanceRace}`,
+        "catalog",
+        sourceId,
+      );
       await repository.persistCatalogOutcomes(correctedHandle, [{
         outcomeState: "accepted",
         product: {
@@ -442,16 +673,12 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       expectSameInstant(corrected!.last_seen_at, new Date("2026-07-16T12:05:00.000Z"));
       expectSameInstant(corrected!.updated_at, new Date("2026-07-16T12:05:00.000Z"));
 
-      await connection.sql`
-        insert into source_permissions (
-          source_id, decision, reviewed_at, permissions, notes
-        ) values (
-          ${sourceId}, 'revoked', clock_timestamp(), '{}'::jsonb,
-          ${`catalog-correction-revoked-${nonce}`}
-        )
-      `;
-      const revokedHandle = await beginRun("catalog-correction-revoked", "catalog", sourceId);
-      await repository.persistCatalogOutcomes(revokedHandle, [{
+      const revokedHandle = await beginRun(
+        `catalog-correction-revoked-${governanceRace}`,
+        "catalog",
+        sourceId,
+      );
+      const revokedOutcome: CatalogIngestionOutcome = {
         outcomeState: "accepted",
         product: {
           brand: "Untrusted brand",
@@ -465,21 +692,37 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         recordedAt: now,
         sourceRecordId: externalId,
         subjectEan: ean,
-      }]);
+      };
+
+      await racePersistenceAgainstGovernance(
+        sourceId,
+        governanceRace,
+        () => repository.persistCatalogOutcomes(revokedHandle, [revokedOutcome]),
+      );
 
       const [afterRevocation] = await connection.sql`
         select product.display_name, product.package_amount, product.package_unit,
                source.last_seen_at, outcome.outcome_state, outcome.reason,
-               outcome.normalized_record->>'displayName' as proposed_name
+               outcome.normalized_record->>'displayName' as proposed_name,
+               permission.created_at <= outcome.created_at as permission_preceded_outcome,
+               governed_source.runtime_state as source_runtime_state
         from product_identifiers identifier
         inner join canonical_products product on product.id = identifier.product_id
         inner join source_products source
           on source.canonical_product_id = product.id
          and source.source_id = ${sourceId}
          and source.external_id = ${externalId}
+        inner join data_sources governed_source on governed_source.id = source.source_id
         inner join source_record_outcomes outcome
           on outcome.ingestion_run_id = ${revokedHandle.id}
          and outcome.source_record_id = ${externalId}
+        inner join lateral (
+          select created_at
+          from source_permissions
+          where source_id = ${sourceId}
+          order by created_at desc, id desc
+          limit 1
+        ) permission on true
         where identifier.value = ${ean}
           and identifier.scheme = 'ean13'
       `;
@@ -489,13 +732,506 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         package_amount: 750,
         package_unit: "g",
         proposed_name: "Must remain in review",
+        permission_preceded_outcome: true,
         reason: "CATALOG_CORRECTION_REVIEW_REQUIRED",
+        source_runtime_state: governanceRace === "permission-only" ? "approved" : "revoked",
       });
       expectSameInstant(
         afterRevocation!.last_seen_at,
         new Date("2026-07-16T12:05:00.000Z"),
       );
+      },
+    );
+
+    it.each<GovernanceRace>(["permission-only", "kill-switch-only"])(
+      "keeps a quarantined canonical unchanged when activation loses a %s governance race",
+      async (governanceRace) => {
+      const sourceId = `catalog-activation-${governanceRace}-${nonce}`;
+      const ean = gtin13(governanceRace === "permission-only" ? 4 : 3);
+      const externalId = `activation-${governanceRace}-${nonce}`;
+      await seedApprovedCatalogSource(sourceId, "Catalog activation integration");
+      const [product] = await connection.sql`
+        insert into canonical_products (
+          display_name, brand, package_amount, package_unit,
+          units_per_pack, status, updated_at
+        ) values (
+          'Quarantined original', 'Original brand', 250, 'g', 1,
+          'quarantined', '2026-07-15T12:00:00Z'
+        )
+        returning id::integer as id
+      `;
+      if (typeof product?.id !== "number") throw new Error("Missing activation product");
+      await connection.sql`
+        insert into product_identifiers (
+          product_id, scheme, value, confidence, verified_at
+        ) values (
+          ${product.id}, 'ean13', ${ean}, 100, '2026-07-15T12:00:00Z'
+        )
+      `;
+
+      const handle = await beginRun(
+        `catalog-activation-race-${governanceRace}`,
+        "catalog",
+        sourceId,
+      );
+      await racePersistenceAgainstGovernance(
+        sourceId,
+        governanceRace,
+        () => repository.persistCatalogOutcomes(handle, [{
+          outcomeState: "accepted",
+          product: {
+            brand: "Proposed brand",
+            displayName: "Proposed activated product",
+            packageAmount: 500,
+            packageUnit: "g",
+            retrievedAt: new Date("2026-07-17T12:05:00.000Z"),
+            sourceUpdatedAt: new Date("2026-07-17T12:00:00.000Z"),
+          },
+          recordKind: "product",
+          recordedAt: now,
+          sourceRecordId: externalId,
+          subjectEan: ean,
+        }]),
+      );
+
+      const [result] = await connection.sql`
+        select product.display_name, product.brand, product.package_amount,
+          product.package_unit, product.status,
+          outcome.outcome_state, outcome.reason,
+          (select count(*)::integer from source_products
+           where source_id = ${sourceId}) as source_product_count,
+          (select count(*)::integer from catalog_observations
+           where ingestion_run_id = ${handle.id}) as observation_count
+        from canonical_products product
+        inner join source_record_outcomes outcome
+          on outcome.ingestion_run_id = ${handle.id}
+         and outcome.source_record_id = ${externalId}
+        where product.id = ${product.id}
+      `;
+      expect(result).toMatchObject({
+        brand: "Original brand",
+        display_name: "Quarantined original",
+        observation_count: 0,
+        outcome_state: "quarantined",
+        package_amount: 250,
+        package_unit: "g",
+        reason: "CATALOG_CORRECTION_REVIEW_REQUIRED",
+        source_product_count: 0,
+        status: "quarantined",
+      });
+      },
+    );
+
+    it.each<GovernanceRace>(["permission-only", "kill-switch-only"])(
+      "creates only a quarantined review record when a new product loses a %s governance race",
+      async (governanceRace) => {
+      const sourceId = `catalog-new-product-${governanceRace}-${nonce}`;
+      const ean = gtin13(governanceRace === "permission-only" ? 5 : 6);
+      const externalId = `new-product-${governanceRace}-${nonce}`;
+      await seedApprovedCatalogSource(sourceId, "Catalog new-product integration");
+      const handle = await beginRun(
+        `catalog-new-product-race-${governanceRace}`,
+        "catalog",
+        sourceId,
+      );
+
+      await racePersistenceAgainstGovernance(
+        sourceId,
+        governanceRace,
+        () => repository.persistCatalogOutcomes(handle, [{
+          outcomeState: "accepted",
+          product: {
+            brand: "Proposed brand",
+            displayName: "Proposed new product",
+            packageAmount: 750,
+            packageUnit: "g",
+            retrievedAt: new Date("2026-07-17T12:05:00.000Z"),
+            sourceUpdatedAt: new Date("2026-07-17T12:00:00.000Z"),
+          },
+          recordKind: "product",
+          recordedAt: now,
+          sourceRecordId: externalId,
+          subjectEan: ean,
+        }]),
+      );
+
+      const [result] = await connection.sql`
+        select outcome.outcome_state, outcome.reason,
+          (select count(*)::integer
+           from product_identifiers identifier
+           where identifier.value = ${ean}
+             and identifier.scheme = 'ean13') as identifier_count,
+          (select count(*)::integer from source_products
+           where source_id = ${sourceId}) as source_product_count,
+          (select count(*)::integer from catalog_observations
+           where ingestion_run_id = ${handle.id}) as observation_count
+        from source_record_outcomes outcome
+        where outcome.ingestion_run_id = ${handle.id}
+          and outcome.source_record_id = ${externalId}
+      `;
+      expect(result).toMatchObject({
+        identifier_count: 0,
+        observation_count: 0,
+        outcome_state: "quarantined",
+        reason: "CATALOG_CORRECTION_REVIEW_REQUIRED",
+        source_product_count: 0,
+      });
+      },
+    );
+
+    it.each<GovernanceRace>(["permission-only", "kill-switch-only"])(
+      "does not verify a matching active GTIN after a concurrent %s governance change",
+      async (governanceRace) => {
+      const sourceId = `catalog-identifier-${governanceRace}-${nonce}`;
+      const ean = gtin13(7);
+      const externalId = `identifier-${governanceRace}-${nonce}`;
+      await seedApprovedCatalogSource(sourceId, "Catalog identifier integration");
+      const [product] = await connection.sql`
+        insert into canonical_products (
+          display_name, brand, package_amount, package_unit,
+          units_per_pack, status, updated_at
+        ) values (
+          'Existing exact product', 'Existing brand', 1, 'package', 1,
+          'active', '2026-07-15T12:00:00Z'
+        )
+        returning id::integer as id
+      `;
+      if (typeof product?.id !== "number") throw new Error("Missing identifier product");
+      await connection.sql`
+        insert into product_identifiers (
+          product_id, scheme, value, confidence, verified_at
+        ) values (
+          ${product.id}, 'ean13', ${ean}, 0, null
+        )
+      `;
+
+      const handle = await beginRun(
+        `catalog-identifier-race-${governanceRace}`,
+        "catalog",
+        sourceId,
+      );
+      await racePersistenceAgainstGovernance(
+        sourceId,
+        governanceRace,
+        () => repository.persistCatalogOutcomes(handle, [{
+          outcomeState: "accepted",
+          product: {
+            brand: "Existing brand",
+            categoryPath: [{ depth: 1, name: "Private proposal", sourceCategoryId: "91" }],
+            displayName: "Existing exact product",
+            packageAmount: 1,
+            packageUnit: "package",
+            retrievedAt: new Date("2026-07-17T12:05:00.000Z"),
+            sourceUpdatedAt: new Date("2026-07-17T12:00:00.000Z"),
+          },
+          recordKind: "product",
+          recordedAt: now,
+          sourceRecordId: externalId,
+          subjectEan: ean,
+        }]),
+      );
+
+      const [result] = await connection.sql`
+        select identifier.confidence, identifier.verified_at,
+          outcome.outcome_state, outcome.reason,
+          (select count(*)::integer from source_products
+           where source_id = ${sourceId}) as source_product_count,
+          (select count(*)::integer from catalog_observations
+           where ingestion_run_id = ${handle.id}) as observation_count
+        from product_identifiers identifier
+        inner join source_record_outcomes outcome
+          on outcome.ingestion_run_id = ${handle.id}
+         and outcome.source_record_id = ${externalId}
+        where identifier.product_id = ${product.id}
+          and identifier.value = ${ean}
+      `;
+      expect(result).toEqual({
+        confidence: 0,
+        observation_count: 0,
+        outcome_state: "quarantined",
+        reason: "CATALOG_CORRECTION_REVIEW_REQUIRED",
+        source_product_count: 0,
+        verified_at: null,
+      });
+      },
+    );
+
+    it("pre-acquires sorted GTIN locks so reversed cross-source catalog batches cannot deadlock", async () => {
+      const firstSourceId = `catalog-lock-a-${nonce}`;
+      const secondSourceId = `catalog-lock-b-${nonce}`;
+      await seedApprovedCatalogSource(firstSourceId, "Catalog lock order A");
+      await seedApprovedCatalogSource(secondSourceId, "Catalog lock order B");
+      const firstHandle = await beginRun(
+        "catalog-lock-order-a",
+        "catalog",
+        firstSourceId,
+      );
+      const secondHandle = await beginRun(
+        "catalog-lock-order-b",
+        "catalog",
+        secondSourceId,
+      );
+      const contenderRepository = new PostgresIngestionRepository(contender.db, {
+        verifyFence,
+      });
+      const [firstGtin, secondGtin] = [gtin13(0), gtin13(1)].sort();
+      if (firstGtin === undefined || secondGtin === undefined) {
+        throw new Error("Missing catalog lock-order GTIN fixture");
+      }
+      const outcome = (
+        gtin: string,
+        sourceRecordId: string,
+      ): CatalogIngestionOutcome => ({
+        outcomeState: "accepted",
+        product: {
+          brand: "Lock order",
+          displayName: `Lock order product ${gtin}`,
+          packageAmount: 1,
+          packageUnit: "package",
+          retrievedAt: new Date("2026-07-17T12:05:00.000Z"),
+          sourceUpdatedAt: new Date("2026-07-17T12:00:00.000Z"),
+        },
+        recordKind: "product",
+        recordedAt: now,
+        sourceRecordId,
+        subjectEan: gtin,
+      });
+
+      let releaseBlocker!: () => void;
+      const blockerMayCommit = new Promise<void>((resolve) => {
+        releaseBlocker = resolve;
+      });
+      let signalBlockerReady!: (holderPid: number) => void;
+      let signalBlockerFailure!: (error: unknown) => void;
+      const blockerReady = new Promise<number>((resolve, reject) => {
+        signalBlockerReady = resolve;
+        signalBlockerFailure = reject;
+      });
+      const blocker = contender.sql.begin(async (transaction) => {
+        const [session] = await transaction`
+          select pg_backend_pid()::integer as holder_pid
+        `;
+        if (typeof session?.holder_pid !== "number") {
+          throw new Error("Missing GTIN lock holder PID");
+        }
+        await transaction`
+          select pg_catalog.pg_advisory_xact_lock(
+            pg_catalog.hashtextextended(${firstGtin}, 0)
+          )
+        `;
+        signalBlockerReady(session.holder_pid);
+        await blockerMayCommit;
+      });
+      void blocker.catch(signalBlockerFailure);
+
+      const holderPid = await blockerReady;
+      const pending: Promise<unknown>[] = [];
+      let proofError: unknown;
+      try {
+        const firstBatch = repository.persistCatalogOutcomes(firstHandle, [
+          outcome(firstGtin, `lock-a-first-${nonce}`),
+          outcome(secondGtin, `lock-a-second-${nonce}`),
+        ]);
+        pending.push(firstBatch);
+        void firstBatch.catch(() => undefined);
+        await waitForAdvisoryLockWaiters(connection, holderPid, 1);
+
+        const reversedBatch = contenderRepository.persistCatalogOutcomes(secondHandle, [
+          outcome(secondGtin, `lock-b-second-${nonce}`),
+          outcome(firstGtin, `lock-b-first-${nonce}`),
+        ]);
+        pending.push(reversedBatch);
+        void reversedBatch.catch(() => undefined);
+        await waitForAdvisoryLockWaiters(connection, holderPid, 2);
+      } catch (error) {
+        proofError = error;
+      } finally {
+        releaseBlocker();
+      }
+      await blocker;
+      const settled = await Promise.allSettled(pending);
+      if (proofError !== undefined) throw proofError;
+      expect(settled).toEqual([
+        { status: "fulfilled", value: { inserted: 2, received: 2 } },
+        { status: "fulfilled", value: { inserted: 2, received: 2 } },
+      ]);
+      const [counts] = await connection.sql`
+        select
+          (select count(*)::integer
+             from source_products
+            where source_id in (${firstSourceId}, ${secondSourceId})) as source_products,
+          (select count(*)::integer
+             from source_record_outcomes
+            where ingestion_run_id in (${firstHandle.id}, ${secondHandle.id})) as outcomes
+      `;
+      expect(counts).toEqual({ outcomes: 4, source_products: 4 });
     });
+
+    it.each<"price-price" | "catalog-price">(["price-price", "catalog-price"])(
+      "pre-acquires one sorted GTIN order for reversed cross-source %s batches",
+      async (pair) => {
+        const firstSourceId = `${pair}-lock-a-${nonce}`;
+        const secondSourceId = `${pair}-lock-b-${nonce}`;
+        if (pair === "catalog-price") {
+          await seedApprovedSource(
+            firstSourceId,
+            "Catalog/price lock order catalog",
+            "catalog",
+            { catalog: true },
+          );
+        } else {
+          await seedApprovedSource(
+            firstSourceId,
+            "Price lock order A",
+            "ordinary_price",
+            { ordinaryPrice: true },
+          );
+        }
+        await seedApprovedSource(
+          secondSourceId,
+          "Price lock order B",
+          "ordinary_price",
+          { ordinaryPrice: true },
+        );
+        const firstHandle = await beginRun(
+          `${pair}-lock-order-a`,
+          pair === "catalog-price" ? "catalog" : "benchmark-prices",
+          firstSourceId,
+        );
+        const secondHandle = await beginRun(
+          `${pair}-lock-order-b`,
+          "benchmark-prices",
+          secondSourceId,
+        );
+        const contenderRepository = new PostgresIngestionRepository(contender.db, {
+          verifyFence,
+        });
+        const [firstGtin, secondGtin] = [gtin13(1), gtin13(2)].sort();
+        if (firstGtin === undefined || secondGtin === undefined) {
+          throw new Error("Missing cross-kind lock-order GTIN fixture");
+        }
+        const priceOutcome = (
+          gtin: string,
+          sourceRecordId: string,
+          sourceReference: string,
+        ): PriceIngestionOutcome => ({
+          outcomeState: "accepted",
+          price: {
+            amountOre: 2_490,
+            fetchedAt: now,
+            observedAt: now,
+            sourceReference,
+          },
+          recordKind: "price",
+          recordedAt: now,
+          sourceRecordId,
+          subjectChain: "extra",
+          subjectEan: gtin,
+        });
+        const catalogOutcome = (
+          gtin: string,
+          sourceRecordId: string,
+        ): CatalogIngestionOutcome => ({
+          outcomeState: "accepted",
+          product: {
+            displayName: `Cross-kind lock product ${gtin}`,
+            packageAmount: 1,
+            packageUnit: "package",
+            retrievedAt: now,
+          },
+          recordKind: "product",
+          recordedAt: now,
+          sourceRecordId,
+          subjectEan: gtin,
+        });
+
+        let releaseBlocker!: () => void;
+        const blockerMayCommit = new Promise<void>((resolve) => {
+          releaseBlocker = resolve;
+        });
+        let signalBlockerReady!: (holderPid: number) => void;
+        let signalBlockerFailure!: (error: unknown) => void;
+        const blockerReady = new Promise<number>((resolve, reject) => {
+          signalBlockerReady = resolve;
+          signalBlockerFailure = reject;
+        });
+        const blocker = contender.sql.begin(async (transaction) => {
+          const [session] = await transaction`
+            select pg_backend_pid()::integer as holder_pid
+          `;
+          if (typeof session?.holder_pid !== "number") {
+            throw new Error("Missing cross-kind GTIN lock holder PID");
+          }
+          await transaction`
+            select pg_catalog.pg_advisory_xact_lock(
+              pg_catalog.hashtextextended(${firstGtin}, 0)
+            )
+          `;
+          signalBlockerReady(session.holder_pid);
+          await blockerMayCommit;
+        });
+        void blocker.catch(signalBlockerFailure);
+
+        const holderPid = await blockerReady;
+        const pending: Promise<unknown>[] = [];
+        let proofError: unknown;
+        try {
+          const firstBatch = pair === "catalog-price"
+            ? repository.persistCatalogOutcomes(firstHandle, [
+                catalogOutcome(firstGtin, `${pair}-a-first-${nonce}`),
+                catalogOutcome(secondGtin, `${pair}-a-second-${nonce}`),
+              ])
+            : repository.persistPriceOutcomes(firstHandle, [
+                priceOutcome(
+                  firstGtin,
+                  `${pair}-a-first-${nonce}`,
+                  `${pair}:a:first:${nonce}`,
+                ),
+                priceOutcome(
+                  secondGtin,
+                  `${pair}-a-second-${nonce}`,
+                  `${pair}:a:second:${nonce}`,
+                ),
+              ]);
+          pending.push(firstBatch);
+          void firstBatch.catch(() => undefined);
+          await waitForAdvisoryLockWaiters(connection, holderPid, 1);
+
+          const reversedBatch = contenderRepository.persistPriceOutcomes(secondHandle, [
+            priceOutcome(
+              secondGtin,
+              `${pair}-b-second-${nonce}`,
+              `${pair}:b:second:${nonce}`,
+            ),
+            priceOutcome(
+              firstGtin,
+              `${pair}-b-first-${nonce}`,
+              `${pair}:b:first:${nonce}`,
+            ),
+          ]);
+          pending.push(reversedBatch);
+          void reversedBatch.catch(() => undefined);
+          await waitForAdvisoryLockWaiters(connection, holderPid, 2);
+        } catch (error) {
+          proofError = error;
+        } finally {
+          releaseBlocker();
+        }
+        await blocker;
+        const settled = await Promise.allSettled(pending);
+        if (proofError !== undefined) throw proofError;
+        expect(settled).toEqual([
+          { status: "fulfilled", value: { inserted: 2, received: 2 } },
+          { status: "fulfilled", value: { inserted: 2, received: 2 } },
+        ]);
+        const [counts] = await connection.sql`
+          select count(*)::integer as outcomes
+          from source_record_outcomes
+          where ingestion_run_id in (${firstHandle.id}, ${secondHandle.id})
+        `;
+        expect(counts).toEqual({ outcomes: 4 });
+      },
+    );
 
     it("atomically audits known prices into evidence, coverage, and the legacy cache", async () => {
       const handle = await beginRun("prices", "benchmark-prices");
@@ -624,6 +1360,69 @@ describe.skipIf(!runDatabaseIntegration).sequential(
               and claim_eligibility = 'historical_eligible') as history
       `;
       expect(historicalProjectionCounts).toEqual({ coverage: 0, history: 1 });
+    });
+
+    it("requires the exact price capability and rejects unknown price run types", async () => {
+      const sourceId = `price-capability-${nonce}`;
+      const ean = gtin13(6);
+      await seedApprovedSource(
+        sourceId,
+        "Exact price capability integration",
+        "ordinary_price",
+        { ordinaryPrice: true },
+      );
+      const outcome: PriceIngestionOutcome = {
+        outcomeState: "accepted",
+        price: {
+          amountOre: 2_990,
+          fetchedAt: now,
+          observedAt: now,
+          sourceReference: `exact-price-capability:${nonce}`,
+        },
+        recordKind: "price",
+        recordedAt: now,
+        sourceRecordId: `exact-price-capability-${nonce}`,
+        subjectChain: "extra",
+        subjectEan: ean,
+      };
+
+      const historicalHandle = await beginRun(
+        "exact-price-capability-history",
+        "historical-prices",
+        sourceId,
+      );
+      await expect(repository.persistPriceOutcomes(historicalHandle, [outcome])).resolves.toEqual({
+        inserted: 1,
+        received: 1,
+      });
+      const [historicalResult] = await connection.sql`
+        select outcome.outcome_state, outcome.reason,
+          (select count(*)::integer from price_observations
+           where ingestion_run_id = ${historicalHandle.id}) as observations
+        from source_record_outcomes outcome
+        where outcome.ingestion_run_id = ${historicalHandle.id}
+      `;
+      expect(historicalResult).toEqual({
+        observations: 0,
+        outcome_state: "quarantined",
+        reason: "SOURCE_ACCESS_REVIEW_REQUIRED",
+      });
+
+      const unsupportedHandle = await beginRun(
+        "unsupported-price-run-type",
+        "prices",
+        sourceId,
+      );
+      await expect(repository.persistPriceOutcomes(unsupportedHandle, [{
+        ...outcome,
+        sourceRecordId: `unsupported-price-run-type-${nonce}`,
+      }])).rejects.toThrow(/exact supported ingestion run type/i);
+      const [unsupportedAudit] = await connection.sql`
+        select count(*)::integer as count
+        from source_record_outcomes
+        where ingestion_run_id = ${unsupportedHandle.id}
+      `;
+      expect(unsupportedAudit).toEqual({ count: 0 });
     });
 
     it("rejects stale fences before any write", async () => {
@@ -1052,5 +1851,304 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         name: "PostgresError",
       });
     });
+
+    it.each<GovernanceRace>(["permission-only", "kill-switch-only"])(
+      "leaves price evidence, coverage, identity, and cache untouched after a concurrent %s governance change",
+      async (governanceRace) => {
+        await approveExistingSource("kassalapp", {
+          catalog: true,
+          ordinaryPrice: true,
+          physicalStore: true,
+          priceHistory: true,
+        });
+        const ean = gtin13(governanceRace === "permission-only" ? 7 : 8);
+        await connection.sql`
+          insert into price_cache (ean, chain, amount_ore, observed_at, fetched_at)
+          values (
+            ${ean}, 'extra', 1111, '2026-07-15T12:00:00Z', '2026-07-15T12:00:00Z'
+          )
+          on conflict (ean, chain) do update
+          set amount_ore = 1111,
+              observed_at = '2026-07-15T12:00:00Z',
+              fetched_at = '2026-07-15T12:00:00Z'
+        `;
+        const handle = await beginRun(
+          `price-governance-${governanceRace}`,
+          "benchmark-prices",
+        );
+        const outcomes: PriceIngestionOutcome[] = [
+          {
+            outcomeState: "accepted",
+            price: {
+              amountOre: 3_490,
+              fetchedAt: now,
+              observedAt: now,
+              sourceReference: `price-governance:${governanceRace}:${nonce}`,
+            },
+            recordKind: "price",
+            recordedAt: now,
+            sourceRecordId: `price-governance-accepted-${governanceRace}-${nonce}`,
+            subjectChain: "extra",
+            subjectEan: ean,
+          },
+          {
+            outcomeState: "unknown",
+            reason: "PRICE_UNAVAILABLE",
+            recordKind: "price",
+            recordedAt: now,
+            sourceRecordId: `price-governance-unknown-${governanceRace}-${nonce}`,
+            subjectChain: "extra",
+            subjectEan: ean,
+          },
+        ];
+
+        await expect(racePersistenceAgainstGovernance(
+          "kassalapp",
+          governanceRace,
+          () => repository.persistPriceOutcomes(handle, outcomes),
+        )).resolves.toEqual({ inserted: 2, received: 2 });
+
+        const audited = await connection.sql`
+          select source_record_id, outcome_state, reason
+          from source_record_outcomes
+          where ingestion_run_id = ${handle.id}
+          order by source_record_id
+        `;
+        expect(audited).toEqual([
+          {
+            outcome_state: "quarantined",
+            reason: "SOURCE_ACCESS_REVIEW_REQUIRED",
+            source_record_id: `price-governance-accepted-${governanceRace}-${nonce}`,
+          },
+          {
+            outcome_state: "unknown",
+            reason: "PRICE_UNAVAILABLE",
+            source_record_id: `price-governance-unknown-${governanceRace}-${nonce}`,
+          },
+        ]);
+        const [counts] = await connection.sql`
+          select
+            (select count(*)::integer from price_observations
+             where ingestion_run_id = ${handle.id}) as observations,
+            (select count(*)::integer from price_coverage_checks
+             where ingestion_run_id = ${handle.id}) as coverage,
+            (select count(*)::integer from product_identifiers
+             where value = ${ean} and scheme = 'ean13') as identifiers,
+            (select amount_ore::integer from price_cache
+             where ean = ${ean} and chain = 'extra') as cached_amount
+        `;
+        expect(counts).toEqual({
+          cached_amount: 1111,
+          coverage: 0,
+          identifiers: 0,
+          observations: 0,
+        });
+      },
+    );
+
+    it.each<GovernanceRace>(["permission-only", "kill-switch-only"])(
+      "leaves store observations, projection, and even empty coverage untouched after a concurrent %s governance change",
+      async (governanceRace) => {
+        const sourceId = `store-governance-${governanceRace}-${nonce}`;
+        await seedApprovedSource(
+          sourceId,
+          "Store governance integration",
+          "store",
+          { physicalStore: true },
+        );
+        const externalId = `store-governance-${governanceRace}-${nonce}`;
+        const handle = await beginRun(
+          `store-governance-${governanceRace}`,
+          "physical-stores",
+          sourceId,
+        );
+        await expect(racePersistenceAgainstGovernance(
+          sourceId,
+          governanceRace,
+          () => repository.persistPhysicalStoreOutcomes(handle, [{
+            outcomeState: "accepted",
+            recordKind: "physical-store",
+            recordedAt: now,
+            sourceRecordId: externalId,
+            store: {
+              latitude: 59.911_491,
+              longitude: 10.757_933,
+              name: "Must remain audit-only",
+              observedAt: now,
+              postalCode: "0152",
+            },
+            subjectChain: "extra",
+          }], [{
+            chain: "extra",
+            checkedAt: now,
+            recordCount: 1,
+            state: "complete",
+          }]),
+        )).resolves.toEqual({ inserted: 1, received: 1 });
+
+        const [result] = await connection.sql`
+          select outcome.outcome_state, outcome.reason,
+            (select count(*)::integer from physical_store_observations
+             where ingestion_run_id = ${handle.id}) as observations,
+            (select count(*)::integer from physical_store_coverage_checks
+             where ingestion_run_id = ${handle.id}) as coverage,
+            (select count(*)::integer from physical_stores
+             where source_id = ${sourceId}) as stores
+          from source_record_outcomes outcome
+          where outcome.ingestion_run_id = ${handle.id}
+        `;
+        expect(result).toEqual({
+          coverage: 0,
+          observations: 0,
+          outcome_state: "quarantined",
+          reason: "SOURCE_ACCESS_REVIEW_REQUIRED",
+          stores: 0,
+        });
+
+        const emptyCoverageHandle = await beginRun(
+          `store-governance-empty-${governanceRace}`,
+          "physical-stores",
+          sourceId,
+        );
+        await expect(repository.persistPhysicalStoreOutcomes(
+          emptyCoverageHandle,
+          [],
+          [{
+            chain: "extra",
+            checkedAt: now,
+            reason: "REQUEST_FAILED",
+            recordCount: 0,
+            state: "unknown",
+          }],
+        )).resolves.toEqual({ inserted: 0, received: 0 });
+        const [emptyCoverage] = await connection.sql`
+          select count(*)::integer as count
+          from physical_store_coverage_checks
+          where ingestion_run_id = ${emptyCoverageHandle.id}
+        `;
+        expect(emptyCoverage).toEqual({ count: 0 });
+      },
+    );
+
+    it.each<"source-governance" | "gtin">(["source-governance", "gtin"])(
+      "bounds a held %s advisory lock after caller abort and leaves no price side effects",
+      async (heldLock) => {
+        await approveExistingSource("kassalapp", {
+          catalog: true,
+          ordinaryPrice: true,
+          physicalStore: true,
+          priceHistory: true,
+        });
+        const ean = gtin13(heldLock === "source-governance" ? 1 : 2);
+        const handle = await beginRun(
+          `bounded-${heldLock}-lock`,
+          "benchmark-prices",
+        );
+
+        let releaseHolder!: () => void;
+        const holderMayCommit = new Promise<void>((resolve) => {
+          releaseHolder = resolve;
+        });
+        let signalHolderReady!: (holderPid: number) => void;
+        let signalHolderFailure!: (error: unknown) => void;
+        const holderReady = new Promise<number>((resolve, reject) => {
+          signalHolderReady = resolve;
+          signalHolderFailure = reject;
+        });
+        const holder = contender.sql.begin(async (transaction) => {
+          const [session] = await transaction`
+            select pg_backend_pid()::integer as holder_pid
+          `;
+          if (typeof session?.holder_pid !== "number") {
+            throw new Error("Missing bounded-lock holder PID");
+          }
+          await transaction`
+            select pg_catalog.pg_advisory_xact_lock(
+              pg_catalog.hashtextextended(
+                ${heldLock === "source-governance" ? "kassalapp" : ean},
+                ${heldLock === "source-governance"
+                  ? SOURCE_GOVERNANCE_ADVISORY_LOCK_SEED
+                  : 0}
+              )
+            )
+          `;
+          signalHolderReady(session.holder_pid);
+          await holderMayCommit;
+        });
+        void holder.catch(signalHolderFailure);
+
+        const holderPid = await holderReady;
+        const controller = new AbortController();
+        const startedAt = Date.now();
+        const persistence = repository.persistPriceOutcomes(handle, [{
+          outcomeState: "accepted",
+          price: {
+            amountOre: 3_290,
+            fetchedAt: now,
+            geographicScopeId: scopeId,
+            observedAt: now,
+            sourceReference: `bounded-${heldLock}-lock:${nonce}`,
+          },
+          recordKind: "price",
+          recordedAt: now,
+          sourceRecordId: `bounded-${heldLock}-lock-${nonce}`,
+          subjectChain: "extra",
+          subjectEan: ean,
+        }], controller.signal);
+        void persistence.catch(() => undefined);
+
+        let persistenceError: unknown;
+        let proofError: unknown;
+        try {
+          await waitForAdvisoryLockWaiter(connection, holderPid);
+          controller.abort();
+          try {
+            await persistence;
+          } catch (error) {
+            persistenceError = error;
+          }
+        } catch (error) {
+          proofError = error;
+          controller.abort();
+        } finally {
+          releaseHolder();
+        }
+        await holder;
+        if (proofError !== undefined) {
+          await persistence.catch(() => undefined);
+          throw proofError;
+        }
+
+        expect(controller.signal.aborted).toBe(true);
+        expect(persistenceError).toBeInstanceOf(DrizzleQueryError);
+        expect((persistenceError as DrizzleQueryError).cause).toMatchObject({
+          code: "55P03",
+          name: "PostgresError",
+        });
+        expect(Date.now() - startedAt).toBeLessThan(12_000);
+
+        const [counts] = await connection.sql`
+          select
+            (select count(*)::integer from source_record_outcomes
+             where ingestion_run_id = ${handle.id}) as outcomes,
+            (select count(*)::integer from price_observations
+             where ingestion_run_id = ${handle.id}) as observations,
+            (select count(*)::integer from price_coverage_checks
+             where ingestion_run_id = ${handle.id}) as coverage,
+            (select count(*)::integer from product_identifiers
+             where value = ${ean} and scheme = 'ean13') as identifiers,
+            (select count(*)::integer from price_cache
+             where ean = ${ean} and chain = 'extra') as cache
+        `;
+        expect(counts).toEqual({
+          cache: 0,
+          coverage: 0,
+          identifiers: 0,
+          observations: 0,
+          outcomes: 0,
+        });
+      },
+      15_000,
+    );
   },
 );

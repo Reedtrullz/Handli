@@ -122,26 +122,47 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function rowHasValidIdentity(
+function databasePositiveSafeInteger(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  }
+  if (typeof value !== "string" || !/^[1-9][0-9]{0,15}$/u.test(value)) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function normalizePlanningEvidenceRow(
   row: unknown,
   requestedGtins: ReadonlySet<string>,
-): row is PlanningEvidenceRow {
-  if (!isRecord(row)) return false;
-  return (
-    (row.record_type === "product" || row.record_type === "price" || row.record_type === "coverage")
-    && typeof row.gtin === "string"
-    && isValidGtin(row.gtin)
-    && requestedGtins.has(row.gtin)
-    && typeof row.product_id === "number"
-    && Number.isSafeInteger(row.product_id)
-    && row.product_id > 0
-    && Array.isArray(row.postal_codes)
-    && row.postal_codes.every((value) => typeof value === "string")
-    && Array.isArray(row.region_codes)
-    && row.region_codes.every((value) => typeof value === "string")
-    && Array.isArray(row.store_ids)
-    && row.store_ids.every((value) => typeof value === "string")
-  );
+): PlanningEvidenceRow | undefined {
+  if (!isRecord(row)) return undefined;
+  const productId = databasePositiveSafeInteger(row.product_id);
+  const recordId = row.record_id === null
+    ? null
+    : databasePositiveSafeInteger(row.record_id);
+  if (
+    !(row.record_type === "product" || row.record_type === "price" || row.record_type === "coverage")
+    || typeof row.gtin !== "string"
+    || !isValidGtin(row.gtin)
+    || !requestedGtins.has(row.gtin)
+    || productId === undefined
+    || recordId === undefined
+    || Array.isArray(row.postal_codes) === false
+    || !row.postal_codes.every((value) => typeof value === "string")
+    || Array.isArray(row.region_codes) === false
+    || !row.region_codes.every((value) => typeof value === "string")
+    || Array.isArray(row.store_ids) === false
+    || !row.store_ids.every((value) => typeof value === "string")
+  ) {
+    return undefined;
+  }
+  return {
+    ...row,
+    product_id: productId,
+    record_id: recordId,
+  } as unknown as PlanningEvidenceRow;
 }
 
 function geographicScopeFor(row: PlanningEvidenceRow): GeographicScope {
@@ -320,8 +341,13 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
     }
     const requestedGtins = [...gtins];
     const requestedSet = new Set(requestedGtins);
-    const windowStartsAt = new Date(at.getTime() - HISTORY_AND_CURRENT_WINDOW_MS);
-    const coverageStartsAt = new Date(at.getTime() - CURRENT_COVERAGE_WINDOW_MS);
+    const evaluatedAtIso = at.toISOString();
+    const windowStartsAtIso = new Date(
+      at.getTime() - HISTORY_AND_CURRENT_WINDOW_MS,
+    ).toISOString();
+    const coverageStartsAtIso = new Date(
+      at.getTime() - CURRENT_COVERAGE_WINDOW_MS,
+    ).toISOString();
     const client = this.db.$client;
     const query = client<PlanningEvidenceRow[]>`
       with requested_products as (
@@ -330,15 +356,17 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
           pi.product_id
         from product_identifiers pi
         inner join canonical_products cp on cp.id = pi.product_id
-        where pi.value = any(${client.array(requestedGtins)}::text[])
+        where pi.value in (
+          select jsonb_array_elements_text(${JSON.stringify(requestedGtins)}::jsonb)
+        )
           and pi.scheme in ('ean8', 'ean13')
           and pi.confidence = 100
           and pi.verified_at is not null
-          and pi.verified_at <= ${at}
-          and pi.created_at <= ${at}
-          and pi.public_state_changed_at <= ${at}
-          and cp.created_at <= ${at}
-          and cp.public_state_changed_at <= ${at}
+          and pi.verified_at <= ${evaluatedAtIso}::timestamptz
+          and pi.created_at <= ${evaluatedAtIso}::timestamptz
+          and pi.public_state_changed_at <= ${evaluatedAtIso}::timestamptz
+          and cp.created_at <= ${evaluatedAtIso}::timestamptz
+          and cp.public_state_changed_at <= ${evaluatedAtIso}::timestamptz
           and cp.status = 'active'
       ),
       effective_sources as (
@@ -353,20 +381,27 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
                  permission.valid_until, permission.permissions
           from source_permissions permission
           where permission.source_id = ds.id
-            and permission.reviewed_at <= ${at}
-            and permission.created_at <= ${at}
-          order by permission.reviewed_at desc, permission.id desc
+            and permission.created_at <= ${evaluatedAtIso}::timestamptz
+          order by permission.created_at desc, permission.id desc
           limit 1
         ) permission on true
         where ds.runtime_state = 'approved'
-          and ds.created_at <= ${at}
-          and ds.public_state_changed_at <= ${at}
+          and ds.created_at <= ${evaluatedAtIso}::timestamptz
+          and ds.public_state_changed_at <= ${evaluatedAtIso}::timestamptz
           and ds.permission_reviewed_at is not null
-          and ds.permission_reviewed_at <= ${at}
-          and (ds.permission_expires_at is null or ds.permission_expires_at > ${at})
+          and ds.permission_reviewed_at <= ${evaluatedAtIso}::timestamptz
+          and (
+            ds.permission_expires_at is null
+            or ds.permission_expires_at > ${evaluatedAtIso}::timestamptz
+          )
           and permission.decision = 'approved'
-          and permission.reviewed_at <= ${at}
-          and (permission.valid_until is null or permission.valid_until > ${at})
+          and ds.permission_reviewed_at = permission.reviewed_at
+          and ds.permission_expires_at is not distinct from permission.valid_until
+          and permission.reviewed_at <= ${evaluatedAtIso}::timestamptz
+          and (
+            permission.valid_until is null
+            or permission.valid_until > ${evaluatedAtIso}::timestamptz
+          )
       ),
       price_records as (
         select
@@ -393,21 +428,21 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
             select gsr.region_code
             from geographic_scope_regions gsr
             where gsr.scope_id = gs.id
-              and gsr.created_at <= ${at}
+              and gsr.created_at <= ${evaluatedAtIso}::timestamptz
             order by gsr.region_code
           ), array[]::varchar[]) as region_codes,
           coalesce(array(
             select gsp.postal_code
             from geographic_scope_postal_codes gsp
             where gsp.scope_id = gs.id
-              and gsp.created_at <= ${at}
+              and gsp.created_at <= ${evaluatedAtIso}::timestamptz
             order by gsp.postal_code
           ), array[]::varchar[]) as postal_codes,
           coalesce(array(
             select 'store:' || gss.store_id::text
             from geographic_scope_stores gss
             where gss.scope_id = gs.id
-              and gss.created_at <= ${at}
+              and gss.created_at <= ${evaluatedAtIso}::timestamptz
             order by gss.store_id
           ), array[]::text[]) as store_ids
         from requested_products rp
@@ -419,19 +454,19 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
         left join geographic_scopes gs on gs.id = po.geographic_scope_id
         where run.status = 'completed'
           and run.completed_at is not null
-          and run.completed_at <= ${at}
-          and run.created_at <= ${at}
-          and run.terminalized_at <= ${at}
-          and po.observed_at >= ${windowStartsAt}
-          and po.observed_at <= ${at}
-          and po.fetched_at <= ${at}
-          and po.created_at <= ${at}
+          and run.completed_at <= ${evaluatedAtIso}::timestamptz
+          and run.created_at <= ${evaluatedAtIso}::timestamptz
+          and run.terminalized_at <= ${evaluatedAtIso}::timestamptz
+          and po.observed_at >= ${windowStartsAtIso}::timestamptz
+          and po.observed_at <= ${evaluatedAtIso}::timestamptz
+          and po.fetched_at <= ${evaluatedAtIso}::timestamptz
+          and po.created_at <= ${evaluatedAtIso}::timestamptz
           and (
             po.geographic_scope_id is null
             or (
               gs.id is not null
-              and gs.created_at <= ${at}
-              and gs.public_state_changed_at <= ${at}
+              and gs.created_at <= ${evaluatedAtIso}::timestamptz
+              and gs.public_state_changed_at <= ${evaluatedAtIso}::timestamptz
             )
           )
           and po.source_reference is not null
@@ -470,21 +505,21 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
             select gsr.region_code
             from geographic_scope_regions gsr
             where gsr.scope_id = gs.id
-              and gsr.created_at <= ${at}
+              and gsr.created_at <= ${evaluatedAtIso}::timestamptz
             order by gsr.region_code
           ), array[]::varchar[]) as region_codes,
           coalesce(array(
             select gsp.postal_code
             from geographic_scope_postal_codes gsp
             where gsp.scope_id = gs.id
-              and gsp.created_at <= ${at}
+              and gsp.created_at <= ${evaluatedAtIso}::timestamptz
             order by gsp.postal_code
           ), array[]::varchar[]) as postal_codes,
           coalesce(array(
             select 'store:' || gss.store_id::text
             from geographic_scope_stores gss
             where gss.scope_id = gs.id
-              and gss.created_at <= ${at}
+              and gss.created_at <= ${evaluatedAtIso}::timestamptz
             order by gss.store_id
           ), array[]::text[]) as store_ids
         from requested_products rp
@@ -494,18 +529,18 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
         left join geographic_scopes gs on gs.id = coverage.geographic_scope_id
         where run.status = 'completed'
           and run.completed_at is not null
-          and run.completed_at <= ${at}
-          and run.created_at <= ${at}
-          and run.terminalized_at <= ${at}
-          and coverage.checked_at >= ${coverageStartsAt}
-          and coverage.checked_at <= ${at}
-          and coverage.created_at <= ${at}
+          and run.completed_at <= ${evaluatedAtIso}::timestamptz
+          and run.created_at <= ${evaluatedAtIso}::timestamptz
+          and run.terminalized_at <= ${evaluatedAtIso}::timestamptz
+          and coverage.checked_at >= ${coverageStartsAtIso}::timestamptz
+          and coverage.checked_at <= ${evaluatedAtIso}::timestamptz
+          and coverage.created_at <= ${evaluatedAtIso}::timestamptz
           and (
             coverage.geographic_scope_id is null
             or (
               gs.id is not null
-              and gs.created_at <= ${at}
-              and gs.public_state_changed_at <= ${at}
+              and gs.created_at <= ${evaluatedAtIso}::timestamptz
+              and gs.public_state_changed_at <= ${evaluatedAtIso}::timestamptz
             )
           )
           and source.permissions @> '{"ordinaryPrice": true}'::jsonb
@@ -556,10 +591,10 @@ export class PostgresPlanningEvidenceReader implements PlanningEvidenceReader {
       const historicalEligibleEvidenceIds = new Set<string>();
       const coverageChecks = new Map<string, CoverageCheck>();
       for (const candidate of rows as unknown[]) {
-        if (!rowHasValidIdentity(candidate, requestedSet)) {
+        const row = normalizePlanningEvidenceRow(candidate, requestedSet);
+        if (row === undefined) {
           throw new PlanningEvidenceReaderError("UNAVAILABLE");
         }
-        const row = candidate;
         if (row.record_type === "product") {
           if (products.has(row.gtin)) throw new PlanningEvidenceReaderError("UNAVAILABLE");
           products.set(row.gtin, {

@@ -21,6 +21,8 @@ Use the command only when all of these are true:
   and `state/deployment-high-water` pass the fail-closed state parser;
 - the target image is still present and its exact image ID and OCI revision
   label match the stored record;
+- neither a regular nor symlink-shaped `state/pending-deployment` path exists;
+  this is checked after the command owns the shared operation lock;
 - `/opt/apps/handleplan/operations/current` is the exact controls release for
   the newest migration attempt. It may intentionally be newer than the current
   application after a post-migration candidate failure; and
@@ -81,10 +83,40 @@ either cleanup or restoration cannot be proven, it removes the prior runtime as
 well and leaves all four services down. It never records a partially verified
 target and never falls back to a mutable image tag.
 
+The token-bound pending-deployment resolver does not invoke this operator path.
+It uses a dedicated, network-independent transition under the same operation
+lock because the forward deploy already proved and recorded the exact
+predecessor. It atomically revalidates the pending token and current candidate,
+bounds every Docker operation, and arms closed cleanup before any further
+preflight. If the predecessor cannot pass exact runtime readback, it removes all
+application runtimes and preserves both pending and current state for review
+instead of putting the rejected candidate back online. This narrower resolver
+path must not be used to bypass the explicit operator rollback preconditions.
+
 The operation lock is a directory, so an uncatchable kill or host failure can
 leave it behind. Never delete a stale lock until process state, open handles,
 container state, and the authoritative deployment files have been reviewed.
 Concurrent deploy/rollback execution is intentionally refused.
+
+Detached pending watchdogs are capacity-bound by exact leases in
+`state/pending-watchdogs/`. Do not remove a stale, malformed, or symlink-shaped
+lease merely to admit another deployment: the lease is the fail-closed evidence
+that a watchdog may still exist, and PID identity is deliberately not used.
+Reconcile the lease's full candidate, predecessor, deadline, and token tuple
+with pending/accepted/current state before any operator repair.
+
+An exact `state/pending-deployment` record means external promotion has not
+finished. Do not clear it or start an unrelated rollback to bypass the pending
+resolver. The deploy workflow's token-bound reject path (or its detached
+deadline watchdog) must either restore the recorded predecessor and clear the
+record, or leave it in place for incident review when current state differs.
+Because a pending record blocks newer automated deployment, its presence is a
+safety signal rather than stale scratch state.
+
+The command enforces this rule rather than relying on operator discipline: any
+path at `state/pending-deployment`, including a broken symlink, aborts before
+state loading, Git, Docker, or runtime mutation. Resolve or investigate it
+through the pending-deployment protocol; never remove it to force rollback.
 
 ## Evidence and non-claims
 

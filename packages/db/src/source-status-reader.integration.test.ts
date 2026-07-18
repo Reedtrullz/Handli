@@ -155,5 +155,55 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       expect(JSON.stringify(entry)).not.toContain(privateSentinel);
       expect(JSON.stringify(entry)).not.toMatch(/error|queue|review/i);
     });
+
+    it("blocks later future-dated and backdated revocations without rewriting the earlier snapshot", async () => {
+      const [clock] = await admin.sql`select clock_timestamp() as snapshot_at`;
+      const snapshotAt = new Date(String(clock!.snapshot_at));
+      const reader = new PostgresPublicSourceStatusReader(web.db);
+      const baseline = await reader.read(50, snapshotAt);
+      expect(baseline.entries.find(({ source }) => source.id === sourceId)?.governanceState)
+        .toBe("approved");
+
+      const [futureRevocation] = await admin.sql`
+        insert into source_permissions (
+          source_id, decision, reviewed_at, valid_until, permissions, notes
+        ) values (
+          ${sourceId}, 'revoked',
+          ${new Date(snapshotAt.getTime() + 24 * 60 * 60_000).toISOString()},
+          null, '{}'::jsonb, 'source-status future-dated revocation'
+        )
+        returning created_at > ${snapshotAt.toISOString()}::timestamptz as created_later
+      `;
+      expect(futureRevocation?.created_later).toBe(true);
+      const [afterFutureClock] = await admin.sql`
+        select clock_timestamp() + interval '1 millisecond' as current_at
+      `;
+      const afterFuture = await reader.read(50, new Date(String(afterFutureClock!.current_at)));
+      expect(afterFuture.entries.find(({ source }) => source.id === sourceId)?.governanceState)
+        .toBe("not-approved");
+
+      const [revocation] = await admin.sql`
+        insert into source_permissions (
+          source_id, decision, reviewed_at, valid_until, permissions, notes,
+          created_at
+        ) values (
+          ${sourceId}, 'revoked',
+          ${new Date(snapshotAt.getTime() - 2 * 60 * 60_000).toISOString()},
+          null, '{}'::jsonb, 'source-status backdated revocation',
+          '2000-01-01T00:00:00Z'
+        )
+        returning created_at > ${snapshotAt.toISOString()}::timestamptz as created_later
+      `;
+      expect(revocation?.created_later).toBe(true);
+      await expect(reader.read(50, snapshotAt)).resolves.toEqual(baseline);
+
+      const [currentClock] = await admin.sql`
+        select clock_timestamp() + interval '1 millisecond' as current_at
+      `;
+      const currentAt = new Date(String(currentClock!.current_at));
+      const current = await reader.read(50, currentAt);
+      expect(current.entries.find(({ source }) => source.id === sourceId)?.governanceState)
+        .toBe("not-approved");
+    });
   },
 );

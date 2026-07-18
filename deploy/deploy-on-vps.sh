@@ -1,17 +1,27 @@
 #!/bin/sh
 set -eu
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 . "$script_dir/deployment-state.sh"
 
 app_root=${HANDLEPLAN_APP_ROOT:-/opt/apps/handleplan}
 repository_url=${HANDLEPLAN_REPOSITORY_URL:-https://github.com/Reedtrullz/Handli.git}
-revision=${1:-}
-ci_run_id=${2:-}
-ci_run_attempt=${3:-}
-expected_bundle_manifest_sha256=${4:-}
+if [ "$#" -ne 7 ]; then
+  echo "Usage: $0 <40-character commit SHA> <CI run ID> <CI run attempt> <bundle manifest SHA-256> <pending token> <previous SHA> <previous image ID>" >&2
+  exit 2
+fi
+revision=$1
+ci_run_id=$2
+ci_run_attempt=$3
+expected_bundle_manifest_sha256=$4
+pending_deployment_token=$5
+expected_previous_revision=$6
+expected_previous_image_id=$7
 max_source_archive_bytes=134217728
 max_image_archive_bytes=2147483648
+max_provenance_bytes=16777216
+max_sbom_bytes=67108864
+pending_deployment_timeout_seconds=900
 
 case "$revision" in
   ''|*[!0-9a-f]*)
@@ -45,17 +55,279 @@ if [ "${#expected_bundle_manifest_sha256}" -ne 64 ]; then
   echo "Bundle manifest SHA-256 must be 64 lowercase hexadecimal characters" >&2
   exit 2
 fi
+valid_pending_deployment_token "$pending_deployment_token" || {
+  echo "Usage: $0 <40-character commit SHA> <CI run ID> <CI run attempt> <bundle manifest SHA-256> <pending token> <previous SHA> <previous image ID>" >&2
+  exit 2
+}
+valid_deployment_revision "$expected_previous_revision" \
+  && valid_deployment_image_id "$expected_previous_image_id" \
+  && [ "$expected_previous_revision" != "$revision" ] || {
+  echo "Deployment requires a distinct immutable predecessor guard" >&2
+  exit 2
+}
 
 shared="$app_root/shared"
 source_dir="$app_root/source"
 state_dir="$app_root/state"
 env_file="$shared/production.env"
+deploy_bundle_root=${HANDLEPLAN_DEPLOY_BUNDLE_ROOT:-$app_root/deploy-bundles}
 bundle_dir="$script_dir/image"
 bundle_manifest="$bundle_dir/handleplan-image-bundle.v1"
 image_archive="$bundle_dir/handleplan-image.docker.tar"
 source_archive="$bundle_dir/handleplan-source.tar"
 provenance_artifact="$bundle_dir/handleplan.provenance.json"
 sbom_artifact="$bundle_dir/handleplan.spdx.json"
+deployment_bundle_lease="$script_dir/.lease.v1"
+
+valid_positive_decimal() {
+  case "$1" in
+    ''|0|0[0-9]*|*[!0-9]*) return 1 ;;
+  esac
+}
+
+split_deploy_bundle_pair() {
+  deploy_bundle_pair=$1
+  case "$deploy_bundle_pair" in
+    *-*) ;;
+    *) return 1 ;;
+  esac
+  deploy_bundle_pair_run=${deploy_bundle_pair%%-*}
+  deploy_bundle_pair_attempt=${deploy_bundle_pair#*-}
+  valid_positive_decimal "$deploy_bundle_pair_run" \
+    && valid_positive_decimal "$deploy_bundle_pair_attempt" \
+    && [ "$deploy_bundle_pair" = \
+      "$deploy_bundle_pair_run-$deploy_bundle_pair_attempt" ]
+}
+
+validate_deploy_bundle_leaf() {
+  deploy_bundle_leaf=$1
+  case "$deploy_bundle_leaf" in
+    "$deploy_bundle_root_physical"/*) ;;
+    *) return 1 ;;
+  esac
+  deploy_bundle_relative=${deploy_bundle_leaf#"$deploy_bundle_root_physical"/}
+  deploy_bundle_leaf_revision=${deploy_bundle_relative%%/*}
+  deploy_bundle_remainder=${deploy_bundle_relative#*/}
+  [ "$deploy_bundle_remainder" != "$deploy_bundle_relative" ] || return 1
+  deploy_bundle_leaf_ci_pair=${deploy_bundle_remainder%%/*}
+  deploy_bundle_leaf_deploy_pair=${deploy_bundle_remainder#*/}
+  [ "$deploy_bundle_leaf_deploy_pair" != "$deploy_bundle_remainder" ] || return 1
+  case "$deploy_bundle_leaf_deploy_pair" in
+    */*) return 1 ;;
+  esac
+  valid_deployment_revision "$deploy_bundle_leaf_revision" || return 1
+  split_deploy_bundle_pair "$deploy_bundle_leaf_ci_pair" || return 1
+  deploy_bundle_leaf_ci_run=$deploy_bundle_pair_run
+  deploy_bundle_leaf_ci_attempt=$deploy_bundle_pair_attempt
+  split_deploy_bundle_pair "$deploy_bundle_leaf_deploy_pair" || return 1
+  deploy_bundle_leaf_deploy_run=$deploy_bundle_pair_run
+  deploy_bundle_leaf_deploy_attempt=$deploy_bundle_pair_attempt
+  deploy_bundle_revision_dir="$deploy_bundle_root_physical/$deploy_bundle_leaf_revision"
+  deploy_bundle_ci_dir="$deploy_bundle_revision_dir/$deploy_bundle_leaf_ci_pair"
+  [ -d "$deploy_bundle_revision_dir" ] \
+    && [ ! -L "$deploy_bundle_revision_dir" ] \
+    && [ -d "$deploy_bundle_ci_dir" ] \
+    && [ ! -L "$deploy_bundle_ci_dir" ] \
+    && [ -d "$deploy_bundle_leaf" ] \
+    && [ ! -L "$deploy_bundle_leaf" ]
+}
+
+read_deploy_bundle_lease() {
+  deploy_bundle_lease_path=$1
+  [ -f "$deploy_bundle_lease_path" ] \
+    && [ ! -L "$deploy_bundle_lease_path" ] || return 1
+  deploy_bundle_lease_version=""
+  deploy_bundle_lease_revision=""
+  deploy_bundle_lease_ci_run=""
+  deploy_bundle_lease_ci_attempt=""
+  deploy_bundle_lease_deploy_run=""
+  deploy_bundle_lease_deploy_attempt=""
+  deploy_bundle_lease_expires=""
+  deploy_bundle_lease_extra=""
+  IFS=' ' read -r \
+    deploy_bundle_lease_version \
+    deploy_bundle_lease_revision \
+    deploy_bundle_lease_ci_run \
+    deploy_bundle_lease_ci_attempt \
+    deploy_bundle_lease_deploy_run \
+    deploy_bundle_lease_deploy_attempt \
+    deploy_bundle_lease_expires \
+    deploy_bundle_lease_extra < "$deploy_bundle_lease_path" || return 1
+  deploy_bundle_lease_contents=$(cat "$deploy_bundle_lease_path") || return 1
+  [ "$deploy_bundle_lease_contents" = \
+    "$deploy_bundle_lease_version $deploy_bundle_lease_revision $deploy_bundle_lease_ci_run $deploy_bundle_lease_ci_attempt $deploy_bundle_lease_deploy_run $deploy_bundle_lease_deploy_attempt $deploy_bundle_lease_expires" ] \
+    && [ "$deploy_bundle_lease_version" = "v1" ] \
+    && valid_deployment_revision "$deploy_bundle_lease_revision" \
+    && valid_positive_decimal "$deploy_bundle_lease_ci_run" \
+    && valid_positive_decimal "$deploy_bundle_lease_ci_attempt" \
+    && valid_positive_decimal "$deploy_bundle_lease_deploy_run" \
+    && valid_positive_decimal "$deploy_bundle_lease_deploy_attempt" \
+    && valid_positive_decimal "$deploy_bundle_lease_expires" \
+    && [ "${#deploy_bundle_lease_expires}" -le 12 ] \
+    && [ -z "$deploy_bundle_lease_extra" ]
+}
+
+remove_deploy_bundle_leaf() {
+  deploy_bundle_remove_leaf=$1
+  validate_deploy_bundle_leaf "$deploy_bundle_remove_leaf" || {
+    echo "Refusing to remove an invalid deployment transfer-bundle path" >&2
+    return 1
+  }
+  [ "$deploy_bundle_remove_leaf" != "$script_dir" ] || return 0
+  deploy_bundle_remove_ci_dir=$deploy_bundle_ci_dir
+  deploy_bundle_remove_revision_dir=$deploy_bundle_revision_dir
+  rm -rf -- "$deploy_bundle_remove_leaf" || return 1
+  rmdir "$deploy_bundle_remove_ci_dir" 2>/dev/null || true
+  rmdir "$deploy_bundle_remove_revision_dir" 2>/dev/null || true
+}
+
+prune_deploy_bundle_staging() {
+  deploy_bundle_now=$(date +%s) || return 1
+  valid_positive_decimal "$deploy_bundle_now" || return 1
+  deploy_bundle_maximum_lease=$((deploy_bundle_now + 10800))
+  deploy_bundle_unsafe_link=$(find "$deploy_bundle_root_physical" \
+    -mindepth 1 -maxdepth 3 -type l -print -quit) || return 1
+  [ -z "$deploy_bundle_unsafe_link" ] || {
+    echo "Deployment transfer-bundle root contains an unsafe symbolic link" >&2
+    return 1
+  }
+  # Walk exactly three path components with quoted shell globs. Unlike a
+  # newline-delimited `find` result, this cannot split an attacker-controlled
+  # filename into a different validated deletion target.
+  for deploy_bundle_revision_entry in \
+    "$deploy_bundle_root_physical"/* \
+    "$deploy_bundle_root_physical"/.[!.]* \
+    "$deploy_bundle_root_physical"/..?*
+  do
+    if [ ! -e "$deploy_bundle_revision_entry" ] \
+      && [ ! -L "$deploy_bundle_revision_entry" ]; then
+      continue
+    fi
+    [ -d "$deploy_bundle_revision_entry" ] \
+      && [ ! -L "$deploy_bundle_revision_entry" ] || {
+      echo "Deployment transfer-bundle root contains an invalid revision entry" >&2
+      return 1
+    }
+    deploy_bundle_revision_name=${deploy_bundle_revision_entry##*/}
+    valid_deployment_revision "$deploy_bundle_revision_name" || {
+      echo "Deployment transfer-bundle root contains an invalid revision directory" >&2
+      return 1
+    }
+    for deploy_bundle_ci_entry in \
+      "$deploy_bundle_revision_entry"/* \
+      "$deploy_bundle_revision_entry"/.[!.]* \
+      "$deploy_bundle_revision_entry"/..?*
+    do
+      if [ ! -e "$deploy_bundle_ci_entry" ] && [ ! -L "$deploy_bundle_ci_entry" ]; then
+        continue
+      fi
+      [ -d "$deploy_bundle_ci_entry" ] && [ ! -L "$deploy_bundle_ci_entry" ] || {
+        echo "Deployment transfer-bundle revision contains an invalid CI entry" >&2
+        return 1
+      }
+      deploy_bundle_ci_name=${deploy_bundle_ci_entry##*/}
+      split_deploy_bundle_pair "$deploy_bundle_ci_name" || {
+        echo "Deployment transfer-bundle revision contains an invalid CI directory" >&2
+        return 1
+      }
+      for deploy_bundle_candidate in \
+        "$deploy_bundle_ci_entry"/* \
+        "$deploy_bundle_ci_entry"/.[!.]* \
+        "$deploy_bundle_ci_entry"/..?*
+      do
+        if [ ! -e "$deploy_bundle_candidate" ] && [ ! -L "$deploy_bundle_candidate" ]; then
+          continue
+        fi
+        validate_deploy_bundle_leaf "$deploy_bundle_candidate" || {
+          echo "Deployment transfer-bundle root contains an invalid leaf" >&2
+          return 1
+        }
+        [ "$deploy_bundle_candidate" != "$script_dir" ] || continue
+        deploy_bundle_candidate_lease="$deploy_bundle_candidate/.lease.v1"
+        if [ -e "$deploy_bundle_candidate_lease" ] \
+          || [ -L "$deploy_bundle_candidate_lease" ]; then
+          if ! read_deploy_bundle_lease "$deploy_bundle_candidate_lease"; then
+            deploy_bundle_stale_invalid_lease=$(find "$deploy_bundle_candidate_lease" \
+              -prune -mmin +180 -print -quit) || return 1
+            if [ -z "$deploy_bundle_stale_invalid_lease" ]; then
+              echo "Preserving a recent invalid deployment transfer-bundle lease" >&2
+              continue
+            fi
+            remove_deploy_bundle_leaf "$deploy_bundle_candidate" || return 1
+            continue
+          fi
+          [ "$deploy_bundle_lease_revision" = "$deploy_bundle_leaf_revision" ] \
+            && [ "$deploy_bundle_lease_ci_run" = "$deploy_bundle_leaf_ci_run" ] \
+            && [ "$deploy_bundle_lease_ci_attempt" = "$deploy_bundle_leaf_ci_attempt" ] \
+            && [ "$deploy_bundle_lease_deploy_run" = "$deploy_bundle_leaf_deploy_run" ] \
+            && [ "$deploy_bundle_lease_deploy_attempt" = \
+              "$deploy_bundle_leaf_deploy_attempt" ] || {
+            echo "Deployment transfer-bundle lease does not match its path" >&2
+            return 1
+          }
+          if [ "$deploy_bundle_lease_expires" -gt "$deploy_bundle_maximum_lease" ]; then
+            echo "Deployment transfer-bundle lease exceeds the bounded horizon" >&2
+            return 1
+          fi
+          if [ "$deploy_bundle_lease_expires" -ge "$deploy_bundle_now" ]; then
+            continue
+          fi
+        fi
+        remove_deploy_bundle_leaf "$deploy_bundle_candidate" || return 1
+      done
+      rmdir "$deploy_bundle_ci_entry" 2>/dev/null || true
+    done
+    rmdir "$deploy_bundle_revision_entry" 2>/dev/null || true
+  done
+}
+
+test -d "$deploy_bundle_root" && test ! -L "$deploy_bundle_root" || {
+  echo "Deployment transfer-bundle root must be a regular directory" >&2
+  exit 1
+}
+deploy_bundle_root_physical=$(CDPATH= cd -- "$deploy_bundle_root" && pwd -P) || exit 1
+test "$deploy_bundle_root_physical" = "$deploy_bundle_root" || {
+  echo "Deployment transfer-bundle root must use its canonical absolute path" >&2
+  exit 1
+}
+validate_deploy_bundle_leaf "$script_dir" || {
+  echo "Deployment script must run from an exact transfer-bundle leaf" >&2
+  exit 1
+}
+test "$deploy_bundle_leaf_revision" = "$revision" \
+  && test "$deploy_bundle_leaf_ci_run" = "$ci_run_id" \
+  && test "$deploy_bundle_leaf_ci_attempt" = "$ci_run_attempt" || {
+  echo "Deployment transfer-bundle path does not match the requested CI candidate" >&2
+  exit 1
+}
+read_deploy_bundle_lease "$deployment_bundle_lease" || {
+  echo "Deployment transfer bundle is missing its bounded lease" >&2
+  exit 1
+}
+test "$deploy_bundle_lease_revision" = "$deploy_bundle_leaf_revision" \
+  && test "$deploy_bundle_lease_ci_run" = "$deploy_bundle_leaf_ci_run" \
+  && test "$deploy_bundle_lease_ci_attempt" = "$deploy_bundle_leaf_ci_attempt" \
+  && test "$deploy_bundle_lease_deploy_run" = "$deploy_bundle_leaf_deploy_run" \
+  && test "$deploy_bundle_lease_deploy_attempt" = \
+    "$deploy_bundle_leaf_deploy_attempt" \
+  && test "$deploy_bundle_lease_expires" -ge "$(date +%s)" || {
+  echo "Deployment transfer-bundle lease is expired or does not match its path" >&2
+  exit 1
+}
+deployment_bundle_lease_owned=1
+remove_current_deploy_bundle_lease() {
+  if [ "$deployment_bundle_lease_owned" -eq 1 ]; then
+    rm -f -- "$deployment_bundle_lease" || return 1
+    deployment_bundle_lease_owned=0
+  fi
+}
+cleanup_initial_deploy_bundle_lease() {
+  remove_current_deploy_bundle_lease || true
+}
+trap cleanup_initial_deploy_bundle_lease EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 test -f "$env_file" || { echo "Missing $env_file" >&2; exit 1; }
 
@@ -100,15 +372,45 @@ test "$review_access_audience" != "$operations_access_audience" || {
 unset review_access_audience operations_access_audience
 
 mkdir -p "$shared" "$state_dir"
-acquire_deployment_operation_lock "$state_dir"
 cleanup_early_deployment_lock() {
-  release_deployment_operation_lock || true
+  if release_deployment_operation_lock; then
+    remove_current_deploy_bundle_lease || true
+  fi
 }
 trap cleanup_early_deployment_lock EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+trap '' HUP INT TERM
+acquire_deployment_operation_lock "$state_dir"
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 load_deployment_state "$state_dir"
+test -n "$previous_revision" \
+  && test "$previous_compatibility_mode" = "current" \
+  && test -n "$previous_image_id" || {
+  echo "Automated deployment requires one verified immutable predecessor; first deployment fails closed" >&2
+  exit 1
+}
+test "$previous_revision" = "$expected_previous_revision" \
+  && test "$previous_image_id" = "$expected_previous_image_id" || {
+  echo "Committed deployment changed after the runner captured its rollback guard" >&2
+  exit 1
+}
+test ! -e "$state_dir/pending-deployment" \
+  && test ! -L "$state_dir/pending-deployment" || {
+  echo "An unresolved pending deployment blocks every newer deployment" >&2
+  exit 1
+}
+assert_pending_watchdog_capacity "$state_dir" || {
+  echo "Deployment refused because pending-watchdog capacity is unavailable" >&2
+  exit 1
+}
+prune_deploy_bundle_staging || {
+  echo "Could not safely prune deployment transfer-bundle staging" >&2
+  exit 1
+}
 
 # CI is the only image builder. The VPS accepts a fixed five-file bundle from
 # the exact successful workflow run and never rebuilds the image. The source
@@ -118,6 +420,9 @@ build_root=$(mktemp -d "$app_root/.deploy-load.XXXXXX")
 deployment_source_dir="$build_root/source"
 candidate_runtime_may_exist=0
 deployment_committed=0
+pending_deployment_recorded=0
+pending_watchdog_lease_recorded=0
+pending_watchdog_launched=0
 exit_cleanup_running=0
 operations_release_activation_required=0
 operations_release_activated=0
@@ -146,6 +451,7 @@ cleanup_on_exit() {
         exit_status=1
       fi
     fi
+    candidate_cleanup_succeeded=1
     if [ "$candidate_runtime_may_exist" -eq 1 ] \
       && [ "$deployment_committed" -ne 1 ]; then
       echo "Deployment interrupted after candidate startup; removing every candidate runtime" >&2
@@ -153,10 +459,43 @@ cleanup_on_exit() {
         :
       else
         echo "Interrupted deployment cleanup could not prove a closed candidate state" >&2
+        candidate_cleanup_succeeded=0
+      fi
+    fi
+    if [ "$pending_deployment_recorded" -eq 1 ] \
+      && [ "$deployment_committed" -ne 1 ] \
+      && [ "$candidate_cleanup_succeeded" -eq 1 ]; then
+      pending_watchdog_launch_cleanup_ok=1
+      if [ "$pending_watchdog_lease_recorded" -eq 1 ] \
+        && [ "$pending_watchdog_launched" -ne 1 ]; then
+        if clear_pending_watchdog_lease \
+          "$state_dir" "$revision" "$loaded_image_id" \
+          "$previous_revision" "$previous_image_id" \
+          "$pending_deployment_deadline" "$pending_deployment_token"; then
+          pending_watchdog_lease_recorded=0
+        else
+          echo "Could not clear the unlaunched pending-watchdog lease" >&2
+          pending_watchdog_launch_cleanup_ok=0
+          exit_status=1
+        fi
+      fi
+      if [ "$pending_watchdog_launch_cleanup_ok" -eq 1 ] \
+        && clear_pending_deployment_state \
+          "$state_dir" "$revision" "$loaded_image_id" \
+          "$previous_revision" "$previous_image_id" \
+          "$pending_deployment_deadline" "$pending_deployment_token"; then
+          pending_deployment_recorded=0
+      else
+        echo "Could not clear the uncommitted pending-deployment guard" >&2
+        exit_status=1
       fi
     fi
     cleanup_build_root
-    if ! release_deployment_operation_lock; then
+    if release_deployment_operation_lock; then
+      if ! remove_current_deploy_bundle_lease; then
+        exit_status=1
+      fi
+    else
       exit_status=1
     fi
   fi
@@ -202,12 +541,12 @@ test "$(sha256sum "$bundle_manifest" | awk '{print $1}')" = \
   echo "CI image bundle manifest does not match the digest verified by the deploy runner" >&2
   exit 1
 }
-test "$manifest_lines" -eq 10 || {
+test "$manifest_lines" -eq 15 || {
   echo "CI image bundle manifest has an invalid shape" >&2
   exit 1
 }
 test "$(sed -n '1p' "$bundle_manifest")" = \
-  'format=handleplan-ci-image-bundle-v1' || {
+  'format=handleplan-ci-image-bundle-v3' || {
   echo "CI image bundle format is unsupported" >&2
   exit 1
 }
@@ -221,13 +560,38 @@ test "$(sed -n '3p' "$bundle_manifest")" = \
   exit 1
 }
 manifest_image_id=$(sed -n '4p' "$bundle_manifest")
-manifest_image_archive_sha256=$(sed -n '5p' "$bundle_manifest")
-manifest_source_archive_sha256=$(sed -n '6p' "$bundle_manifest")
-manifest_provenance_sha256=$(sed -n '7p' "$bundle_manifest")
-manifest_sbom_sha256=$(sed -n '8p' "$bundle_manifest")
+manifest_platform=$(sed -n '5p' "$bundle_manifest")
+manifest_runtime_source_digest_sha256=$(sed -n '6p' "$bundle_manifest")
+manifest_runtime_source_file_count=$(sed -n '7p' "$bundle_manifest")
+manifest_runtime_shipment_digest_sha256=$(sed -n '8p' "$bundle_manifest")
+manifest_runtime_shipment_entry_count=$(sed -n '9p' "$bundle_manifest")
+manifest_image_archive_sha256=$(sed -n '10p' "$bundle_manifest")
+manifest_source_archive_sha256=$(sed -n '11p' "$bundle_manifest")
+manifest_provenance_sha256=$(sed -n '12p' "$bundle_manifest")
+manifest_sbom_sha256=$(sed -n '13p' "$bundle_manifest")
 case "$manifest_image_id" in
   image_id=*) expected_image_id=${manifest_image_id#image_id=} ;;
   *) echo "CI image bundle is missing its image config digest" >&2; exit 1 ;;
+esac
+test "$manifest_platform" = 'platform=linux/amd64' || {
+  echo "CI image bundle platform is not the supported linux/amd64 target" >&2
+  exit 1
+}
+case "$manifest_runtime_source_digest_sha256" in
+  runtime_source_digest_sha256=*) runtime_source_digest_sha256=${manifest_runtime_source_digest_sha256#runtime_source_digest_sha256=} ;;
+  *) echo "CI image bundle is missing its privileged runtime source digest" >&2; exit 1 ;;
+esac
+case "$manifest_runtime_source_file_count" in
+  runtime_source_file_count=*) runtime_source_file_count=${manifest_runtime_source_file_count#runtime_source_file_count=} ;;
+  *) echo "CI image bundle is missing its privileged runtime source count" >&2; exit 1 ;;
+esac
+case "$manifest_runtime_shipment_digest_sha256" in
+  runtime_shipment_digest_sha256=*) runtime_shipment_digest_sha256=${manifest_runtime_shipment_digest_sha256#runtime_shipment_digest_sha256=} ;;
+  *) echo "CI image bundle is missing its privileged runtime shipment digest" >&2; exit 1 ;;
+esac
+case "$manifest_runtime_shipment_entry_count" in
+  runtime_shipment_entry_count=*) runtime_shipment_entry_count=${manifest_runtime_shipment_entry_count#runtime_shipment_entry_count=} ;;
+  *) echo "CI image bundle is missing its privileged runtime shipment count" >&2; exit 1 ;;
 esac
 case "$manifest_image_archive_sha256" in
   image_archive_sha256=*) image_archive_sha256=${manifest_image_archive_sha256#image_archive_sha256=} ;;
@@ -245,11 +609,11 @@ case "$manifest_sbom_sha256" in
   sbom_sha256=*) sbom_sha256=${manifest_sbom_sha256#sbom_sha256=} ;;
   *) echo "CI image bundle is missing its SBOM digest" >&2; exit 1 ;;
 esac
-test "$(sed -n '9p' "$bundle_manifest")" = "ci_run_id=$ci_run_id" || {
+test "$(sed -n '14p' "$bundle_manifest")" = "ci_run_id=$ci_run_id" || {
   echo "CI image bundle run ID does not match the invoking workflow" >&2
   exit 1
 }
-test "$(sed -n '10p' "$bundle_manifest")" = \
+test "$(sed -n '15p' "$bundle_manifest")" = \
   "ci_run_attempt=$ci_run_attempt" || {
   echo "CI image bundle run attempt does not match the invoking workflow" >&2
   exit 1
@@ -270,7 +634,23 @@ valid_hex_digest "$expected_image_digest" || {
   echo "CI image config digest is invalid" >&2
   exit 1
 }
+# A successful CI rerun may rebuild the same revision. Refuse a conflicting
+# revision-to-image binding before loading an image or touching any runtime.
+verified_candidate_manifest="$state_dir/verified-images/$revision"
+if [ -e "$verified_candidate_manifest" ] || [ -L "$verified_candidate_manifest" ]; then
+  previously_verified_image_id=$(load_verified_deployment_image \
+    "$state_dir" "$revision") || {
+    echo "Existing verified image state is invalid" >&2
+    exit 1
+  }
+  test "$previously_verified_image_id" = "$expected_image_id" || {
+    echo "Revision is already bound to a different immutable image; refusing CI rerun" >&2
+    exit 1
+  }
+fi
 for expected_digest in \
+  "$runtime_source_digest_sha256" \
+  "$runtime_shipment_digest_sha256" \
   "$image_archive_sha256" \
   "$source_archive_sha256" \
   "$provenance_sha256" \
@@ -281,6 +661,17 @@ do
     exit 1
   }
 done
+case "$runtime_source_file_count" in
+  ''|0*|*[!0-9]*) echo "CI image bundle contains an invalid privileged runtime source count" >&2; exit 1 ;;
+esac
+case "$runtime_shipment_entry_count" in
+  ''|0*|*[!0-9]*) echo "CI image bundle contains an invalid privileged runtime shipment count" >&2; exit 1 ;;
+esac
+if [ "${#runtime_source_file_count}" -gt 16 ] \
+  || [ "${#runtime_shipment_entry_count}" -gt 16 ]; then
+  echo "CI image bundle contains an out-of-range privileged runtime count" >&2
+  exit 1
+fi
 
 test "$(sha256sum "$image_archive" | awk '{print $1}')" = \
   "$image_archive_sha256" || {
@@ -304,6 +695,8 @@ test "$(sha256sum "$sbom_artifact" | awk '{print $1}')" = "$sbom_sha256" || {
 
 image_archive_bytes=$(wc -c < "$image_archive" | tr -d '[:space:]')
 source_archive_bytes=$(wc -c < "$source_archive" | tr -d '[:space:]')
+provenance_bytes=$(wc -c < "$provenance_artifact" | tr -d '[:space:]')
+sbom_bytes=$(wc -c < "$sbom_artifact" | tr -d '[:space:]')
 case "$image_archive_bytes" in
   ''|*[!0-9]*)
     echo "Could not measure the exact CI Docker archive" >&2
@@ -316,6 +709,18 @@ case "$source_archive_bytes" in
     exit 1
     ;;
 esac
+case "$provenance_bytes" in
+  ''|*[!0-9]*)
+    echo "Could not measure the exact CI provenance artifact" >&2
+    exit 1
+    ;;
+esac
+case "$sbom_bytes" in
+  ''|*[!0-9]*)
+    echo "Could not measure the exact CI SBOM artifact" >&2
+    exit 1
+    ;;
+esac
 if [ "$image_archive_bytes" -le 0 ] \
   || [ "$image_archive_bytes" -gt "$max_image_archive_bytes" ]; then
   echo "Exact CI Docker archive is empty or exceeds the 2 GiB limit" >&2
@@ -324,6 +729,16 @@ fi
 if [ "$source_archive_bytes" -le 0 ] \
   || [ "$source_archive_bytes" -gt "$max_source_archive_bytes" ]; then
   echo "Exact CI source archive is empty or exceeds the 128 MiB limit" >&2
+  exit 1
+fi
+if [ "$provenance_bytes" -le 0 ] \
+  || [ "$provenance_bytes" -gt "$max_provenance_bytes" ]; then
+  echo "Exact CI provenance artifact is empty or exceeds the 16 MiB limit" >&2
+  exit 1
+fi
+if [ "$sbom_bytes" -le 0 ] \
+  || [ "$sbom_bytes" -gt "$max_sbom_bytes" ]; then
+  echo "Exact CI SBOM artifact is empty or exceeds the 64 MiB limit" >&2
   exit 1
 fi
 tar -tf "$image_archive" >/dev/null || {
@@ -449,6 +864,19 @@ test "$loaded_image_revision" = "$revision" || {
   echo "Loaded image revision label does not match the requested commit" >&2
   exit 1
 }
+loaded_image_platform=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")
+test "$loaded_image_platform" = 'linux/amd64' || {
+  echo "Loaded image platform is not the supported linux/amd64 target" >&2
+  exit 1
+}
+test "$(docker image inspect --format '{{.Id}}' "$previous_image_id")" = \
+  "$previous_image_id" \
+  && test "$(docker image inspect \
+    --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+    "$previous_image_id")" = "$previous_revision" || {
+  echo "Verified predecessor image is missing or differs from immutable deployment state" >&2
+  exit 1
+}
 
 private_migration_gate_failed=0
 private_runtimes_absent=0
@@ -505,7 +933,7 @@ deploy() {
   migration_revision=$2
   compatibility_mode=${3:-current}
   target_image=${4:-handleplan:$target_revision}
-  migration_image="handleplan:$migration_revision"
+  migration_image=${5:-handleplan:$migration_revision}
   if [ "$compatibility_mode" = "legacy" ]; then
     remove_runtime_services "$target_revision" "$migration_revision" \
       "Legacy rollback could not prove private runtimes and worker absent" \
@@ -588,7 +1016,8 @@ cleanup_failed_candidate_runtime() {
   fi
   if [ -n "$previous_fallback_image" ]; then
     echo "Deployment failed; restoring only the public app from $previous_revision" >&2
-    deploy "$previous_revision" "$revision" legacy "$previous_fallback_image"
+    deploy "$previous_revision" "$revision" legacy \
+      "$previous_fallback_image" "$loaded_image_id"
   else
     echo "Deployment failed; no verified prior image, leaving all candidate runtimes down" >&2
   fi
@@ -599,7 +1028,7 @@ worker_health=""
 
 verify_review_runtime() {
   target_revision=$1
-  target_image="handleplan:$target_revision"
+  target_image=$loaded_image_id
   review_container=$(APP_COMMIT_SHA="$target_revision" HANDLEPLAN_IMAGE="$target_image" \
     HANDLEPLAN_MIGRATION_IMAGE="$target_image" \
     docker compose --env-file "$env_file" \
@@ -627,7 +1056,7 @@ verify_review_runtime() {
 
 verify_operations_runtime() {
   target_revision=$1
-  target_image="handleplan:$target_revision"
+  target_image=$loaded_image_id
   operations_container=$(APP_COMMIT_SHA="$target_revision" HANDLEPLAN_IMAGE="$target_image" \
     HANDLEPLAN_MIGRATION_IMAGE="$target_image" \
     docker compose --env-file "$env_file" \
@@ -659,7 +1088,7 @@ verify_operations_runtime() {
 
 read_worker_health() {
   target_revision=$1
-  target_image="handleplan:$target_revision"
+  target_image=$loaded_image_id
   APP_COMMIT_SHA="$target_revision" HANDLEPLAN_IMAGE="$target_image" \
     HANDLEPLAN_MIGRATION_IMAGE="$target_image" \
     docker compose --env-file "$env_file" \
@@ -669,7 +1098,7 @@ read_worker_health() {
 
 verify_current_deployment() {
   target_revision=$1
-  target_image="handleplan:$target_revision"
+  target_image=$loaded_image_id
   health=$(curl --fail --silent --show-error http://127.0.0.1:3004/api/health) || return 1
   printf '%s' "$health" | grep -F "\"commit\":\"$target_revision\"" >/dev/null \
     || return 1
@@ -678,7 +1107,9 @@ verify_current_deployment() {
     docker compose --env-file "$env_file" \
       -f "$deployment_source_dir/deploy/compose.production.yml" ps -q app) || return 1
   test -n "$app_container" || return 1
+  app_image=$(docker inspect --format '{{.Config.Image}}' "$app_container") || return 1
   app_image_id=$(docker inspect --format '{{.Image}}' "$app_container") || return 1
+  test "$app_image" = "$target_image" || return 1
   test "$app_image_id" = "$loaded_image_id" || return 1
   verify_review_runtime "$target_revision" || return 1
   verify_operations_runtime "$target_revision" || return 1
@@ -692,12 +1123,14 @@ verify_current_deployment() {
     test -n "$worker_container" || return 1
     worker_state=$(docker inspect --format '{{.State.Status}}' "$worker_container") || return 1
     worker_restarts=$(docker inspect --format '{{.RestartCount}}' "$worker_container") || return 1
+    worker_image=$(docker inspect --format '{{.Config.Image}}' "$worker_container") || return 1
     worker_image_id=$(docker inspect --format '{{.Image}}' "$worker_container") || return 1
     worker_container_health=$(docker inspect \
       --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' \
       "$worker_container") || return 1
     test "$worker_state" = "running" || return 1
     test "$worker_restarts" = "0" || return 1
+    test "$worker_image" = "$target_image" || return 1
     test "$worker_image_id" = "$loaded_image_id" || return 1
     case "$worker_container_health" in
       healthy|starting) ;;
@@ -753,7 +1186,9 @@ verify_operations_release() (
     compose.production.yml \
     compose.rollback-legacy.yml \
     deployment-state.sh \
-    rollback-on-vps.sh
+    resolve-pending-deployment-on-vps.sh \
+    rollback-on-vps.sh \
+    watch-pending-deployment-on-vps.sh
   do
     cmp -s "$deployment_source_dir/deploy/$operations_file" \
       "$release_dir/deploy/$operations_file" || {
@@ -802,7 +1237,9 @@ prepare_operations_release() (
       compose.production.yml \
       compose.rollback-legacy.yml \
       deployment-state.sh \
-      rollback-on-vps.sh
+      resolve-pending-deployment-on-vps.sh \
+      rollback-on-vps.sh \
+      watch-pending-deployment-on-vps.sh
     do
       test -f "$deployment_source_dir/deploy/$operations_file" \
         && test ! -L "$deployment_source_dir/deploy/$operations_file" || {
@@ -821,7 +1258,9 @@ prepare_operations_release() (
     find "$release_tmp" -type f -exec chmod 444 {} \;
     chmod 555 \
       "$release_tmp/deploy/deployment-state.sh" \
-      "$release_tmp/deploy/rollback-on-vps.sh"
+      "$release_tmp/deploy/resolve-pending-deployment-on-vps.sh" \
+      "$release_tmp/deploy/rollback-on-vps.sh" \
+      "$release_tmp/deploy/watch-pending-deployment-on-vps.sh"
     mv "$release_tmp" "$release_dir"
     trap - EXIT HUP INT TERM
   fi
@@ -863,7 +1302,7 @@ if ! prepare_operations_release; then
   echo "Deployment operations-release preparation failed before runtime quiesce" >&2
   exit 1
 fi
-if deploy "$revision" "$revision"; then
+if deploy "$revision" "$revision" current "$loaded_image_id" "$loaded_image_id"; then
   if verify_current_deployment "$revision"; then
     deployment_ok=1
   else
@@ -894,12 +1333,50 @@ if [ "$deployment_ok" -ne 1 ]; then
   exit 1
 fi
 
-# Once readback succeeds, make the state commit and its in-process marker one
-# signal-free critical section. Otherwise a signal between the atomic file
-# rename and the next shell command could roll back a deployment whose state was
-# already committed (or leave an uncommitted candidate live in the inverse
-# ordering).
+# External routing is verified by the deploy runner, after this remote command
+# returns. Before committing the candidate, create a token-bound pending record
+# and start an off-session watchdog from the immutable operations release. A
+# cancelled/lost runner therefore cannot strand an externally unverified image:
+# absent an exact acceptance, the watchdog invokes the guarded rollback after
+# fifteen minutes. This protocol intentionally requires a verified predecessor.
+pending_now=$(date +%s)
+valid_pending_deployment_deadline "$pending_now" || {
+  echo "Could not establish the pending-deployment deadline" >&2
+  exit 1
+}
+pending_deployment_deadline=$((pending_now + pending_deployment_timeout_seconds))
+pending_watchdog="$app_root/operations/current/deploy/watch-pending-deployment-on-vps.sh"
+test -x "$pending_watchdog" && test ! -L "$pending_watchdog" || {
+  echo "Missing exact pending-deployment watchdog control" >&2
+  exit 1
+}
+
+# Make pending publication, watchdog launch, state commit, and the in-process
+# marker one signal-free critical section. A signal in any inverse ordering
+# could otherwise leave a candidate live without either rollback ownership or a
+# truthful committed-state guard.
 trap '' HUP INT TERM
+record_pending_deployment_state \
+  "$state_dir" "$revision" "$loaded_image_id" \
+  "$previous_revision" "$previous_image_id" \
+  "$pending_deployment_deadline" "$pending_deployment_token"
+pending_deployment_recorded=1
+record_pending_watchdog_lease \
+  "$state_dir" "$revision" "$loaded_image_id" \
+  "$previous_revision" "$previous_image_id" \
+  "$pending_deployment_deadline" "$pending_deployment_token"
+pending_watchdog_lease_recorded=1
+nohup "$pending_watchdog" \
+  "$revision" "$loaded_image_id" "$pending_deployment_token" \
+  "$previous_revision" "$previous_image_id" "$pending_deployment_deadline" \
+  </dev/null >/dev/null 2>&1 &
+pending_watchdog_pid=$!
+sleep 1
+kill -0 "$pending_watchdog_pid" 2>/dev/null || {
+  echo "Pending-deployment watchdog did not survive launch" >&2
+  exit 1
+}
+pending_watchdog_launched=1
 record_immutable_deployment_state \
   "$state_dir" "$revision" current "$loaded_image_id" "$revision"
 deployment_committed=1
@@ -908,3 +1385,4 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 printf '%s\n' "$health"
 printf '%s\n' "$worker_health"
+printf 'pending-deployment-deadline=%s\n' "$pending_deployment_deadline"

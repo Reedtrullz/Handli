@@ -36,8 +36,11 @@ evidence; the worker has read-only access to those records.
 
 If access changes or cannot be verified after persistence, the run is finalized
 as `degraded` with `SOURCE_ACCESS_CHANGED`; it is never promoted to completed
-evidence. Binding the approval decision version and ingestion writes in one
-atomic database transaction remains a defense-in-depth hardening task.
+evidence. Every rights-sensitive persistence transaction also takes the same
+per-source governance lock used by permission appends and kill-switch updates,
+then verifies the exact run capability before resolving identities or writing
+observations, coverage, caches, or store projections. A governance change that
+wins the lock leaves review-only audit outcomes and no derived evidence writes.
 
 Catalog metadata corrections have an additional database boundary. An active
 canonical product changes only when the proposed record is strictly newer than
@@ -221,7 +224,7 @@ After deployment,
 the internal worker health request in the container. It requires zero restarts,
 the exact worker revision, ready health, and a newest completed cycle whose
 duration passed the committed cycle bound and whose `leaseAcquired` value is
-`true` before writing `state/current-revision`. A completed standby cycle proves
+`true` before it can create a pending deployment commit. A completed standby cycle proves
 the scheduler loop is alive but does not prove this deployment can own and fence
 work, so it is insufficient for promotion.
 The wait is bounded to 55 minutes, covering the four sequential production job
@@ -250,19 +253,51 @@ push to this repository's `main`; it has no direct manual-dispatch bypass. It
 checks out that exact CI revision and downloads the fixed five-file image bundle
 by the triggering workflow's run ID, run attempt, and revision-specific artifact
 name. Before configuring SSH it verifies the manifest shape, every SHA-256,
-archive bounds, the unsigned provenance subject/commit, and the loaded image's
-config digest and revision label. It transfers the bundle plus the verified
-manifest SHA-256, `deploy-on-vps.sh`, and `deployment-state.sh` over the
-pinned-host-key SSH channel into
+archive bounds, the semantic provenance and SPDX documents against the frozen
+checkout dependency inventory, and the loaded image's config digest, revision
+label, and exact `linux/amd64` platform. CI builds with an explicit
+`--platform=linux/amd64`; the v3 bundle manifest and both runner-side and VPS-side
+image inspection reject any other platform before runtime state changes. The
+semantic verifier runs under Node 22 with a frozen, script-disabled
+pnpm install. It transfers the bundle plus the verified manifest SHA-256, the
+locked exact-leaf cleanup control, `deploy-on-vps.sh`,
+`deployment-state.sh`, and the exact pending-deployment resolver/watchdog
+controls over the pinned-host-key SSH channel into
 `/opt/apps/handleplan/deploy-bundles/<revision>/<ci-run-id>-<ci-attempt>/<deploy-run-id>-<deploy-attempt>/`, and invokes
-the real remote script path so sibling resolution cannot depend on
-streamed-shell `$0` state.
+the real remote script path so sibling resolution cannot depend on streamed-shell
+`$0` state. Before transfer, the workflow rejects non-regular entries in the
+canonical deploy-control staging directory, removes abandoned regular helpers,
+and proves the directory empty. It then copies one uniquely named allocation
+helper, verifies its SHA-256, atomically renames the complete file, and executes
+that file rather than an SSH-stdin stream. The helper sweeps expired earlier
+attempts, creates the exact path, and publishes a server-clocked three-hour
+`.lease.v1` while holding the same create-only deploy/rollback operation lock.
+After the sweep it admits an allocation only when no other active or recently
+malformed lease remains, retained leaf count and measured bytes fit one
+2.25-GiB leaf, and the filesystem can reserve that entire leaf while leaving
+4 GiB free for PostgreSQL, Docker, and host operations. Image, source,
+provenance, and SBOM inputs are capped before upload. This deliberately trades
+up to three hours of deployment availability after runner loss for a hard
+staging bound; a valid live lease is never deleted merely to make room. The
+lease is refreshed before invoking that script. The VPS accepts only a canonical
+regular root and exactly three validated path components. Its quoted,
+component-by-component sweep does not split newline-shaped names, rejects
+symlinks and non-directory path entries, rejects leases beyond the three-hour
+horizon, preserves valid unexpired leases, and removes only finished or expired
+sibling leaves while holding that shared lock. Normal completion removes the
+lease, and the workflow's final helper revalidates and removes only its exact
+unleased leaf under that same lock. If transfer did not deliver the helper, or
+the lease is still active, deletion is deferred to a later locked sweep rather
+than racing remote work. Neither sweep nor
+exact-leaf cleanup traverses `state/`, `operations/`, or Docker image storage.
+Rollback therefore continues to depend solely on the create-once verified-image
+binding, the local immutable image ID, and the active operations release.
 The VPS fetches the exact `origin/main` ref, requires both the candidate and any
 recorded high-water deployment to remain reachable, and rejects a candidate
 older than that high-water mark. Before loading anything, it independently
 requires the exact five regular artifacts, run ID/attempt/revision bindings,
-all SHA-256 values, a maximum-2-GiB Docker archive, and a maximum-128-MiB source
-archive. It uses the extracted checksummed source archive—not the mutable
+all SHA-256 values, a maximum-2-GiB Docker archive, a maximum-128-MiB source
+archive, plus 16-MiB provenance and 64-MiB SBOM bounds. It uses the extracted checksummed source archive—not the mutable
 checkout—for Compose and migration definitions, and loads the already-built CI
 Docker archive. It then verifies the loaded config digest/revision label and
 requires the app, review, operations, and worker containers to use that exact
@@ -273,12 +308,95 @@ rule exists or is correctly configured.
 Its 120-minute job bound leaves explicit margin around the 55-minute worker
 cycle wait for artifact transfer/load, migration, verification, and rollback.
 Final workflow readback requires `v1 <revision> current`, the matching
-revision-only compatibility marker, and the exact CI image config digest.
+revision-only compatibility marker, the exact CI image config digest, and the
+candidate's exact seven-field token-bound pending record. Under the shared
+operation lock, the resolver checks the candidate image, predecessor image,
+fresh token, full record shape, current/high-water state, and a remaining
+deadline window of 120 through 900 seconds. Only that readback allows a
+separate GitHub-runner probe through the externally routed
+`https://handle.reidar.tech/` origin. `/api/health` must report the exact
+revision and `/api/ready` must report the exact migration required by that
+checkout. `GET /` must be the exact temporary redirect to `/planlegg`, and a
+DOM parser must find exactly one two-attribute source-bound public-build marker
+as a direct child of the real document head. Comment, script-text, body, and
+duplicate decoys are not markers. Redirects are not followed, response bodies
+and deadlines are bounded, HTML must declare UTF-8 before fatal byte decoding,
+and both API contracts must be no-store JSON. The `preview` GitHub
+Environment must provide `HANDLEPLAN_MONITOR_CF_ACCESS_CLIENT_ID` and
+`HANDLEPLAN_MONITOR_CF_ACCESS_CLIENT_SECRET` as secrets for a least-privilege
+Cloudflare Access service token. Missing credentials, an Access redirect, an
+edge-routing failure, a root 404/wrong redirect, a build/revision mismatch, or
+unavailable readiness rejects the candidate; it cannot report a successful
+deployment. This promotion
+probe intentionally does not make source-operational status a restart or
+deployment-readiness condition; the independent public monitor owns that
+separate signal.
 
-This handoff identifies exact image bytes with the Docker-archive SHA-256 and
-Docker config digest. It does not claim a signed registry OCI manifest,
-release-grade provenance, or public promotion; the CI bundle expires after
-seven days and promotion remains intentionally blocked.
+The automated workflow deliberately refuses a first deployment or any candidate
+without a distinct, locally present predecessor whose full commit, create-once
+revision-to-image binding, image ID, and OCI revision label all agree. It also
+refuses to begin while `state/pending-deployment` exists. After complete local
+runtime readback, `deploy-on-vps.sh` masks catchable signals, atomically creates
+a 15-minute pending record containing the candidate, exact predecessor,
+deadline, and a fresh 256-bit runner token, starts the detached immutable
+watchdog, proves that process survived launch, and only then commits the
+candidate as current. The workflow accepts it only after the external probe by
+presenting the same token to the resolver under the shared operation lock.
+Acceptance first atomically publishes `state/accepted-deployment` with the same
+seven fields, then removes only that exact pending record. The retained latest
+decision makes acceptance idempotent if the VPS completed it but the runner
+lost the SSH response.
+
+If any later step fails, the workflow asks the transferred exact resolver to
+reject the candidate. Pending rejection is a dedicated network-independent
+path: under one shared lock it revalidates the exact token-bound pending record
+and candidate-as-current state, verifies both immutable local images, stops the
+four label- and image-bound application runtimes, starts the recorded
+predecessor, and performs exact health/container readback. Every Docker
+operation is bounded; it performs no Git fetch or other network ancestry
+preflight because forward deployment already proved and recorded that
+predecessor. Only then does it commit predecessor state and consume the same
+pending capability. Closed cleanup is armed immediately after the exact
+pending/current check, so any later preflight, timeout, startup, or readback
+failure leaves all four application runtimes down. The pending record and
+candidate state remain for review, so no later deploy can mistake that failure
+for acceptance. Because acceptance and rejection validate and consume the
+capability under the same lock, rejection first recognizes an exact accepted
+receipt and cannot race a stale rejection into rolling back an accepted
+candidate. Missing or malformed pending state without that exact receipt does
+not create rollback authority: the resolver closes candidate application
+runtimes, preserves uncertain state for review, and fails. A
+predecessor-current state may remove only an uncommitted candidate runtime.
+If the runner is cancelled, loses its SSH session, or disappears before it can
+run rejection, the detached VPS watchdog performs the same guarded rejection at
+the deadline. It carries the exact candidate/predecessor image tuple and always
+enters the locked resolver, even if pending state disappeared or became
+malformed while it slept; only the exact accepted receipt preserves the
+candidate. A stale token cannot accept or clear the record; a changed/newer
+current deployment is never rolled back and leaves the pending marker in place
+for review. Thus an unresolved attempt blocks every newer automated deployment
+rather than being silently adopted. Catchable loss during the earlier remote
+deploy is handled by the deploy script's existing candidate-removal trap; once
+the pending commit exists, rollback ownership no longer depends on the runner.
+
+This is not host-power-loss recovery. Catchable signals are masked across lock
+ownership publication and handled by ownership-aware cleanup, but an
+uncatchable kill can still leave the create-only operation lock behind, and a
+VPS reboot can terminate the detached watchdog. In either case the pending
+record remains a fail-closed deployment block and requires the explicit
+state/process/container review documented for a stale lock; it must never be
+deleted merely to make the next workflow green.
+
+This handoff identifies the exact retained Docker archive with its SHA-256 and
+binds the selected image configuration plus the complete `/app` shipment to
+source-derived receipts. The repository verifier does not independently attest
+every non-`/app` root-filesystem byte or resolve the configured `nextjs` name to
+a numeric UID/GID; those remain trusted-builder boundaries. It does not claim a
+signed registry OCI manifest or public promotion. The automated
+first-install/bootstrap path and host-reboot watchdog recovery are intentionally
+unsupported. The GitHub CI bundle expires after seven days, remote transfer
+staging is cleaned after a finished attempt, and promotion remains intentionally
+blocked by the remaining release gates.
 
 Rollback remains forward-only: the current migrator expands schema first, and
 push CI builds and boots the exact first-parent application image against that

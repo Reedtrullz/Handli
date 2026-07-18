@@ -176,6 +176,9 @@ const operationsRuntimeBoundaryEnabled = migrationFiles.includes(
 const officialOfferLifecycleRuntimeEnabled = migrationFiles.includes(
   "026_official_offer_publication_runtime.sql",
 );
+const officialOfferPublicationHealthEnabled = migrationFiles.includes(
+  "027_official_offer_publication_health.sql",
+);
 
 const protectedAppendOnlyTables = [
   "catalog_observations",
@@ -361,6 +364,15 @@ const webSourceHealthColumns = [
   "last_publish_success_at",
   "newest_eligible_evidence_at",
   "recorded_at",
+  "persisted_at",
+];
+
+const webOfficialOfferPublicationHealthColumns = [
+  "id",
+  "source_id",
+  "last_publish_success_at",
+  "newest_eligible_evidence_at",
+  "persisted_at",
 ];
 
 const webGeographicScopeColumns = [
@@ -592,6 +604,10 @@ async function configureRuntimeRoles() {
         on table source_products to ${webRole};
       grant select (${identifiers(webSourceHealthColumns)})
         on table source_health_snapshots to ${webRole};
+      ${officialOfferPublicationHealthEnabled ? `
+      grant select (${identifiers(webOfficialOfferPublicationHealthColumns)})
+        on table official_offer_publication_health_facts to ${webRole};
+      ` : ""}
       grant select (${identifiers(webGeographicScopeColumns)})
         on table geographic_scopes to ${webRole};
       grant select (${identifiers(webIngestionRunColumns)})
@@ -689,20 +705,21 @@ async function configureRuntimeRoles() {
     }
 
     if (operationsRuntimeBoundaryEnabled) {
-      // The operations process can execute only the bounded aggregate
-      // projection and the strict append/checkpoint transaction boundary. It
-      // receives no direct table, sequence, review, capture, publication, or
-      // alert-ledger privilege.
+      // The operations process always receives the bounded read projection. At
+      // migration 027 and later, alert scheduling is still deliberately
+      // uncomposed, so the dashboard role receives no append/export capability.
       await transaction.unsafe(`
         grant execute on function public.operations_dashboard_rows_v1(
           text[], integer
         ) to ${operationsRole};
+        ${officialOfferPublicationHealthEnabled ? "" : `
         grant execute on function public.append_operations_alert_evaluation_v1(
           timestamp with time zone, jsonb, jsonb
         ) to ${operationsRole};
         grant execute on function public.operations_alert_export_rows_v1(
           bigint, integer
         ) to ${operationsRole};
+        `}
       `);
     }
 

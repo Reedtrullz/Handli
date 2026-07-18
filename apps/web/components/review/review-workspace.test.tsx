@@ -172,50 +172,30 @@ describe("ReviewWorkspace", () => {
     expect(document.body.textContent).not.toContain("official-offers/private");
   });
 
-  it("keeps PDF evidence read-only even when its iframe loads", async () => {
+  it("does not fetch or frame unsupported PDF evidence and keeps approval blocked", async () => {
     const pdfEntry: ReviewQueueCandidateV1 = {
       ...entry,
       capture: { ...entry.capture, mimeType: "application/pdf" },
     };
-    const challengeToken = `review-challenge:v1.${Date.parse("2099-07-17T12:01:00.000Z").toString(36)}.${"d".repeat(22)}.${"e".repeat(64)}.${"f".repeat(64)}`;
-    const pdfBytes = new TextEncoder().encode("%PDF-truncated synthetic fixture");
-    vi.stubGlobal("crypto", {
-      subtle: {
-        digest: vi.fn(async (_algorithm: string, input: ArrayBuffer) =>
-          Uint8Array.from(createHash("sha256").update(new Uint8Array(input)).digest()).buffer),
-      },
-    });
-    vi.stubGlobal("URL", {
-      ...URL,
-      createObjectURL: vi.fn(() => "blob:https://handle.reidar.tech/synthetic-pdf"),
-      revokeObjectURL: vi.fn(),
-    });
-    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
-      if (String(input).endsWith("/evidence")) {
-        return new Response(pdfBytes, {
-          headers: {
-            "content-length": String(pdfBytes.byteLength),
-            "content-type": "application/pdf",
-            "x-handleplan-review-evidence-challenge": challengeToken,
-            "x-handleplan-review-evidence-expires": "2099-07-17T12:01:00.000Z",
-            "x-handleplan-review-evidence-presentation": "full_capture",
-          },
-        });
-      }
-      return Response.json({ contractVersion: 1, items: [pdfEntry] });
-    });
+    const fetcher = vi.fn(async () => Response.json({ contractVersion: 1, items: [pdfEntry] }));
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup();
     render(<ReviewWorkspace />);
 
     await screen.findByRole("heading", { name: "Vurder kandidat" });
-    await user.click(screen.getByRole("button", { name: "Vis verifisert full kildefil" }));
-    const frame = await screen.findByTitle("Verifisert full kildefil i PDF-format");
-    fireEvent.load(frame);
-
-    expect(screen.getByText(/PDF-filen kan leses, men godkjenning er sperret/i)).toBeVisible();
+    expect(screen.getByText(
+      /PDF-kildebevis kan ikke vises sikkert i nettleseren i v1/i,
+    )).toBeInTheDocument();
+    expect(screen.getByText(/PDF-kildebevis kan ikke vises og bindes sikkert/i))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/Vis hele den verifiserte kildefilen først/i))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Vis verifisert full kildefil" })).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Verifisert full kildefil i PDF-format")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Godkjenn som uttrekt" })).toBeDisabled();
-    expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/evidence/ack"))).toBe(false);
+    await user.type(screen.getByLabelText("Begrunnelse"), "PDF-visning er ikke støttet i v1.");
+    expect(screen.getByRole("button", { name: "Avvis" })).toBeEnabled();
+    expect(fetcher.mock.calls).toHaveLength(1);
   });
 
   it("blocks approval without renderable evidence while keeping rejection usable", async () => {

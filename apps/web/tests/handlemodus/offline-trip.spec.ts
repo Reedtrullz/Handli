@@ -15,6 +15,7 @@ import {
   readHandlemodusTestRequestBodies,
   resetHandlemodusTestHarness,
   setHandlemodusTestNetworkOffline,
+  setHandlemodusTestNetworkUnavailable,
 } from "../../test-support/handlemodus-test-network";
 
 const GTIN = "7038010000010";
@@ -33,6 +34,29 @@ test.beforeEach(async ({ request }) => {
 
 test.afterEach(async ({ request }) => {
   await resetHandlemodusTestHarness(request);
+});
+
+test("uses the verified Handlemodus shell when the application returns 503", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/planlegg/handle", { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "Ta handleplanen med i butikken" }))
+    .toBeVisible();
+  await expect.poll(
+    () => page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.ready;
+      return registration.active !== null
+        && navigator.serviceWorker.controller?.scriptURL === registration.active.scriptURL;
+    }),
+    { timeout: 15_000 },
+  ).toBe(true);
+
+  await setHandlemodusTestNetworkUnavailable(request, true);
+  const response = await page.reload({ waitUntil: "domcontentloaded" });
+  expect(response?.status()).toBe(200);
+  await expect(page.getByRole("heading", { name: "Ta handleplanen med i butikken" }))
+    .toBeVisible();
 });
 
 const strictRequest: ExactProductPlanApiRequest = {
@@ -331,9 +355,19 @@ test("starts a strict trip and reloads the checklist with its application origin
       fetch(`${location.protocol}//localhost:${location.port}/icons/handleplan.svg`),
     ]);
 
+    const registration = await navigator.serviceWorker.ready;
+    if (registration.active === null) throw new Error("Handlemodus worker is not active");
+    const scriptUrl = new URL(registration.active.scriptURL);
+    const buildId = scriptUrl.searchParams.get("build");
+    if (
+      scriptUrl.pathname !== "/sw.js"
+      || scriptUrl.searchParams.size !== 1
+      || buildId === null
+      || !/^hpv2-[0-9a-f]{64}$/u.test(buildId)
+    ) throw new Error("Handlemodus worker is not source-bound");
+    const cacheName = `${cachePrefix}${buildId}-shell`;
     const names = (await caches.keys()).filter((name) => name.startsWith(cachePrefix));
-    const cacheName = names.find((name) => name.endsWith("-shell"));
-    if (cacheName === undefined) throw new Error("Handlemodus cache was not installed");
+    if (!names.includes(cacheName)) throw new Error("Handlemodus cache was not installed");
     const cache = await caches.open(cacheName);
     const requests = await cache.keys();
     const urls = requests.map(({ url }) => new URL(url));
@@ -341,6 +375,11 @@ test("starts a strict trip and reloads the checklist with its application origin
     if (handleResponse === undefined) throw new Error("Handlemodus document was not warmed");
     const html = await handleResponse.text();
     const document = new DOMParser().parseFromString(html, "text/html");
+    const documentBuildIds = [
+      ...document.querySelectorAll<HTMLMetaElement>(
+        'meta[name="handleplan-public-build-id"]',
+      ),
+    ].map((marker) => marker.content);
     const expectedStaticPaths = [...new Set(
       [...document.querySelectorAll<HTMLElement>("[src], [href]")]
         .flatMap((element) => [element.getAttribute("src"), element.getAttribute("href")])
@@ -353,12 +392,19 @@ test("starts a strict trip and reloads the checklist with its application origin
         .map(({ pathname }) => pathname),
     )];
     const cachedPaths = new Set(urls.map(({ pathname }) => pathname));
+    const bootstrapPath = "/zod-jitless-v1.js";
+    const bootstrapResponse = await cache.match(bootstrapPath);
+    const bootstrapText = bootstrapResponse === undefined ? "" : await bootstrapResponse.text();
     return {
+      buildId,
       cacheName,
+      bootstrapIsJitless: bootstrapText.includes("globalThis.__zod_globalConfig.jitless = true"),
+      documentBuildIds,
       entryCount: requests.length,
       expectedStaticPaths,
       foreignEntries: urls.filter(({ origin }) => origin !== location.origin).map(String),
       missingStaticPaths: expectedStaticPaths.filter((path) => !cachedPaths.has(path)),
+      missingRequiredShellPaths: [bootstrapPath].filter((path) => !cachedPaths.has(path)),
       privateEntries: urls
         .filter(({ pathname, search }) =>
           search !== ""
@@ -372,10 +418,16 @@ test("starts a strict trip and reloads the checklist with its application origin
     };
   }, { cachePrefix: CACHE_PREFIX });
 
-  expect(cacheAudit.cacheName).toBe("handleplan-handlemodus-v4-shell");
+  expect(cacheAudit.buildId).toMatch(/^hpv2-[0-9a-f]{64}$/u);
+  expect(cacheAudit.cacheName).toBe(
+    `handleplan-handlemodus-${cacheAudit.buildId}-shell`,
+  );
+  expect(cacheAudit.bootstrapIsJitless).toBe(true);
+  expect(cacheAudit.documentBuildIds).toEqual([cacheAudit.buildId]);
   expect(cacheAudit.entryCount).toBeLessThanOrEqual(64);
   expect(cacheAudit.expectedStaticPaths.length).toBeGreaterThan(0);
   expect(cacheAudit.missingStaticPaths).toEqual([]);
+  expect(cacheAudit.missingRequiredShellPaths).toEqual([]);
   expect(cacheAudit.privateEntries).toEqual([]);
   expect(cacheAudit.foreignEntries).toEqual([]);
 

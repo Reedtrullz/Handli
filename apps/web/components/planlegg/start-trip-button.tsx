@@ -134,14 +134,21 @@ export function StartTripButton(props: StartTripButtonProps) {
       <h2 id="start-trip-title">Ta planen med i butikken</h2>
       <p className={styles.copy}>Lagre denne prisplanen og kryss av varene underveis.</p>
 
-      {(state === "idle" || state === "busy" || state === "storage-error") && (
+      {(state === "idle"
+        || state === "busy"
+        || state === "offline-error"
+        || state === "storage-error") && (
         <button
           className={styles.button}
           disabled={state === "busy"}
           onClick={() => void start()}
           type="button"
         >
-          {state === "busy" ? "Lagrer handletur …" : "Start Handlemodus"}
+          {state === "busy"
+            ? "Lagrer handletur …"
+            : state === "offline-error"
+              ? "Prøv Handlemodus igjen"
+              : "Start Handlemodus"}
         </button>
       )}
 
@@ -173,7 +180,7 @@ export function StartTripButton(props: StartTripButtonProps) {
       {state === "offline-error" && (
         <div className={styles.error} role="alert">
           <strong>Handlemodus er ikke klart for bruk uten nett.</strong>
-          <span>Vent litt og prøv igjen, eller last siden på nytt mens du er tilkoblet.</span>
+          <span>Koble til nettet og prøv igjen. Hele offline-pakken hentes og kontrolleres før turen lagres.</span>
         </div>
       )}
 

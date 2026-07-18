@@ -7,6 +7,10 @@ const migrationPath = fileURLToPath(new URL(
   "../../../deploy/migrations/024_operations_runtime_boundary.sql",
   import.meta.url,
 ));
+const publicationHealthMigrationPath = fileURLToPath(new URL(
+  "../../../deploy/migrations/027_official_offer_publication_health.sql",
+  import.meta.url,
+));
 const runnerPath = fileURLToPath(new URL("../../../deploy/migrate.mjs", import.meta.url));
 const composePath = fileURLToPath(new URL(
   "../../../deploy/compose.production.yml",
@@ -70,21 +74,23 @@ describe("operations runtime database boundary", () => {
     expect(migration).toContain("where operations_boundary_version = 1");
   });
 
-  it("gives the operations role only function execution and keeps credentials process-local", async () => {
-    const [runner, compose] = await Promise.all([
+  it("keeps the disabled-alert operations role read-only and credentials process-local", async () => {
+    const [runner, compose, publicationHealthMigration] = await Promise.all([
       readFile(runnerPath, "utf8"),
       readFile(composePath, "utf8"),
+      readFile(publicationHealthMigrationPath, "utf8"),
     ]);
     expect(runner).toContain('const operationsRole = "handleplan_operations"');
     expect(runner).toContain("operationsRuntimeBoundaryEnabled");
     expect(runner).toMatch(
       /grant execute on function public\.operations_dashboard_rows_v1\([\s\S]*?to \$\{operationsRole\}/u,
     );
-    expect(runner).toMatch(
-      /grant execute on function public\.append_operations_alert_evaluation_v1\([\s\S]*?to \$\{operationsRole\}/u,
+    expect(runner).toContain("officialOfferPublicationHealthEnabled");
+    expect(publicationHealthMigration).toContain(
+      "revoke all on function public.append_operations_alert_evaluation_v1(",
     );
-    expect(runner).toMatch(
-      /grant execute on function public\.operations_alert_export_rows_v1\([\s\S]*?to \$\{operationsRole\}/u,
+    expect(publicationHealthMigration).toContain(
+      "revoke all on function public.operations_alert_export_rows_v1(",
     );
     expect(runner).not.toMatch(/grant\s+(?:select|insert|update|delete)[^;]*\$\{operationsRole\}/iu);
     expect(runner).toContain("alter role ${operationsRole} set statement_timeout = '4s'");

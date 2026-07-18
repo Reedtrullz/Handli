@@ -156,6 +156,8 @@ export class PostgresEvidencePriceReader {
           eq(sourcePermissions.decision, "approved"),
           lte(sourcePermissions.reviewedAt, now),
           lte(sourcePermissions.createdAt, now),
+          eq(dataSources.permissionReviewedAt, sourcePermissions.reviewedAt),
+          sql<boolean>`${dataSources.permissionExpiresAt} is not distinct from ${sourcePermissions.validUntil}`,
           or(
             isNull(sourcePermissions.validUntil),
             gt(sourcePermissions.validUntil, now),
@@ -168,17 +170,16 @@ export class PostgresEvidencePriceReader {
               .where(
                 and(
                   eq(newerSourcePermissions.sourceId, sourcePermissions.sourceId),
-                  lte(newerSourcePermissions.reviewedAt, now),
                   lte(newerSourcePermissions.createdAt, now),
                   or(
                     gt(
-                      newerSourcePermissions.reviewedAt,
-                      sourcePermissions.reviewedAt,
+                      newerSourcePermissions.createdAt,
+                      sourcePermissions.createdAt,
                     ),
                     and(
                       eq(
-                        newerSourcePermissions.reviewedAt,
-                        sourcePermissions.reviewedAt,
+                        newerSourcePermissions.createdAt,
+                        sourcePermissions.createdAt,
                       ),
                       gt(newerSourcePermissions.id, sourcePermissions.id),
                     ),

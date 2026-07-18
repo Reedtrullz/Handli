@@ -213,7 +213,13 @@ describe("PostgresReviewedFamilyReader", () => {
     expect(sql).toContain("source.created_at <= ?");
     expect(sql).toContain("source.public_state_changed_at <= ?");
     expect(sql).toContain("candidate.created_at <= ?");
+    expect(sql).toContain("order by candidate.created_at desc, candidate.id desc");
+    expect(sql).not.toContain("order by candidate.reviewed_at desc");
     expect(sql).toContain("permission.decision = 'approved'");
+    expect(sql).toContain("source.permission_reviewed_at = permission.reviewed_at");
+    expect(sql).toContain(
+      "source.permission_expires_at is not distinct from permission.valid_until",
+    );
     expect(sql).toContain("permission.permissions @> '{\"catalog\": true}'::jsonb");
     expect(sql).toContain("partition by membership.family_id, membership.product_id");
     expect(sql).toContain("observation.gtin asc");

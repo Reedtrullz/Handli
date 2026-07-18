@@ -5,7 +5,8 @@
 This slice is a source-neutral, private ingestion and operational foundation. Public activation is
 fixed to `enabled: false` in the versioned domain contract, and migration 026 seeds an independent
 database publication policy to `false`. It defines two worker job kinds, a dedicated atomic
-publication/expiry database boundary, and an owner-private filesystem blob store, but production
+publication/expiry database boundary, while migration 027 records DB-owned append-only publication
+health evidence. The owner-private filesystem blob store exists, but production
 composition returns no official-offer handlers or schedules and bootstrap does not instantiate the
 store. It does not add a retailer adapter or URL, network fetch, live source schedule, public offer
 endpoint, or ranking input.
@@ -226,6 +227,20 @@ accounting, no source-health row is created, exact replay converges, changed rep
 the released lease permits the next job immediately. It does not enable or claim a production
 source, schedule, renderer session, or public offer.
 
+## Migration 027 semantics
+
+Migration 027 adds one append-only publication-health fact per lifecycle job that actually leaves
+one or more reviewed offers in `published` state. A database trigger derives the fact in the same
+transaction as the immutable lifecycle result, verifies the final published count, owns all clocks,
+and carries the newest eligible capture clock forward. Generic worker results cannot write or spoof
+this projection. The public source-status reader receives only non-sensitive fact columns, while the
+operations role sees the clocks only through `operations_dashboard_rows_v1`.
+
+Because the alert scheduler remains uncomposed, migration 027 also removes alert append and export
+execution from the read-only `handleplan_operations` dashboard role. Re-enabling alert evaluation
+requires a distinct reviewed scheduler/delivery identity, live delivery evidence, and a new
+readiness contract; changing an environment variable is insufficient.
+
 ## Focused verification
 
 Run the focused suites and typechecks from the repository root:
@@ -233,7 +248,7 @@ Run the focused suites and typechecks from the repository root:
 ```sh
 pnpm --filter @handleplan/domain exec vitest run src/offer-ingestion-contracts.test.ts
 pnpm --filter @handleplan/db exec vitest run src/official-offer-foundation.test.ts
-pnpm --filter @handleplan/db exec vitest run src/official-offer-lifecycle.test.ts src/official-offer-lifecycle-migration.test.ts
+pnpm --filter @handleplan/db exec vitest run src/official-offer-lifecycle.test.ts src/official-offer-lifecycle-migration.test.ts src/official-offer-publication-health-migration.test.ts
 RUN_DB_INTEGRATION=1 DATABASE_URL='postgresql://owner:.../disposable_db' pnpm --filter @handleplan/db exec vitest run src/official-offer-lifecycle.integration.test.ts
 pnpm --filter @handleplan/db exec vitest run src/worker-state.test.ts src/source-health-writer.test.ts
 pnpm --filter @handleplan/worker exec vitest run src/official-offer-foundation.test.ts src/official-offer-operational.test.ts src/private-offer-blob-store.test.ts

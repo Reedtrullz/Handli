@@ -2,19 +2,9 @@
 
 import { useEffect } from "react";
 
-export async function registerHandleplanServiceWorker(): Promise<void> {
-  if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
-  const serviceWorkerUrl = new URL("/sw.js", window.location.origin);
-  if (serviceWorkerUrl.origin !== window.location.origin) return;
-  try {
-    await navigator.serviceWorker.register(serviceWorkerUrl.pathname, {
-      scope: "/",
-      updateViaCache: "none",
-    });
-  } catch {
-    // Handlemodus still works online and IndexedDB remains the source of truth.
-  }
-}
+import { registerHandleplanServiceWorker } from "../../lib/service-worker-registration";
+
+export { registerHandleplanServiceWorker } from "../../lib/service-worker-registration";
 
 export function ServiceWorkerRegistration() {
   useEffect(() => {

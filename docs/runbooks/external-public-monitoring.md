@@ -21,6 +21,39 @@ permission and contains no VPS credential, SSH step, deployment command, or
 recovery action. Source degradation should qualify or remove affected claims
 through the application data boundary, not create a web restart loop.
 
+This scheduled monitor is separate from the deployment-time external promotion
+probe in `.github/workflows/deploy-preview.yml`. That probe uses the `preview`
+Environment's Access service token, refuses redirects, and requires the exact
+`/` to `/planlegg` temporary redirect, candidate public-build marker, health
+revision, and readiness migration. A candidate remains token-bound in
+`state/pending-deployment` until the probe succeeds. Immediately before any
+external request, the workflow revalidates its exact seven-field tuple,
+candidate and predecessor images, fresh token, current/high-water state, and
+bounded remaining deadline under the shared VPS lock. Failure triggers the exact
+predecessor rollback through a token-bound, network-independent, bounded VPS
+resolver; runner cancellation or loss is covered by the VPS deadline watchdog.
+Acceptance records that tuple in `state/accepted-deployment` before consuming
+pending state. A lost runner response therefore reconciles as already accepted
+instead of rolling back a publicly verified candidate. Missing or malformed
+pending state without the exact accepted receipt closes candidate runtimes and
+preserves uncertain state; workflow arguments alone do not create rollback
+authority. If a newer acceptance has replaced an older receipt, the older
+watchdog may close its candidate only while that candidate still owns the
+deployment high-water mark. An authorized explicit rollback preserves the newer
+high-water mark, so a superseded watchdog cannot take the rollback target
+offline. Every detached watchdog also holds one token-named, seven-field lease
+under `state/pending-watchdogs/`. Admission validates the whole ledger and
+allows at most four leases; stale leases consume capacity, while malformed or
+symlink-shaped entries fail closed. The owning watchdog polls the locked
+resolver every two seconds, retires its exact lease promptly after acceptance,
+or consumes that same lease when its terminal rejection path exits. No PID is
+stored, killed, or trusted as cleanup authority.
+
+The shell marker is accepted only as one exact direct child of the parsed HTML
+head, so raw comment, script-text, body, or duplicate decoys fail promotion.
+These checks do not make the scheduled monitor, alert
+delivery, or dead-man chain active.
+
 ## Required GitHub configuration
 
 Create a GitHub Environment named `external-public-monitor`. Limit its
@@ -41,7 +74,7 @@ Configure these environment variables (not repository variables):
   revision currently deployed.
 - `HANDLEPLAN_MONITOR_EXPECTED_MIGRATION`: the migration filename the deployed
   readiness contract must report, for example
-  `026_official_offer_publication_runtime.sql`. Update this environment variable
+  `028_private_review_image_evidence_only.sql`. Update this environment variable
   in deployment lockstep with the application/readiness promotion; a stale
   value must alert rather than teaching the monitor to accept either version.
 

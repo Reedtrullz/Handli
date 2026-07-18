@@ -295,11 +295,19 @@ function DecisionEditor({ candidate, disabled, evidenceProof, onSubmit }: Decisi
           role="status"
         >
           <strong>Godkjenning er sperret</strong>
-          <p>
-            En aktuell full kildefil er ikke vist og bundet sikkert til kandidaten ennå.
-            Vis hele den verifiserte kildefilen først. Du kan fortsatt avvise kandidaten
-            med en etterprøvbar begrunnelse.
-          </p>
+          {candidate.capture.mimeType === "application/pdf" ? (
+            <p>
+              PDF-kildebevis kan ikke vises og bindes sikkert til kandidaten i v1.
+              Godkjenning og korrigering er derfor utilgjengelig. Du kan fortsatt avvise
+              kandidaten med en etterprøvbar begrunnelse.
+            </p>
+          ) : (
+            <p>
+              En aktuell full kildefil er ikke vist og bundet sikkert til kandidaten ennå.
+              Vis hele den verifiserte kildefilen først. Du kan fortsatt avvise kandidaten
+              med en etterprøvbar begrunnelse.
+            </p>
+          )}
         </div>
       )}
 
@@ -441,6 +449,12 @@ function EvidencePanel({ candidate, disabled, onEvidenceChange }: EvidencePanelP
   }, [evidenceObjectUrl]);
 
   async function loadEvidence(): Promise<void> {
+    if (candidate.capture.mimeType === "application/pdf") {
+      setEvidence(undefined);
+      onEvidenceChange(undefined);
+      setFailure("PDF-kildebevis kan ikke vises sikkert i nettleseren i v1.");
+      return;
+    }
     controller.current?.abort();
     acknowledgementController.current?.abort();
     const requestController = new AbortController();
@@ -606,33 +620,39 @@ function EvidencePanel({ candidate, disabled, onEvidenceChange }: EvidencePanelP
         <span>{candidate.capture.rightsClassification === "public_display" ? "Offentlig visning tillatt" : "Kun privat vurdering"}</span>
       </div>
       <p className={styles.fullCaptureNotice}>
-        Hele den verifiserte kildefilen vises. Det finnes ingen etterprøvbar
-        utsnittsgeometri, så visningen er ikke et beskåret utsnitt.
+        {candidate.capture.mimeType === "application/pdf"
+          ? "PDF-kildebevis vises ikke i nettleseren i v1. Det finnes ingen etterprøvbar utsnittsgeometri."
+          : "Hele den verifiserte kildefilen vises. Det finnes ingen etterprøvbar utsnittsgeometri, så visningen er ikke et beskåret utsnitt."}
       </p>
       {evidence === undefined ? (
         <div className={styles.cropPlaceholder}>
-          <strong>Rettighetsstyrt full kildefil</strong>
+          <strong>{candidate.capture.mimeType === "application/pdf"
+            ? "PDF-visning er ikke tilgjengelig"
+            : "Rettighetsstyrt full kildefil"}</strong>
           <small>{candidate.capture.mimeType} · hentet {new Date(candidate.capture.retrievedAt).toLocaleString("nb-NO")}</small>
-          <button
-            className="secondary-button"
-            disabled={disabled || loading}
-            onClick={() => void loadEvidence()}
-            type="button"
-          >
-            {loading ? "Verifiserer kildebevis…" : "Vis verifisert full kildefil"}
-          </button>
-          {failure !== undefined && <p className={styles.evidenceFailure} role="alert">{failure}</p>}
-          <p>Private kildebytes sendes bare fra den Access-beskyttede vurderingstjenesten.</p>
+          {candidate.capture.mimeType === "application/pdf" ? (
+            <p role="status">
+              PDF-kildebevis kan ikke vises sikkert i nettleseren i v1.
+              Godkjenning og korrigering er sperret; avvisning er fortsatt tilgjengelig.
+            </p>
+          ) : (
+            <>
+              <button
+                className="secondary-button"
+                disabled={disabled || loading}
+                onClick={() => void loadEvidence()}
+                type="button"
+              >
+                {loading ? "Verifiserer kildebevis…" : "Vis verifisert full kildefil"}
+              </button>
+              {failure !== undefined && <p className={styles.evidenceFailure} role="alert">{failure}</p>}
+              <p>Private kildebytes sendes bare fra den Access-beskyttede vurderingstjenesten.</p>
+            </>
+          )}
         </div>
       ) : (
         <div className={styles.evidenceFrame}>
-          {evidence.mimeType === "application/pdf" ? (
-            <iframe
-              sandbox=""
-              src={evidence.objectUrl}
-              title="Verifisert full kildefil i PDF-format"
-            />
-          ) : (
+          {evidence.mimeType !== "application/pdf" && (
             // This is a verified same-session blob URL, never a retailer URL.
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -648,13 +668,11 @@ function EvidencePanel({ candidate, disabled, onEvidenceChange }: EvidencePanelP
             />
           )}
           <p role="status">
-            {evidence.mimeType === "application/pdf"
-              ? "PDF-filen kan leses, men godkjenning er sperret til en avgrenset PDF-renderer kan bekrefte sidene. Avvisning er fortsatt tilgjengelig."
-              : evidence.acknowledging
-                ? "Bildet er dekodet. Binder full SHA-256 til kandidaten…"
-                : evidence.rendered
-                  ? `Hele bildefilen er levert og dekodet. Godkjenningsbeviset utløper ${new Date(evidence.expiresAt).toLocaleTimeString("nb-NO")}.`
-                  : "Kildebytes er verifisert. Venter på at nettleseren dekoder hele bildet."}
+            {evidence.acknowledging
+              ? "Bildet er dekodet. Binder full SHA-256 til kandidaten…"
+              : evidence.rendered
+                ? `Hele bildefilen er levert og dekodet. Godkjenningsbeviset utløper ${new Date(evidence.expiresAt).toLocaleTimeString("nb-NO")}.`
+                : "Kildebytes er verifisert. Venter på at nettleseren dekoder hele bildet."}
           </p>
           <button className="secondary-button" disabled={disabled} onClick={() => void loadEvidence()} type="button">
             Verifiser på nytt

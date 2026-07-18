@@ -63,6 +63,9 @@ export function createReviewEvidenceHandler(
         () => service.render(candidateId.data, principal, lifetime.signal),
         lifetime.signal,
       );
+      if (!["image/jpeg", "image/png", "image/webp"].includes(rendered.mimeType)) {
+        return privateError("EVIDENCE_UNAVAILABLE", 409);
+      }
       return new Response(streamedBytes(rendered.bytes), {
         headers: {
           "cache-control": "private, no-store, max-age=0, must-revalidate",

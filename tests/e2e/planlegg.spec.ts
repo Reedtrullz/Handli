@@ -2,24 +2,42 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Request, type Response } from "@playwright/test";
 import { createServer } from "node:http";
 
-const BASE_ORIGIN = "http://127.0.0.1:3109";
+const BASE_ORIGIN = "https://127.0.0.1:3109";
+const API_SCAN_HEADER = "x-handleplan-e2e-api-scan";
+const API_SCAN_PASSED = "passed-v1";
+const API_SCAN_REJECTED = "rejected-v1";
+const RESPONSE_SCAN_HEADER = "x-handleplan-e2e-response-scan";
+const RESPONSE_SCAN_PASSED = "passed-v1";
+const LEAK_PROBE_HEADER = "x-handleplan-e2e-leak-probe";
+const LEAK_PROBE_PATH = "/api/_handleplan-e2e/leak-probe";
+const MISSING_SCAN_PROBE_PATH = "/api/_handleplan-e2e/missing-scan-probe";
 const FORBIDDEN_VALUES = ["KASSAL_API_KEY", process.env.HANDLEPLAN_E2E_SENTINEL].filter(
   (value): value is string => Boolean(value),
 );
 const SENSITIVE_HEADERS = new Set(["authorization", "cookie", "set-cookie"]);
 const BODYLESS_STATUSES = new Set([101, 103, 204, 205, 304]);
 
+function isApiPath(pathname: string): boolean {
+  return pathname === "/api" || pathname.startsWith("/api/");
+}
+
 interface PublicEvidence {
   settle(): Promise<void>;
   stats: {
+    apiBodiesInspectedBeforeDelivery: number;
+    apiScanFailures: Array<{ result: string; status: number; url: string }>;
     bodyReadFailures: Array<{ message: string; status: number; url: string }>;
     bodylessSameOriginResponses: number;
+    browserCookieValuesInspected: number;
+    browserCookieReadFailures: number;
     consoleErrors: number;
+    consoleErrorMessages: string[];
     crossOriginBodiesNotInspected: number;
     forbiddenMatches: number;
     frameworkFontBodiesNotInspected: number;
     headerReadFailures: Array<{ sameOrigin: boolean; surface: "request" | "response" }>;
     pageErrors: number;
+    responseScanFailures: Array<{ result: string; status: number; url: string }>;
     sameOriginBodiesInspected: number;
     surfacesInspected: number;
     observedSensitiveHeaderNames: string[];
@@ -28,14 +46,20 @@ interface PublicEvidence {
 
 function collectPublicEvidence(page: Page): PublicEvidence {
   const stats: PublicEvidence["stats"] = {
+    apiBodiesInspectedBeforeDelivery: 0,
+    apiScanFailures: [],
     bodyReadFailures: [],
     bodylessSameOriginResponses: 0,
+    browserCookieValuesInspected: 0,
+    browserCookieReadFailures: 0,
     consoleErrors: 0,
+    consoleErrorMessages: [],
     crossOriginBodiesNotInspected: 0,
     forbiddenMatches: 0,
     frameworkFontBodiesNotInspected: 0,
     headerReadFailures: [],
     pageErrors: 0,
+    responseScanFailures: [],
     sameOriginBodiesInspected: 0,
     surfacesInspected: 0,
     observedSensitiveHeaderNames: [],
@@ -47,6 +71,12 @@ function collectPublicEvidence(page: Page): PublicEvidence {
     if (FORBIDDEN_VALUES.some((forbidden) => value.includes(forbidden))) {
       stats.forbiddenMatches += 1;
     }
+  }
+
+  function safeDiagnostic(value: string): string {
+    let safe = value;
+    for (const forbidden of FORBIDDEN_VALUES) safe = safe.replaceAll(forbidden, "[forbidden]");
+    return safe.slice(0, 500);
   }
 
   function inspectHeader(name: string, value: string): void {
@@ -81,6 +111,32 @@ function collectPublicEvidence(page: Page): PublicEvidence {
       return;
     }
     const responseUrl = new URL(response.url());
+    const responseScanResult = response.headers()[RESPONSE_SCAN_HEADER] ?? "missing";
+    const redirectWithoutExposedMarker = response.status() >= 300
+      && response.status() < 400
+      && responseScanResult === "missing";
+    if (responseScanResult !== RESPONSE_SCAN_PASSED && !redirectWithoutExposedMarker) {
+      stats.responseScanFailures.push({
+        result: responseScanResult,
+        status: response.status(),
+        url: response.url(),
+      });
+    }
+    if (isApiPath(responseUrl.pathname)) {
+      const scanResult = response.headers()[API_SCAN_HEADER] ?? "missing";
+      if (scanResult === API_SCAN_PASSED) {
+        stats.apiBodiesInspectedBeforeDelivery += 1;
+      } else {
+        stats.apiScanFailures.push({
+          result: scanResult,
+          status: response.status(),
+          url: response.url(),
+        });
+      }
+      // The loopback production proxy fully buffers and scans same-origin API
+      // headers and bytes before it releases this response to the browser.
+      return;
+    }
     const contentType = response.headers()["content-type"]?.split(";", 1)[0]?.toLowerCase();
     if (
       response.request().resourceType() === "font" &&
@@ -94,6 +150,9 @@ function collectPublicEvidence(page: Page): PublicEvidence {
       return;
     }
     if (BODYLESS_STATUSES.has(response.status()) || (response.status() >= 300 && response.status() < 400)) {
+      // Playwright cannot return redirect bodies, and WebKit also hides custom
+      // redirect headers. The global teardown barrier independently requires
+      // the loopback proxy to finish scanning every such body before success.
       stats.bodylessSameOriginResponses += 1;
       return;
     }
@@ -123,7 +182,12 @@ function collectPublicEvidence(page: Page): PublicEvidence {
 
   page.on("console", (message) => {
     inspect(message.text());
-    if (message.type() === "error") stats.consoleErrors += 1;
+    if (message.type() === "error") {
+      stats.consoleErrors += 1;
+      if (stats.consoleErrorMessages.length < 12) {
+        stats.consoleErrorMessages.push(safeDiagnostic(message.text()));
+      }
+    }
   });
   page.on("pageerror", (error) => {
     inspect(error.message);
@@ -139,6 +203,13 @@ function collectPublicEvidence(page: Page): PublicEvidence {
   return {
     stats,
     settle: async () => {
+      try {
+        const cookies = await page.context().cookies();
+        stats.browserCookieValuesInspected += cookies.length;
+        for (const cookie of cookies) inspectHeader("cookie", `${cookie.name}=${cookie.value}`);
+      } catch {
+        stats.browserCookieReadFailures += 1;
+      }
       await page.waitForTimeout(100);
       let completed = 0;
       let stableChecks = 0;
@@ -159,12 +230,16 @@ function collectPublicEvidence(page: Page): PublicEvidence {
 
 async function expectCleanPublicEvidence(evidence: PublicEvidence): Promise<void> {
   await evidence.settle();
+  expect(evidence.stats.apiBodiesInspectedBeforeDelivery).toBeGreaterThan(0);
   expect(evidence.stats.sameOriginBodiesInspected).toBeGreaterThan(0);
   expect(evidence.stats.surfacesInspected).toBeGreaterThan(0);
+  expect(evidence.stats.apiScanFailures).toEqual([]);
   expect(evidence.stats.bodyReadFailures).toEqual([]);
+  expect(evidence.stats.browserCookieReadFailures).toBe(0);
   expect(evidence.stats.headerReadFailures).toEqual([]);
-  expect(evidence.stats.consoleErrors).toBe(0);
+  expect(evidence.stats.consoleErrors, JSON.stringify(evidence.stats.consoleErrorMessages)).toBe(0);
   expect(evidence.stats.pageErrors).toBe(0);
+  expect(evidence.stats.responseScanFailures).toEqual([]);
   expect(evidence.stats.forbiddenMatches).toBe(0);
 }
 
@@ -193,10 +268,61 @@ const expectedPlans = [
   { name: "Mest spart", total: "80,00 kr", totalOre: 8_000, stores: 3 },
 ] as const;
 
-test("the leak detector sees authorization, cookie, and set-cookie values", async ({ context, page }) => {
+test("the leak detector sees authorization, cookie, set-cookie, and rejected API body values", async ({ context, page }) => {
   const sentinel = process.env.HANDLEPLAN_E2E_SENTINEL;
   expect(typeof sentinel === "string" && sentinel.length > 20).toBe(true);
   if (!sentinel) throw new Error("Runtime leak sentinel was unavailable");
+
+  const evidence = collectPublicEvidence(page);
+  const missingScanUrl = `${BASE_ORIGIN}${MISSING_SCAN_PROBE_PATH}`;
+  await test.step("record a missing API scan marker", async () => {
+    await page.route(missingScanUrl, (route) => route.fulfill({
+      body: "{}",
+      contentType: "application/json",
+      status: 200,
+    }));
+    // WebKit can keep a synthetic JSON top-level navigation in the loading
+    // state; commit is sufficient because the response evidence is recorded.
+    await page.goto(missingScanUrl, { waitUntil: "commit" });
+    // Keep this exact-path route installed until context teardown. Removing a
+    // just-committed top-level route races WebKit's synthetic-document load.
+  });
+
+  const rejectedProbe = await test.step("reject a forbidden API body before delivery", async () => {
+    await page.goto("/planlegg");
+    return page.evaluate(async ({ header, path, scanHeader }) => {
+      const response = await fetch(path, { headers: { [header]: "v1" } });
+      return {
+        body: await response.text(),
+        scanResult: response.headers.get(scanHeader),
+        status: response.status,
+      };
+    }, {
+      header: LEAK_PROBE_HEADER,
+      path: LEAK_PROBE_PATH,
+      scanHeader: API_SCAN_HEADER,
+    });
+  });
+  expect(rejectedProbe.status).toBe(502);
+  expect(rejectedProbe.scanResult).toBe(API_SCAN_REJECTED);
+  expect(rejectedProbe.body).not.toContain(sentinel);
+  await evidence.settle();
+  expect(evidence.stats.apiScanFailures.map(({ result, status, url }) => ({
+    path: new URL(url).pathname,
+    result,
+    status,
+  }))).toEqual([
+    { path: MISSING_SCAN_PROBE_PATH, result: "missing", status: 200 },
+    { path: LEAK_PROBE_PATH, result: API_SCAN_REJECTED, status: 502 },
+  ]);
+  expect(evidence.stats.responseScanFailures.map(({ result, status, url }) => ({
+    path: new URL(url).pathname,
+    result,
+    status,
+  }))).toEqual([
+    { path: MISSING_SCAN_PROBE_PATH, result: "missing", status: 200 },
+    { path: LEAK_PROBE_PATH, result: API_SCAN_REJECTED, status: 502 },
+  ]);
 
   const probeServer = createServer((_request, response) => {
     response.writeHead(200, {
@@ -213,14 +339,20 @@ test("the leak detector sees authorization, cookie, and set-cookie values", asyn
   try {
     const address = probeServer.address();
     if (!address || typeof address === "string") throw new Error("Header probe address was unavailable");
-    await context.addCookies([{ name: "header-probe", value: sentinel, domain: "127.0.0.1", path: "/" }]);
     await context.setExtraHTTPHeaders({ authorization: `Bearer ${sentinel}` });
 
-    const evidence = collectPublicEvidence(page);
-    await page.goto(`http://127.0.0.1:${address.port}/header-probe`);
+    const headerProbeUrl = `http://127.0.0.1:${address.port}/header-probe`;
+    await page.goto(headerProbeUrl);
+    // The first response supplies the HttpOnly cookie; the second navigation
+    // proves the browser sends it and the request evidence lane can see it.
+    await expect.poll(async () => (await context.cookies(headerProbeUrl)).some(
+      ({ name, value }) => name === "header-probe" && value === sentinel,
+    )).toBe(true);
+    await page.reload();
     await evidence.settle();
 
     expect(evidence.stats.observedSensitiveHeaderNames).toEqual(["authorization", "cookie", "set-cookie"]);
+    expect(evidence.stats.browserCookieValuesInspected).toBeGreaterThan(0);
     expect(evidence.stats.forbiddenMatches).toBeGreaterThanOrEqual(3);
     expect(evidence.stats.headerReadFailures).toEqual([]);
   } finally {

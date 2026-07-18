@@ -122,8 +122,9 @@ interface ReviewReadinessRow {
   decision_v2_execute: boolean;
   evidence_render_execute: boolean;
   lifecycle_execute: boolean;
-  migration_026_marker: boolean;
+  migration_028_marker: boolean;
   migration_ledger_select: boolean;
+  publication_health_select: boolean;
   queue_execute: boolean;
   role_name: string;
 }
@@ -136,13 +137,17 @@ const REVIEW_DECISION_V1_SIGNATURE =
   "public.private_review_decide_v1(bigint,integer,text,text,text,text,text,text,text,integer,integer,integer,integer,text,text,timestamp with time zone,timestamp with time zone,text[])";
 const REVIEW_DECISION_V2_SIGNATURE =
   "public.private_review_decide_v2(bigint,integer,text,text,text,text,text,text,text,text,text,integer,integer,integer,integer,text,text,timestamp with time zone,timestamp with time zone,text[])";
-const MIGRATION_026_MARKER_SIGNATURE =
+const LIFECYCLE_SIGNATURE =
   "public.official_offer_lifecycle_reconcile_v1(text,text,text,timestamp with time zone,text,integer,boolean)";
+const MIGRATION_027_MARKER_RELATION =
+  "public.official_offer_publication_health_facts";
+const MIGRATION_028_MARKER_RELATION =
+  "public.private_review_evidence_renders";
 
 /**
  * Review is intentionally denied the migration ledger after the private
  * security-definer boundary. Prove the exact allowlist/denylist and use the
- * lifecycle function only as a catalog marker for migration 026.
+ * image-only evidence constraint only as a catalog marker for migration 028.
  */
 export function createReviewPostgresReadinessCheck(
   db: HandleplanDatabase,
@@ -171,13 +176,26 @@ export function createReviewPostgresReadinessCheck(
           ${REVIEW_DECISION_V2_SIGNATURE},
           'EXECUTE'
         ) as decision_v2_execute,
-        pg_catalog.to_regprocedure(${MIGRATION_026_MARKER_SIGNATURE}) is not null
-          as migration_026_marker,
+        pg_catalog.to_regclass(${MIGRATION_027_MARKER_RELATION}) is not null
+          and exists (
+            select 1
+            from pg_catalog.pg_constraint constraint_state
+            where constraint_state.conrelid = pg_catalog.to_regclass(
+              ${MIGRATION_028_MARKER_RELATION}
+            )
+              and constraint_state.conname = 'private_review_evidence_renders_image_mime'
+              and constraint_state.convalidated
+          ) as migration_028_marker,
         pg_catalog.has_function_privilege(
           current_user,
-          ${MIGRATION_026_MARKER_SIGNATURE},
+          ${LIFECYCLE_SIGNATURE},
           'EXECUTE'
         ) as lifecycle_execute,
+        pg_catalog.has_table_privilege(
+          current_user,
+          ${MIGRATION_027_MARKER_RELATION},
+          'SELECT'
+        ) as publication_health_select,
         pg_catalog.has_table_privilege(
           current_user,
           'public.handleplan_schema_migrations',
@@ -190,28 +208,36 @@ export function createReviewPostgresReadinessCheck(
       && rows[0]?.evidence_render_execute === true
       && rows[0]?.decision_v1_execute === false
       && rows[0]?.decision_v2_execute === true
-      && rows[0]?.migration_026_marker === true
+      && rows[0]?.migration_028_marker === true
       && rows[0]?.lifecycle_execute === false
+      && rows[0]?.publication_health_select === false
       && rows[0]?.migration_ledger_select === false;
   };
 }
 
 interface OperationsReadinessRow {
+  alert_append_execute: boolean;
+  alert_export_execute: boolean;
   dashboard_execute: boolean;
   lifecycle_execute: boolean;
   migration_ledger_select: boolean;
-  migration_026_marker: boolean;
+  migration_028_marker: boolean;
+  publication_health_select: boolean;
   role_name: string;
 }
 
 const OPERATIONS_DASHBOARD_SIGNATURE =
   "public.operations_dashboard_rows_v1(text[],integer)";
+const OPERATIONS_ALERT_APPEND_SIGNATURE =
+  "public.append_operations_alert_evaluation_v1(timestamp with time zone,jsonb,jsonb)";
+const OPERATIONS_ALERT_EXPORT_SIGNATURE =
+  "public.operations_alert_export_rows_v1(bigint,integer)";
 
 /**
  * Operations intentionally has no SELECT privilege on the migration ledger.
  * Its readiness proof therefore checks the expected role, its one allowlisted
- * aggregate capability, a function introduced by migration 026, and a real
- * bounded aggregate read through the normal operations service.
+ * aggregate capability, the migration-028 marker, denied dormant alert
+ * capabilities, and a real bounded aggregate read through the normal service.
  */
 export function createOperationsPostgresReadinessCheck(
   db: HandleplanDatabase,
@@ -227,13 +253,36 @@ export function createOperationsPostgresReadinessCheck(
           ${OPERATIONS_DASHBOARD_SIGNATURE},
           'EXECUTE'
         ) as dashboard_execute,
-        pg_catalog.to_regprocedure(${MIGRATION_026_MARKER_SIGNATURE}) is not null
-          as migration_026_marker,
         pg_catalog.has_function_privilege(
           current_user,
-          ${MIGRATION_026_MARKER_SIGNATURE},
+          ${OPERATIONS_ALERT_APPEND_SIGNATURE},
+          'EXECUTE'
+        ) as alert_append_execute,
+        pg_catalog.has_function_privilege(
+          current_user,
+          ${OPERATIONS_ALERT_EXPORT_SIGNATURE},
+          'EXECUTE'
+        ) as alert_export_execute,
+        pg_catalog.to_regclass(${MIGRATION_027_MARKER_RELATION}) is not null
+          and exists (
+            select 1
+            from pg_catalog.pg_constraint constraint_state
+            where constraint_state.conrelid = pg_catalog.to_regclass(
+              ${MIGRATION_028_MARKER_RELATION}
+            )
+              and constraint_state.conname = 'private_review_evidence_renders_image_mime'
+              and constraint_state.convalidated
+          ) as migration_028_marker,
+        pg_catalog.has_function_privilege(
+          current_user,
+          ${LIFECYCLE_SIGNATURE},
           'EXECUTE'
         ) as lifecycle_execute,
+        pg_catalog.has_table_privilege(
+          current_user,
+          ${MIGRATION_027_MARKER_RELATION},
+          'SELECT'
+        ) as publication_health_select,
         pg_catalog.has_table_privilege(
           current_user,
           'public.handleplan_schema_migrations',
@@ -245,8 +294,11 @@ export function createOperationsPostgresReadinessCheck(
       rows.length !== 1
       || row?.role_name !== PRIVATE_RUNTIME_DATABASE_ROLES.operations
       || row.dashboard_execute !== true
-      || row.migration_026_marker !== true
+      || row.alert_append_execute !== false
+      || row.alert_export_execute !== false
+      || row.migration_028_marker !== true
       || row.lifecycle_execute !== false
+      || row.publication_health_select !== false
       || row.migration_ledger_select !== false
     ) return false;
 

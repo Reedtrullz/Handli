@@ -312,7 +312,11 @@ describe("Oppdag discovery workspace", () => {
       expect.any(AbortSignal),
     );
     expect(screen.getByText(/Manglende kjeder vises som uavklart/)).toBeVisible();
-    expect(screen.getByRole("region", { name: "Offisielt tilbud hos Extra" })).toBeVisible();
+    const officialOffer = screen.getByRole("region", {
+      name: /^Offisielt tilbud 1 hos Extra: 19,90\s+kr per pakke\./u,
+    });
+    expect(officialOffer).toBeVisible();
+    expect(within(officialOffer).getByText("19,90 kr per pakke")).toBeVisible();
     expect(screen.getByText("Oppgitt førpris: 29,90 kr")).toBeVisible();
     expect(screen.getByText("Spar 10,00 kr (33,4 %) basert på tilbudets oppgitte førpris.")).toBeVisible();
     expect(screen.getByText(/Gjelder fra 14\. juli 2026 til 18\. juli 2026 • Hele Norge • i butikk/)).toBeVisible();
@@ -327,7 +331,48 @@ describe("Oppdag discovery workspace", () => {
     expect(screen.getByText(/ikke en komplett butikktaksonomi/i)).toBeVisible();
     expect(screen.getByText(/kontrollert lokal cache/)).toBeVisible();
     expect(screen.getByText(/Manglende historisk sammenligning betyr ikke at prisen er uendret/)).toBeVisible();
+    const resultStatus = screen.getByText("2 varer på denne siden");
+    expect(resultStatus).toHaveAttribute("aria-atomic", "true");
+    expect(resultStatus).toHaveAttribute("aria-live", "polite");
+    expect(resultStatus).toHaveAttribute("role", "status");
+    expect(resultStatus.closest(".discovery-results")).not.toHaveAttribute("aria-live");
     expect(document.body.textContent).not.toMatch(/tidligere observert|upstream/i);
+  });
+
+  it("gives concurrent same-chain offers unique informative region names", async () => {
+    const firstProduct = response.products[0]!;
+    const firstOffer = firstProduct.officialOffers[0]!;
+    const twoOfferResponse = publicDiscoveryResponseSchema.parse({
+      ...response,
+      products: [{
+        ...firstProduct,
+        officialOffers: [firstOffer, {
+          ...firstOffer,
+          conditions: [{ kind: "public" }, { kind: "minimum-quantity", quantity: 2 }],
+          id: "offer:milk:extra:multibuy",
+          pricing: { kind: "multibuy", quantity: 2, totalOre: 5_000 },
+          sourceRecordId: "offer-record:milk:extra:multibuy",
+        }],
+      }, ...response.products.slice(1)],
+    });
+
+    render(<DiscoveryWorkspace
+      searchDiscovery={successfulSearch(twoOfferResponse)}
+      storage={memoryStorage()}
+    />);
+
+    const offerRegions = await screen.findAllByRole("region", {
+      name: /^Offisielt tilbud \d+ hos Extra:/u,
+    });
+    expect(offerRegions).toHaveLength(2);
+    const accessibleNames = offerRegions.map((region) => region.getAttribute("aria-label"));
+    expect(new Set(accessibleNames).size).toBe(2);
+    expect(accessibleNames[0]).toMatch(
+      /^Offisielt tilbud 1 hos Extra: 19,90\s+kr per pakke\. Åpent tilbud$/u,
+    );
+    expect(accessibleNames[1]).toMatch(
+      /^Offisielt tilbud 2 hos Extra: 2 for 50,00\s+kr\. Åpent tilbud • Minst 2 stk$/u,
+    );
   });
 
   it("shows a member offer by verified chain without exposing its opaque eligibility ID", async () => {
@@ -353,7 +398,7 @@ describe("Oppdag discovery workspace", () => {
       "Medlemspris hos Extra – medlemskap kreves",
     )).toBeVisible();
     expect(document.body).not.toHaveTextContent(opaqueProgramId);
-    expect(screen.getByRole("region", { name: "Offisielt tilbud hos Extra" }))
+    expect(screen.getByRole("region", { name: /^Offisielt tilbud 1 hos Extra:/u }))
       .toBeVisible();
   });
 
@@ -386,7 +431,7 @@ describe("Oppdag discovery workspace", () => {
       "aria-pressed",
       "true",
     );
-    expect(screen.getByRole("region", { name: "Offisielt tilbud hos Extra" })).toBeVisible();
+    expect(screen.getByRole("region", { name: /^Offisielt tilbud 1 hos Extra:/u })).toBeVisible();
     expect(screen.queryByRole("region", { name: "Historisk prissammenligning hos REMA 1000" }))
       .not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Lettmelk Bunnpris" })).not.toBeInTheDocument();
@@ -399,7 +444,7 @@ describe("Oppdag discovery workspace", () => {
     expect(screen.getByRole("region", { name: "Historisk prissammenligning hos REMA 1000" }))
       .toBeVisible();
     expect(screen.getByText(/Dette er ikke butikkens førpris/)).toBeVisible();
-    expect(screen.queryByRole("region", { name: "Offisielt tilbud hos Extra" }))
+    expect(screen.queryByRole("region", { name: /^Offisielt tilbud \d+ hos Extra:/u }))
       .not.toBeInTheDocument();
   });
 

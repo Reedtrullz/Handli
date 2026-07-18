@@ -500,9 +500,8 @@ export class PostgresPublicCatalogIndexReader implements
             candidate_permission.permissions
           from source_permissions candidate_permission
           where candidate_permission.source_id = source.id
-            and candidate_permission.reviewed_at <= ${atIso}::timestamptz
             and candidate_permission.created_at <= ${atIso}::timestamptz
-          order by candidate_permission.reviewed_at desc, candidate_permission.id desc
+          order by candidate_permission.created_at desc, candidate_permission.id desc
           limit 1
         ) permission on true
         where observation.retrieved_at >= ${freshnessStartsAtIso}::timestamptz
@@ -510,6 +509,9 @@ export class PostgresPublicCatalogIndexReader implements
           and observation.retrieved_at <= run.completed_at
           and observation.created_at <= ${atIso}::timestamptz
           and permission.decision = 'approved'
+          and permission.reviewed_at <= ${atIso}::timestamptz
+          and source.permission_reviewed_at = permission.reviewed_at
+          and source.permission_expires_at is not distinct from permission.valid_until
           and (permission.valid_until is null or permission.valid_until > ${atIso}::timestamptz)
           and permission.permissions @> '{"catalog": true}'::jsonb
       ), latest_catalog as (
@@ -734,9 +736,8 @@ export class PostgresPublicCatalogIndexReader implements
             candidate_permission.permissions
           from source_permissions candidate_permission
           where candidate_permission.source_id = source.id
-            and candidate_permission.reviewed_at <= ${atIso}::timestamptz
             and candidate_permission.created_at <= ${atIso}::timestamptz
-          order by candidate_permission.reviewed_at desc, candidate_permission.id desc
+          order by candidate_permission.created_at desc, candidate_permission.id desc
           limit 1
         ) permission on true
         where observation.retrieved_at >= ${freshnessStartsAtIso}::timestamptz
@@ -744,6 +745,9 @@ export class PostgresPublicCatalogIndexReader implements
           and observation.retrieved_at <= run.completed_at
           and observation.created_at <= ${atIso}::timestamptz
           and permission.decision = 'approved'
+          and permission.reviewed_at <= ${atIso}::timestamptz
+          and source.permission_reviewed_at = permission.reviewed_at
+          and source.permission_expires_at is not distinct from permission.valid_until
           and (permission.valid_until is null or permission.valid_until > ${atIso}::timestamptz)
           and permission.permissions @> '{"catalog": true}'::jsonb
       ), latest_catalog as (
@@ -937,9 +941,8 @@ export class PostgresPublicCatalogIndexReader implements
             candidate_permission.permissions
           from source_permissions candidate_permission
           where candidate_permission.source_id = source.id
-            and candidate_permission.reviewed_at <= ${atIso}::timestamptz
             and candidate_permission.created_at <= ${atIso}::timestamptz
-          order by candidate_permission.reviewed_at desc, candidate_permission.id desc
+          order by candidate_permission.created_at desc, candidate_permission.id desc
           limit 1
         ) permission on true
         where observation.retrieved_at >= ${freshnessStartsAtIso}::timestamptz
@@ -947,6 +950,9 @@ export class PostgresPublicCatalogIndexReader implements
           and observation.retrieved_at <= run.completed_at
           and observation.created_at <= ${atIso}::timestamptz
           and permission.decision = 'approved'
+          and permission.reviewed_at <= ${atIso}::timestamptz
+          and source.permission_reviewed_at = permission.reviewed_at
+          and source.permission_expires_at is not distinct from permission.valid_until
           and (permission.valid_until is null or permission.valid_until > ${atIso}::timestamptz)
           and permission.permissions @> '{"catalog": true}'::jsonb
       ), catalog_candidates as (

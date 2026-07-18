@@ -19,12 +19,21 @@ const tokenPatterns = Object.freeze([
 
 const sensitiveName = "(?:[A-Za-z][A-Za-z0-9]*[_-])*(?:api[_-]?key|auth[_-]?token|client[_-]?secret|password|private[_-]?key|secret|token)";
 const sensitiveQuotedAssignment = new RegExp(
-  `(?:^|[^A-Za-z0-9])${sensitiveName}[ \\t]*[:=][ \\t]*["']([^"']{20,})["']`,
+  `(?<![A-Za-z0-9_-])(?:${sensitiveName}|["']${sensitiveName}["'])[ \\t]*[:=][ \\t]*(["'])([^"'\\r\\n]{1,4096})\\1`,
   "gimu",
 );
 const sensitiveBareAssignment = new RegExp(
-  `^[ \\t]*${sensitiveName}[ \\t]*[:=][ \\t]*([A-Za-z0-9+/_=:-]{20,})[ \\t]*(?:#.*)?$`,
+  `^[ \\t]*(?:-[ \\t]+)?(?:export[ \\t]+)?${sensitiveName}[ \\t]*[:=][ \\t]*([^"'\\s#,\\r\\n][^\\s#,\\r\\n]{0,4095})[ \\t]*(?:#.*)?$`,
   "gimu",
+);
+const sensitiveCamelName = "[A-Za-z][A-Za-z0-9]*(?:ApiKey|AuthToken|ClientSecret|Password|PrivateKey|Secret)";
+const sensitiveCamelQuotedAssignment = new RegExp(
+  `(?<![A-Za-z0-9_-])(?:${sensitiveCamelName}|["']${sensitiveCamelName}["'])[ \\t]*[:=][ \\t]*(["'])([^"'\\r\\n]{1,4096})\\1`,
+  "gmu",
+);
+const sensitiveCamelBareAssignment = new RegExp(
+  `^[ \\t]*(?:-[ \\t]+)?(?:export[ \\t]+)?${sensitiveCamelName}[ \\t]*[:=][ \\t]*([^"'\\s#,\\r\\n][^\\s#,\\r\\n]{0,4095})[ \\t]*(?:#.*)?$`,
+  "gmu",
 );
 const credentialUri = /\b(?:amqps?|mariadb|mongodb(?:\+srv)?|mysql|postgres(?:ql)?|rediss?):\/\/[^:@/\s]+:(\$\{[^}@\r\n]{1,200}\}|[^@/\s]{1,200})@[^/\s]+/giu;
 const approvedFixtureValues = new Set([
@@ -34,6 +43,7 @@ const approvedFixtureValues = new Set([
   "ci_review_url_safe_00000000000000001",
   "ci_url_safe_0000000000000001",
   "ci_web_url_safe_0000000000000000001",
+  "handleplan-handlemodus-parent-env-poison-v1",
   "operations_url_safe_password_000000001",
   "legacy-rollback-network-disabled",
   "password",
@@ -58,7 +68,34 @@ function lineNumber(text, index) {
   return text.slice(0, index).split("\n").length;
 }
 
-export function findSecretMatches(text) {
+function isEnvironmentReference(value) {
+  const variableName = "[A-Z][A-Z0-9_]*";
+  if (
+    new RegExp(`^\\$${variableName}$`, "u").test(value)
+    || new RegExp(`^\\$\\{${variableName}\\}$`, "u").test(value)
+    || new RegExp(`^\\$\\{${variableName}:-\\}$`, "u").test(value)
+  ) return true;
+  const required = value.match(
+    new RegExp(`^\\$\\{(${variableName}):?\\?([^}\\r\\n]{0,200})\\}$`, "u"),
+  );
+  if (required === null) return false;
+  const [, name, diagnostic] = required;
+  return diagnostic === ""
+    || diagnostic === "required"
+    || diagnostic === `${name} is required`;
+}
+
+function isApprovedFixtureValue(value, allowFixtureValues) {
+  return allowFixtureValues && approvedFixtureValues.has(value);
+}
+
+function shouldReportAssignment(value, allowFixtureValues) {
+  if (isEnvironmentReference(value)) return false;
+  if (isApprovedFixtureValue(value, allowFixtureValues)) return false;
+  return value.startsWith("${") || value.length >= 20;
+}
+
+export function findSecretMatches(text, { allowFixtureValues = false } = {}) {
   const matches = [];
   for (const [rule, pattern] of tokenPatterns) {
     pattern.lastIndex = 0;
@@ -66,11 +103,17 @@ export function findSecretMatches(text) {
       matches.push({ line: lineNumber(text, match.index ?? 0), rule });
     }
   }
-  for (const pattern of [sensitiveQuotedAssignment, sensitiveBareAssignment]) {
+  const assignmentPatterns = [
+    [sensitiveQuotedAssignment, 2],
+    [sensitiveBareAssignment, 1],
+    [sensitiveCamelQuotedAssignment, 2],
+    [sensitiveCamelBareAssignment, 1],
+  ];
+  for (const [pattern, valueCaptureGroup] of assignmentPatterns) {
     pattern.lastIndex = 0;
     for (const match of text.matchAll(pattern)) {
-      const candidate = match[1] ?? "";
-      if (!approvedFixtureValues.has(candidate)) {
+      const candidate = match[valueCaptureGroup] ?? "";
+      if (shouldReportAssignment(candidate, allowFixtureValues)) {
         matches.push({ line: lineNumber(text, match.index ?? 0), rule: "sensitive-assignment" });
       }
     }
@@ -78,13 +121,25 @@ export function findSecretMatches(text) {
   credentialUri.lastIndex = 0;
   for (const match of text.matchAll(credentialUri)) {
     const password = match[1] ?? "";
-    const environmentReference = /^\$\{[A-Z][A-Z0-9_]*(?::[?+\-][^}]*)?\}$/u.test(password)
-      || /^\$[A-Z][A-Z0-9_]*$/u.test(password);
-    if (!environmentReference && !approvedFixtureValues.has(password)) {
+    if (
+      !isEnvironmentReference(password)
+      && !isApprovedFixtureValue(password, allowFixtureValues)
+    ) {
       matches.push({ line: lineNumber(text, match.index ?? 0), rule: "credential-uri" });
     }
   }
-  return matches.sort((left, right) => left.line - right.line || left.rule.localeCompare(right.rule));
+  return [...new Map(matches.map((match) => [`${match.line}:${match.rule}`, match])).values()]
+    .sort((left, right) => left.line - right.line || left.rule.localeCompare(right.rule));
+}
+
+function allowsRepositoryFixtureValues(file) {
+  return file === ".env.example"
+    || file === ".github/workflows/ci.yml"
+    || file === "apps/worker/src/bootstrap.ts"
+    || file === "deploy/compose.rollback-legacy.yml"
+    || /(?:^|\/)tests?(?:\/|$)/u.test(file)
+    || /\.(?:spec|test)\.[^/]+$/u.test(file)
+    || /(?:^|\/)playwright(?:\.[^/]+)?\.config\.[^/]+$/u.test(file);
 }
 
 function repositoryFiles(root) {
@@ -110,7 +165,9 @@ export function scanRepositoryForSecrets(root = repositoryRoot) {
     }
     scannedFiles += 1;
     const text = buffer.toString("utf8");
-    for (const match of findSecretMatches(text)) {
+    for (const match of findSecretMatches(text, {
+      allowFixtureValues: allowsRepositoryFixtureValues(file),
+    })) {
       findings.push({ file: relative(root, absolutePath), ...match });
     }
   }

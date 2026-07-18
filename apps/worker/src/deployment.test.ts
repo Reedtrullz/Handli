@@ -1,7 +1,22 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +27,9 @@ const dockerfile = fileURLToPath(new URL("../../../Dockerfile", import.meta.url)
 const compose = fileURLToPath(new URL("../../../deploy/compose.production.yml", import.meta.url));
 const caddyfile = fileURLToPath(new URL("../../../deploy/Caddyfile.handleplan", import.meta.url));
 const deploy = fileURLToPath(new URL("../../../deploy/deploy-on-vps.sh", import.meta.url));
+const deploymentState = fileURLToPath(
+  new URL("../../../deploy/deployment-state.sh", import.meta.url),
+);
 const rollbackCompose = fileURLToPath(
   new URL("../../../deploy/compose.rollback-legacy.yml", import.meta.url),
 );
@@ -37,6 +55,7 @@ interface DeploymentFixture {
   dockerLog: string;
   imageId: string;
   operationsState: string;
+  previousImageId: string;
   previousRevision: string;
   remote: string;
   reviewState: string;
@@ -70,13 +89,12 @@ function cloudflareHeaderRules(handle: string | undefined): string[] {
 }
 
 async function createDeploymentFixture(prefix: string): Promise<DeploymentFixture> {
-  const root = await mkdtemp(join(tmpdir(), prefix));
+  const root = await realpath(await mkdtemp(join(tmpdir(), prefix)));
   const appRoot = join(root, "app");
   const source = join(appRoot, "source");
   const remote = join(root, "origin.git");
   const bin = join(root, "bin");
-  const scriptDir = join(root, "deploy-bundle");
-  const artifactDir = join(scriptDir, "image");
+  const artifactDir = join(root, "ci-artifact");
   const imageTree = join(root, "image-tree");
   await Promise.all([
     mkdir(bin, { recursive: true }),
@@ -89,11 +107,6 @@ async function createDeploymentFixture(prefix: string): Promise<DeploymentFixtur
     mkdir(join(source, "deploy", "migrations"), { recursive: true }),
   ]);
   await Promise.all([
-    copyFile(deploy, join(scriptDir, "deploy-on-vps.sh")),
-    copyFile(
-      fileURLToPath(new URL("../../../deploy/deployment-state.sh", import.meta.url)),
-      join(scriptDir, "deployment-state.sh"),
-    ),
     writeFile(join(appRoot, "shared", "production.env"), [
       "REVIEW_ACCESS_AUDIENCE=review-audience-0123456789abcdef",
       "OPERATIONS_ACCESS_AUDIENCE=operations-audience-0123456789abcdef",
@@ -105,7 +118,15 @@ async function createDeploymentFixture(prefix: string): Promise<DeploymentFixtur
     writeFile(join(source, "deploy", "compose.production.yml"), committedCompose),
     writeFile(join(source, "deploy", "compose.rollback-legacy.yml"), committedCompose),
     writeFile(join(source, "deploy", "deployment-state.sh"), "# fixture state controls\n"),
+    writeFile(
+      join(source, "deploy", "resolve-pending-deployment-on-vps.sh"),
+      "#!/bin/sh\n# fixture pending resolver\n",
+    ),
     writeFile(join(source, "deploy", "rollback-on-vps.sh"), "# fixture rollback controls\n"),
+    writeFile(
+      join(source, "deploy", "watch-pending-deployment-on-vps.sh"),
+      "#!/bin/sh\n# fixture pending watchdog\n",
+    ),
     writeFile(join(source, "deploy", "backup", "README.md"), "fixture backup controls\n"),
     writeFile(join(source, "deploy", "migrations", "001_fixture.sql"), "select 1;\n"),
   ]);
@@ -130,7 +151,6 @@ async function createDeploymentFixture(prefix: string): Promise<DeploymentFixtur
   });
   if (tarResult.status !== 0) throw new Error(`fixture tar failed: ${tarResult.stderr}`);
   await Promise.all([
-    chmod(join(scriptDir, "deploy-on-vps.sh"), 0o755),
     writeFile(join(artifactDir, "handleplan.provenance.json"), "{}\n"),
     writeFile(join(artifactDir, "handleplan.spdx.json"), "{}\n"),
   ]);
@@ -142,10 +162,11 @@ async function createDeploymentFixture(prefix: string): Promise<DeploymentFixtur
     bin,
     buildContextRecord: join(root, "build-context"),
     candidateRevision,
-    deployScript: join(scriptDir, "deploy-on-vps.sh"),
+    deployScript: deploy,
     dockerLog: join(root, "docker.log"),
     imageId: `sha256:${"b".repeat(64)}`,
     operationsState: join(root, "operations-present"),
+    previousImageId: `sha256:${"e".repeat(64)}`,
     previousRevision,
     remote,
     reviewState: join(root, "review-present"),
@@ -153,11 +174,36 @@ async function createDeploymentFixture(prefix: string): Promise<DeploymentFixtur
     source,
     workerState: join(root, "worker-present"),
   };
+  writeCommittedDeploymentState(
+    fixture,
+    fixture.previousRevision,
+    fixture.previousImageId,
+  );
   writeDeploymentBundle(fixture, candidateRevision);
   return fixture;
 }
 
-function writeDeploymentBundle(fixture: DeploymentFixture, revision: string): void {
+function writeCommittedDeploymentState(
+  fixture: DeploymentFixture,
+  revision: string,
+  imageId: string,
+  highWaterRevision: string = revision,
+): void {
+  const stateDir = join(fixture.appRoot, "state");
+  const verifiedDir = join(stateDir, "verified-images");
+  mkdirSync(verifiedDir, { recursive: true });
+  writeFileSync(join(stateDir, "current-deployment"), `v1 ${revision} current\n`);
+  writeFileSync(join(stateDir, "current-revision"), `${revision}\n`);
+  writeFileSync(join(stateDir, "current-image-id"), `${imageId}\n`);
+  writeFileSync(join(stateDir, "deployment-high-water"), `${highWaterRevision}\n`);
+  writeFileSync(join(verifiedDir, revision), `v1 ${revision} ${imageId}\n`);
+}
+
+function writeDeploymentBundle(
+  fixture: DeploymentFixture,
+  revision: string,
+  imageId: string = fixture.imageId,
+): void {
   const imageArchive = join(fixture.artifactDir, "handleplan-image.docker.tar");
   const sourceArchive = join(fixture.artifactDir, "handleplan-source.tar");
   const provenance = join(fixture.artifactDir, "handleplan.provenance.json");
@@ -169,10 +215,15 @@ function writeDeploymentBundle(fixture: DeploymentFixture, revision: string): vo
     revision,
   ], fixture.source);
   writeFileSync(join(fixture.artifactDir, "handleplan-image-bundle.v1"), [
-    "format=handleplan-ci-image-bundle-v1",
+    "format=handleplan-ci-image-bundle-v3",
     `revision=${revision}`,
     `image_reference=handleplan:${revision}`,
-    `image_id=${fixture.imageId}`,
+    `image_id=${imageId}`,
+    "platform=linux/amd64",
+    `runtime_source_digest_sha256=${"c".repeat(64)}`,
+    "runtime_source_file_count=217",
+    `runtime_shipment_digest_sha256=${"d".repeat(64)}`,
+    "runtime_shipment_entry_count=43",
     `image_archive_sha256=${sha256(imageArchive)}`,
     `source_archive_sha256=${sha256(sourceArchive)}`,
     `provenance_sha256=${sha256(provenance)}`,
@@ -181,6 +232,36 @@ function writeDeploymentBundle(fixture: DeploymentFixture, revision: string): vo
     "ci_run_attempt=1",
     "",
   ].join("\n"));
+}
+
+function stageDeploymentBundle(fixture: DeploymentFixture, revision: string): string {
+  const bundleLeaf = join(
+    fixture.appRoot,
+    "deploy-bundles",
+    revision,
+    "12345-1",
+    "98765-1",
+  );
+  const bundleImage = join(bundleLeaf, "image");
+  mkdirSync(bundleImage, { recursive: true });
+  copyFileSync(deploy, join(bundleLeaf, "deploy-on-vps.sh"));
+  copyFileSync(deploymentState, join(bundleLeaf, "deployment-state.sh"));
+  chmodSync(join(bundleLeaf, "deploy-on-vps.sh"), 0o755);
+  for (const artifact of [
+    "handleplan-image-bundle.v1",
+    "handleplan-image.docker.tar",
+    "handleplan-source.tar",
+    "handleplan.provenance.json",
+    "handleplan.spdx.json",
+  ]) {
+    copyFileSync(join(fixture.artifactDir, artifact), join(bundleImage, artifact));
+  }
+  const leaseExpires = Math.floor(Date.now() / 1000) + 10_800;
+  writeFileSync(
+    join(bundleLeaf, ".lease.v1"),
+    `v1 ${revision} 12345 1 98765 1 ${leaseExpires}\n`,
+  );
+  return join(bundleLeaf, "deploy-on-vps.sh");
 }
 
 async function installFakeDocker(fixture: DeploymentFixture): Promise<void> {
@@ -193,21 +274,42 @@ case "$*" in
     exit 0
     ;;
   image*)
+    inspected_reference=""
+    for argument in "$@"; do inspected_reference=$argument; done
     case "$*" in
-      *"$FAKE_CANDIDATE_REVISION"*)
+      *"handleplan:$FAKE_CANDIDATE_REVISION"*)
         case "$*" in
           *"{{.Id}}"*) printf '%s\\n' "$FAKE_IMAGE_ID" ;;
+          *"{{.Os}}/{{.Architecture}}"*) printf '%s\\n' "$FAKE_CANDIDATE_PLATFORM" ;;
           *"org.opencontainers.image.revision"*) printf '%s\\n' "$FAKE_CANDIDATE_REVISION" ;;
           *) exit 94 ;;
         esac
         exit 0
         ;;
     esac
-    case "$FAKE_PREVIOUS_IMAGE" in
-      verified) printf '%s\\n' "$FAKE_PREVIOUS_REVISION"; exit 0 ;;
-      wrong-label) printf '%s\\n' 0000000000000000000000000000000000000000; exit 0 ;;
-      missing) exit 1 ;;
-    esac
+    if [ "$inspected_reference" = "$FAKE_PREVIOUS_IMAGE_ID" ]; then
+      case "$FAKE_PREVIOUS_IMAGE" in
+        verified)
+          case "$*" in
+            *"{{.Id}}"*) printf '%s\\n' "$FAKE_PREVIOUS_IMAGE_ID" ;;
+            *"org.opencontainers.image.revision"*) printf '%s\\n' "$FAKE_PREVIOUS_REVISION" ;;
+            *) exit 93 ;;
+          esac
+          exit 0
+          ;;
+        wrong-label)
+          case "$*" in
+            *"{{.Id}}"*) printf '%s\\n' "$FAKE_PREVIOUS_IMAGE_ID" ;;
+            *"org.opencontainers.image.revision"*)
+              printf '%s\\n' 0000000000000000000000000000000000000000
+              ;;
+            *) exit 92 ;;
+          esac
+          exit 0
+          ;;
+        missing) exit 1 ;;
+      esac
+    fi
     exit 98
     ;;
   *" config")
@@ -274,28 +376,47 @@ exec /bin/mv "$@"
 function runDeployment(
   fixture: DeploymentFixture,
   revision: string,
-  previousImage: "missing" | "verified" | "wrong-label" = "missing",
+  previousImage: "missing" | "verified" | "wrong-label" = "verified",
   candidateUpMode: "fail" | "signal" = "fail",
   composeConfigMode: "fail" | "pass" = "pass",
+  candidatePlatform: "linux/amd64" | "linux/arm64" = "linux/amd64",
 ) {
-  writeDeploymentBundle(fixture, revision);
+  const deploymentImageId = revision === fixture.previousRevision
+    ? fixture.previousImageId
+    : fixture.imageId;
+  writeDeploymentBundle(fixture, revision, deploymentImageId);
+  const deployScript = stageDeploymentBundle(fixture, revision);
   const manifestSha256 = sha256(
     join(fixture.artifactDir, "handleplan-image-bundle.v1"),
   );
-  return spawnSync(fixture.deployScript, [revision, "12345", "1", manifestSha256], {
+  const stateDir = join(fixture.appRoot, "state");
+  const previousRevision = readFileSync(join(stateDir, "current-revision"), "utf8").trim();
+  const previousImageId = readFileSync(join(stateDir, "current-image-id"), "utf8").trim();
+  const pendingToken = "f".repeat(64);
+  return spawnSync(deployScript, [
+    revision,
+    "12345",
+    "1",
+    manifestSha256,
+    pendingToken,
+    previousRevision,
+    previousImageId,
+  ], {
     encoding: "utf8",
     env: {
       ...process.env,
       FAKE_APP_STATE: fixture.appState,
       FAKE_BUILD_CONTEXT_RECORD: fixture.buildContextRecord,
       FAKE_CANDIDATE_UP_MODE: candidateUpMode,
+      FAKE_CANDIDATE_PLATFORM: candidatePlatform,
       FAKE_COMPOSE_CONFIG_MODE: composeConfigMode,
       FAKE_CANDIDATE_REVISION: revision,
       FAKE_DOCKER_LOG: fixture.dockerLog,
-      FAKE_IMAGE_ID: fixture.imageId,
+      FAKE_IMAGE_ID: deploymentImageId,
       FAKE_OPERATIONS_STATE: fixture.operationsState,
       FAKE_PREVIOUS_IMAGE: previousImage,
-      FAKE_PREVIOUS_REVISION: fixture.previousRevision,
+      FAKE_PREVIOUS_IMAGE_ID: previousImageId,
+      FAKE_PREVIOUS_REVISION: previousRevision,
       FAKE_REVIEW_STATE: fixture.reviewState,
       FAKE_SOURCE_DIR: fixture.source,
       FAKE_WORKER_STATE: fixture.workerState,
@@ -313,6 +434,13 @@ describe("production runtime deployment", () => {
     expect(source).toContain("COPY apps/worker/package.json apps/worker/package.json");
     expect(source).toContain("pnpm --filter @handleplan/worker build");
     expect(source).toContain("/app/apps/worker/dist/main.mjs");
+    expect(source).not.toContain("/app/apps/web/public ./apps/web/public");
+    expect(source).toContain(
+      "/app/apps/web/.next/standalone ./",
+    );
+    expect(source).toContain(
+      "/app/apps/web/.next/handleplan-public-build-binding.json ./apps/web/.next/handleplan-public-build-binding.json",
+    );
     expect(source).toContain('org.opencontainers.image.revision="$APP_COMMIT_SHA"');
     expect(source).toContain(
       "install -d -o nextjs -g nodejs -m 0700 /var/lib/handleplan/private-captures",
@@ -407,7 +535,7 @@ describe("production runtime deployment", () => {
     expect(operationsBlock).toContain("body.database?.role!=='handleplan_operations'");
     expect(operationsBlock).not.toContain("api/internal/operations/snapshot");
     expect(operationsBlock).toContain(
-      "'026_official_offer_publication_runtime.sql'",
+      "'028_private_review_image_evidence_only.sql'",
     );
     expect(operationsBlock).toContain('"127.0.0.1:3007:3000"');
     expect(operationsBlock).not.toContain("private-captures");
@@ -451,7 +579,45 @@ describe("production runtime deployment", () => {
     expect(script).toContain('tar -xf "$source_archive" -C "$deployment_source_dir"');
     expect(script).toContain('docker image load --input "$image_archive"');
     expect(script).toContain('test "$loaded_image_id" = "$expected_image_id"');
+    expect(script).toContain(
+      'deploy "$revision" "$revision" current "$loaded_image_id" "$loaded_image_id"',
+    );
+    expect(script).toContain("Revision is already bound to a different immutable image");
+    expect(script).toContain('test "$app_image" = "$target_image"');
+    expect(script).toContain('test "$worker_image" = "$target_image"');
     expect(script).toContain('"$deployment_source_dir"');
+    expect(continuousIntegration).toContain(
+      "Prove the packaged migrator and worker from the exact image",
+    );
+    expect(continuousIntegration).toContain(
+      '"$EXPECTED_IMAGE_ID" /app/deploy/migrate.mjs',
+    );
+    expect(continuousIntegration).toContain(
+      '"$EXPECTED_IMAGE_ID" /app/apps/worker/dist/main.mjs',
+    );
+    expect(continuousIntegration).toContain("KASSAL_SOURCE_ACCESS=blocked");
+    expect(continuousIntegration).toContain(
+      "KASSAL_BASE_URL=https://127.0.0.1:1",
+    );
+    expect(continuousIntegration).toContain(".scheduler.completedCycles >= 1");
+    expect(continuousIntegration).toContain(".scheduler.failedCycles == 0");
+    expect(continuousIntegration).toContain(
+      ".scheduler.lastCycle.leaseAcquired == true",
+    );
+    expect(
+      continuousIntegration.indexOf(
+        "Prove the packaged migrator and worker from the exact image",
+      ),
+    ).toBeGreaterThan(
+      continuousIntegration.indexOf("Validate deployment assets"),
+    );
+    expect(
+      continuousIntegration.indexOf("run: corepack pnpm e2e:image"),
+    ).toBeGreaterThan(
+      continuousIntegration.indexOf(
+        "Prove the packaged migrator and worker from the exact image",
+      ),
+    );
     const composePreflightIndex = script.indexOf("config >/dev/null");
     expect(composePreflightIndex).toBeGreaterThanOrEqual(0);
     expect(composePreflightIndex).toBeLessThan(
@@ -616,11 +782,17 @@ describe("production runtime deployment", () => {
       "caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile",
     );
     expect(script).not.toContain("REVIEW_EVIDENCE_PROOF_SECRET");
+    for (const transferredControl of [
+      "deploy/cleanup-deployment-bundle-on-vps.sh",
+      "deploy/deploy-on-vps.sh",
+      "deploy/deployment-state.sh",
+      "deploy/resolve-pending-deployment-on-vps.sh",
+      "deploy/watch-pending-deployment-on-vps.sh",
+    ]) {
+      expect(deploymentWorkflow).toContain(transferredControl);
+    }
     expect(deploymentWorkflow).toContain(
-      "deploy/deploy-on-vps.sh deploy/deployment-state.sh",
-    );
-    expect(deploymentWorkflow).toContain(
-      "'$remote_bundle/deploy-on-vps.sh' '$DEPLOY_SHA' '$CI_RUN_ID' '$CI_RUN_ATTEMPT' '$EXPECTED_BUNDLE_MANIFEST_SHA256'",
+      "'$remote_bundle/deploy-on-vps.sh' '$DEPLOY_SHA' '$CI_RUN_ID' '$CI_RUN_ATTEMPT' '$EXPECTED_BUNDLE_MANIFEST_SHA256' '$PENDING_DEPLOYMENT_TOKEN' '$PREVIOUS_REVISION' '$PREVIOUS_IMAGE_ID'",
     );
     expect(deploymentWorkflow).toContain(
       "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
@@ -637,7 +809,7 @@ describe("production runtime deployment", () => {
   // This is a real shell/Git/archive deployment integration fixture. It is
   // quick in isolation, but shares CPU and filesystem bandwidth with the
   // rollback fixtures during the full Vitest run.
-  it("loads only the bounded exact CI artifacts and leaves a failed first deploy fully down", async () => {
+  it("loads only bounded exact CI artifacts and preserves the immutable predecessor", async () => {
     const fixture = await createDeploymentFixture("handleplan-exact-archive-");
     try {
       await Promise.all([
@@ -668,7 +840,7 @@ describe("production runtime deployment", () => {
 
       expect(result.status, result.stderr).toBe(1);
       expect(result.stderr).toContain(
-        "Deployment failed; no verified prior image, leaving all candidate runtimes down",
+        `Deployment failed; restoring only the public app from ${fixture.previousRevision}`,
       );
       expect(buildContext).not.toBe(fixture.source);
       expect(sourceArchiveSha256).toMatch(/^[0-9a-f]{64}$/u);
@@ -676,14 +848,14 @@ describe("production runtime deployment", () => {
         join(fixture.appRoot, "operations", "current", "release.v1"),
         "utf8",
       )).toBe(`v1 ${fixture.candidateRevision} ${sourceArchiveSha256}\n`);
-      await expect(readFile(
+      expect(await readFile(
         join(fixture.appRoot, "state", "current-deployment"),
         "utf8",
-      )).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(readFile(
+      )).toBe(`v1 ${fixture.previousRevision} current\n`);
+      expect(await readFile(
         join(fixture.appRoot, "state", "deployment-high-water"),
         "utf8",
-      )).rejects.toMatchObject({ code: "ENOENT" });
+      )).toBe(`${fixture.previousRevision}\n`);
       expect(migrationIndex).toBeGreaterThanOrEqual(0);
       expect(candidateStartIndex).toBeGreaterThan(migrationIndex);
       expect(calls.some((call) => call.includes(`${fixture.source}/deploy/compose`))).toBe(false);
@@ -694,16 +866,59 @@ describe("production runtime deployment", () => {
         fixture.reviewState,
         fixture.operationsState,
         fixture.workerState,
-        fixture.appState,
       ]) {
         await expect(readFile(runtimeState, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
       }
+      expect(await readFile(fixture.appState, "utf8"))
+        .toBe(`${fixture.previousRevision}\n`);
       await expect(readFile(join(buildContext, "Dockerfile"), "utf8"))
         .rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
     }
   }, 20_000);
+
+  it("rejects a loaded arm64 candidate before migrations or runtime mutation", async () => {
+    const fixture = await createDeploymentFixture("handleplan-arm64-candidate-");
+    try {
+      await installFakeDocker(fixture);
+      const stateDir = join(fixture.appRoot, "state");
+      const stateFiles = [
+        "current-deployment",
+        "current-revision",
+        "current-image-id",
+        "deployment-high-water",
+      ];
+      const stateBefore = await Promise.all(
+        stateFiles.map((stateFile) => readFile(join(stateDir, stateFile), "utf8")),
+      );
+
+      const result = runDeployment(
+        fixture,
+        fixture.candidateRevision,
+        "verified",
+        "fail",
+        "pass",
+        "linux/arm64",
+      );
+      const calls = (await readFile(fixture.dockerLog, "utf8")).trim().split("\n");
+
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(
+        "Loaded image platform is not the supported linux/amd64 target",
+      );
+      expect(calls.some((call) => call.includes("image load --input"))).toBe(true);
+      expect(calls.some((call) => call.includes("{{.Os}}/{{.Architecture}}"))).toBe(true);
+      expect(calls.some((call) => call.endsWith(" run --rm migrate"))).toBe(false);
+      expect(calls.some((call) => / (?:stop|rm -f) /u.test(call))).toBe(false);
+      expect(calls.some((call) => call.includes(" up -d "))).toBe(false);
+      await expect(Promise.all(
+        stateFiles.map((stateFile) => readFile(join(stateDir, stateFile), "utf8")),
+      )).resolves.toEqual(stateBefore);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
 
   it("refuses an invalid candidate Compose model before image load or runtime quiesce", async () => {
     const fixture = await createDeploymentFixture("handleplan-compose-preflight-");
@@ -807,7 +1022,7 @@ describe("production runtime deployment", () => {
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
     }
-  });
+  }, 15_000);
 
   it("cleans an interrupted candidate and restores only the verified prior public app", async () => {
     const fixture = await createDeploymentFixture("handleplan-interrupted-deploy-");
@@ -869,7 +1084,7 @@ describe("production runtime deployment", () => {
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
     }
-  });
+  }, 15_000);
 
   it.each(["missing", "wrong-label"] as const)(
     "keeps a failed candidate fully down when the recorded prior image is %s",
@@ -893,7 +1108,7 @@ describe("production runtime deployment", () => {
 
         expect(result.status, result.stderr).toBe(1);
         expect(result.stderr).toContain(
-          "Deployment failed; no verified prior image, leaving all candidate runtimes down",
+          "Verified predecessor image is missing or differs from immutable deployment state",
         );
         expect(calls.some((call) =>
           / up -d --wait --remove-orphans app$/u.test(call))).toBe(false);
@@ -939,17 +1154,12 @@ describe("production runtime deployment", () => {
   it("rejects an out-of-order older CI completion before image load", async () => {
     const fixture = await createDeploymentFixture("handleplan-stale-ci-");
     try {
-      await Promise.all([
-        writeFile(
-          join(fixture.appRoot, "state", "current-deployment"),
-          `v1 ${fixture.candidateRevision} current\n`,
-        ),
-        writeFile(
-          join(fixture.appRoot, "state", "current-revision"),
-          `${fixture.candidateRevision}\n`,
-        ),
-        installFakeDocker(fixture),
-      ]);
+      writeCommittedDeploymentState(
+        fixture,
+        fixture.candidateRevision,
+        fixture.imageId,
+      );
+      await installFakeDocker(fixture);
 
       const result = runDeployment(fixture, fixture.previousRevision);
 
@@ -994,7 +1204,7 @@ describe("production runtime deployment", () => {
     expect(reviewBlock).toContain("body.database?.role!=='handleplan_review'");
     expect(reviewBlock).not.toContain("api/review/candidates");
     expect(reviewBlock).toContain(
-      "'026_official_offer_publication_runtime.sql'",
+      "'028_private_review_image_evidence_only.sql'",
     );
     expect(operationsBlock).toContain('"127.0.0.1:3007:3000"');
     expect(operationsBlock).toMatch(/^\s+OPERATIONS_DATABASE_URL:/mu);

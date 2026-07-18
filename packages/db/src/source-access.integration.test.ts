@@ -95,7 +95,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       });
     });
 
-    it("uses the latest append-only decision and reports expiry from PostgreSQL time", async () => {
+    it("uses serialized insertion order for a backdated decision and reports expiry from PostgreSQL time", async () => {
       await connection.sql`
         insert into source_permissions (
           source_id,
@@ -107,7 +107,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         ) values (
           ${sourceId},
           'revoked',
-          '2021-01-01T00:00:00Z',
+          '2019-01-01T00:00:00Z',
           null,
           '{}'::jsonb,
           'source-access integration revocation'
@@ -117,6 +117,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         permissionCurrent: true,
         permissionDecision: "revoked",
         permissions: {},
+        sourcePermissionCurrent: false,
       });
 
       await connection.sql`
@@ -158,10 +159,35 @@ describe.skipIf(!runDatabaseIntegration).sequential(
           'source-access integration future approval'
         )
       `;
-      // A future review cannot shadow the latest decision that is current now.
+      // The newest persisted decision is selected first and is itself
+      // unavailable until its review clock is current.
       await expect(reader.getSourceAccess(sourceId)).resolves.toMatchObject({
         permissionCurrent: false,
         permissionDecision: "approved",
+      });
+
+      await connection.sql`
+        insert into source_permissions (
+          source_id,
+          decision,
+          reviewed_at,
+          valid_until,
+          permissions,
+          notes
+        ) values (
+          ${sourceId},
+          'revoked',
+          '2098-06-01T00:00:00Z',
+          null,
+          '{}'::jsonb,
+          'source-access integration future revocation'
+        )
+      `;
+      await expect(reader.getSourceAccess(sourceId)).resolves.toMatchObject({
+        permissionCurrent: false,
+        permissionDecision: "revoked",
+        permissions: {},
+        sourcePermissionCurrent: false,
       });
 
       await connection.sql`

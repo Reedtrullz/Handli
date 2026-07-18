@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
   deriveExactProductPlanDeltaExplanationsV1,
+  publicDiscoveryResponseSchema,
   travelPlanApiRequestSchema,
   travelPlanApiResponseSchemaFor,
   type ExactProductPlanApiResponse,
@@ -394,6 +395,74 @@ test("partial price coverage keeps calculated and unavailable travel explicit an
 });
 
 test("Oppdag separates price claims at the 320px reflow proxy for the bounded 400% zoom equivalent", async ({ page }) => {
+  await page.route("**/api/discovery/search**", async (route) => {
+    const requestedUrl = new URL(route.request().url());
+    const sourceUrl = new URL(requestedUrl);
+    sourceUrl.searchParams.set("type", "all");
+    const upstream = await route.fetch({ url: sourceUrl.toString() });
+    const response = publicDiscoveryResponseSchema.parse(await upstream.json());
+    const target = response.products.find(({ catalog }) => catalog.gtin === "7038010000010");
+    if (target === undefined) throw new Error("the deterministic Oppdag fixture product is missing");
+
+    const source = {
+      contractVersion: 1 as const,
+      displayName: "Tilgjengelighetstest kundeavis",
+      id: "accessibility-offer-source",
+      sourceClass: "offer" as const,
+      state: "approved" as const,
+    };
+    const commonOffer = {
+      applicability: {
+        channels: ["in-store"] as const,
+        contractVersion: 1 as const,
+        endsAt: "2026-07-18T21:59:59.000Z",
+        geographicScope: { countryCode: "NO", kind: "national" as const },
+        startsAt: "2026-07-14T00:00:00.000Z",
+      },
+      beforePriceOre: 2_990,
+      capturedAt: response.generatedAt,
+      chainId: "extra",
+      contractVersion: 1 as const,
+      evidenceLevel: "authoritative" as const,
+      kind: "official-offer" as const,
+      productMatch: { canonicalProductId: target.canonicalProductId, kind: "exact" as const },
+      sourceId: source.id,
+    };
+    const product = {
+      ...target,
+      officialOffers: [{
+        ...commonOffer,
+        conditions: [{ kind: "public" as const }],
+        id: "offer:accessibility:extra:unit",
+        pricing: { kind: "unit" as const, unitPriceOre: 1_990 },
+        sourceRecordId: "offer-record:accessibility:extra:unit",
+      }, {
+        ...commonOffer,
+        conditions: [
+          { kind: "public" as const },
+          { kind: "minimum-quantity" as const, quantity: 2 },
+        ],
+        id: "offer:accessibility:extra:multibuy",
+        pricing: { kind: "multibuy" as const, quantity: 2, totalOre: 5_000 },
+        sourceRecordId: "offer-record:accessibility:extra:multibuy",
+      }],
+    };
+    const resultType = requestedUrl.searchParams.get("type") === "official-offer"
+      ? "official-offer"
+      : "all";
+    const augmented = publicDiscoveryResponseSchema.parse({
+      ...response,
+      products: resultType === "official-offer"
+        ? [product]
+        : response.products.map((entry) =>
+            entry.canonicalProductId === product.canonicalProductId ? product : entry),
+      selection: { ...response.selection, resultType },
+      sources: [...response.sources, source].sort((left, right) =>
+        left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+    });
+    await route.fulfill({ json: augmented, response: upstream });
+  });
+
   await page.goto("/oppdag");
   const zoomEvidence = await expectFourHundredPercentZoomEquivalentReflow(page);
   expect(zoomEvidence.zoomPercent).toBe(400);
@@ -404,16 +473,28 @@ test("Oppdag separates price claims at the 320px reflow proxy for the bounded 40
   await expect(page.getByText(/Ordinærpris, offisielt tilbud og historisk sammenligning er tre forskjellige påstander/u)).toBeVisible();
   await expect(page.getByText(/Den er ikke butikkens førpris og kalles ikke rabatt/u)).toBeVisible();
   const results = page.locator(".discovery-results");
-  await expect(results).toHaveAttribute("aria-live", "polite");
+  await expect(results).not.toHaveAttribute("aria-live");
+  const resultStatus = page.locator(".discovery-result-status");
+  await expect(resultStatus).toHaveAttribute("aria-atomic", "true");
+  await expect(resultStatus).toHaveAttribute("aria-live", "polite");
+  await expect(resultStatus).toHaveAttribute("role", "status");
 
   const extra = page.getByRole("button", { name: "Extra", exact: true });
-  await extra.click();
+  await extra.focus();
+  await extra.press("Enter");
   await expect(extra).toBeFocused();
   await expect(extra).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("heading", { name: "Prisgrunnlag hos Extra" })).toBeVisible();
   const offers = page.getByRole("button", { name: "Offisielle tilbud", exact: true });
   await offers.click();
   await expect(offers).toHaveAttribute("aria-pressed", "true");
+  const offerRegions = page.getByRole("region", {
+    name: /^Offisielt tilbud \d+ hos Extra:/u,
+  });
+  await expect(offerRegions).toHaveCount(2);
+  const offerNames = await offerRegions.evaluateAll((regions) =>
+    regions.map((region) => region.getAttribute("aria-label")));
+  expect(new Set(offerNames).size).toBe(2);
 
   await expectNoHorizontalOverflow(page);
   await expectMinimumTargetSize(page.locator(".chain-tabs button, .discovery-type-tabs button, .primary-button, .secondary-button"));

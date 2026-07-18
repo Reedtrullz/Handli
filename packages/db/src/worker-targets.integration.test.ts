@@ -36,6 +36,27 @@ describe.skipIf(!runDatabaseIntegration).sequential(
     it("selects and promotes a migration-style unverified quarantine before refreshed rows", async () => {
       const migrationEan = gtin13(Date.now() % 1_000_000_000_000);
       const cacheOnlyEan = gtin13((Date.now() + 1) % 1_000_000_000_000);
+      const sourceId = `worker-target-${nonce}`;
+      await connection.sql.begin(async (transaction) => {
+        await transaction`
+          insert into data_sources (
+            id, display_name, source_kind, runtime_state,
+            permission_reviewed_at, permission_expires_at
+          ) values (
+            ${sourceId}, 'Worker target authorized promotion', 'catalog', 'approved',
+            '2026-01-01T00:00:00Z', '2099-01-01T00:00:00Z'
+          )
+        `;
+        await transaction`
+          insert into source_permissions (
+            source_id, decision, reviewed_at, valid_until, permissions, notes
+          ) values (
+            ${sourceId}, 'approved', '2026-01-01T00:00:00Z',
+            '2099-01-01T00:00:00Z', '{"catalog":true}'::jsonb,
+            ${`worker-target-authorized-promotion-${nonce}`}
+          )
+        `;
+      });
       const [product] = await connection.sql`
         insert into canonical_products (
           display_name, package_amount, package_unit, status, units_per_pack
@@ -69,7 +90,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         fenceToken: `fixture-fence-${nonce}`,
         jobId: `worker-target-promotion-${nonce}`,
         runType: "catalog",
-        sourceId: "kassalapp",
+        sourceId,
         startedAt: now,
       });
       await repository.persistCatalogOutcomes(begun.handle, [{

@@ -86,6 +86,9 @@ export class PostgresSourceAccessReader {
         (
           source.permission_reviewed_at is not null
           and source.permission_reviewed_at <= clock_timestamp()
+          and permission.reviewed_at <= clock_timestamp()
+          and source.permission_reviewed_at = permission.reviewed_at
+          and source.permission_expires_at is not distinct from permission.valid_until
           and (
             source.permission_expires_at is null
             or source.permission_expires_at > clock_timestamp()
@@ -95,6 +98,7 @@ export class PostgresSourceAccessReader {
         permission.permissions,
         (
           permission.id is not null
+          and permission.reviewed_at <= clock_timestamp()
           and (
             permission.valid_until is null
             or permission.valid_until > clock_timestamp()
@@ -102,11 +106,11 @@ export class PostgresSourceAccessReader {
         ) as permission_current
       from data_sources source
       left join lateral (
-        select id, decision, permissions, valid_until
+        select id, decision, reviewed_at, permissions, valid_until
         from source_permissions
         where source_id = source.id
-          and reviewed_at <= clock_timestamp()
-        order by reviewed_at desc, id desc
+          and created_at <= clock_timestamp()
+        order by created_at desc, id desc
         limit 1
       ) permission on true
       where source.id = ${sourceId}
