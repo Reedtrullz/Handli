@@ -103,5 +103,7 @@ release remains compatible.
   binds retained artifacts, migration and policy-document checksums, an OCI
   manifest digest, signatures, backup identity, coverage, and all twelve release
   gates. Its draft mode records missing proof; it does not turn the unsigned CI
-  build statement into promotable provenance. Promotion verification is
-  intentionally unsupported today; the checker cannot authorize a release.
+  build statement into promotable provenance. Promotion additionally requires
+  a short-lived Ed25519 receipt bound to the exact manifest and verified against
+  registry/signer policy from the protected release Environment. No current
+  candidate has that receipt or the external facts it must attest.

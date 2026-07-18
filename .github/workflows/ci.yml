@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       promotion_manifest:
-        description: Reserved V1 promotion path; drafts and promotions are rejected until the evidence architecture is complete
+        description: Candidate manifest for externally trusted promotion verification
         required: false
         type: string
 
@@ -57,11 +57,6 @@ jobs:
         run: corepack pnpm operations:monitor:test
       - name: Test release-manifest checker
         run: corepack pnpm release:manifest:test
-      - name: Enforce the intentionally closed V1 promotion path
-        if: ${{ inputs.promotion_manifest != '' }}
-        env:
-          PROMOTION_MANIFEST: ${{ inputs.promotion_manifest }}
-        run: corepack pnpm release:manifest:verify -- --require-promotion "$PROMOTION_MANIFEST"
       - name: Generate revision-bound SPDX source SBOM
         run: corepack pnpm security:sbom
       - name: Validate V1 data
@@ -498,3 +493,31 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
+
+  verify-promotion:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.promotion_manifest != '' }}
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release-promotion
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0, Node 24 action runtime
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0, Node 24 action runtime
+        with:
+          node-version: 22.22.3
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile --ignore-scripts
+      - name: Verify externally trusted V1 promotion candidate
+        env:
+          HANDLEPLAN_RELEASE_IMAGE_SIGNER: ${{ vars.HANDLEPLAN_RELEASE_IMAGE_SIGNER }}
+          HANDLEPLAN_RELEASE_PROVENANCE_SIGNER: ${{ vars.HANDLEPLAN_RELEASE_PROVENANCE_SIGNER }}
+          HANDLEPLAN_RELEASE_TRUST_KEY_ID: ${{ vars.HANDLEPLAN_RELEASE_TRUST_KEY_ID }}
+          HANDLEPLAN_RELEASE_TRUST_PUBLIC_KEY_BASE64: ${{ secrets.HANDLEPLAN_RELEASE_TRUST_PUBLIC_KEY_BASE64 }}
+          HANDLEPLAN_RELEASE_TRUST_REPOSITORY: ${{ vars.HANDLEPLAN_RELEASE_TRUST_REPOSITORY }}
+          PROMOTION_MANIFEST: ${{ inputs.promotion_manifest }}
+        run: corepack pnpm release:manifest:verify -- --require-promotion "$PROMOTION_MANIFEST"

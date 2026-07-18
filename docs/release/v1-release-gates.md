@@ -52,9 +52,12 @@ Chat summaries, an owner-accessible preview, or an unversioned dashboard are
 not sufficient evidence. The current
 [cross-browser-remediated source-neutral implementation draft](../evidence/v1/v1-source-neutral-cross-browser-remediation-2026-07-17/release-candidate.v1.json)
 is explicitly blocked and is neither a release nor deployment evidence.
-The verifier intentionally rejects every promotion candidate today. Its current
-contract is a fail-closed draft ledger, not a release authorization mechanism;
-the remaining evidence-architecture work is recorded in the runbook.
+The verifier can authorize a structurally complete promotion only when the
+protected release Environment supplies an independent Ed25519 trust policy and
+the evidence commit contains a current signed receipt bound to the exact
+manifest, OCI image, approved signers, and G1-G12 claims. The current draft has
+no such receipt and remains blocked; verifier capability is not release
+evidence.
 
 ## Launch decision and emergency behaviour
 

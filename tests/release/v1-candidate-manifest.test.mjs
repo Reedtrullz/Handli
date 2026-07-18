@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import {
+  createHash,
+  generateKeyPairSync,
+  sign,
+} from "node:crypto";
 import {
   appendFileSync,
   copyFileSync,
@@ -17,7 +21,9 @@ import { test } from "node:test";
 
 import {
   assertManifestSchema,
+  canonicalReleaseTrustStatement,
   gateIds,
+  requiredEvidenceProtocolByGate,
   repositoryRoot,
   verifyCandidateManifest,
   verifyManifestFile,
@@ -198,7 +204,7 @@ function promotionFixture() {
   const immutableReference = `${repository}@${imageDigest}`;
   const reviewedAt = "2026-07-17T03:00:00Z";
 
-  const evidence = (id, kind, { registryReadback = null } = {}) => {
+  const evidence = (id, kind, gateId, { registryReadback = null } = {}) => {
     const command = `verify ${id}`;
     const environment = "isolated fixture environment";
     const rawPath = `${candidateDirectory}/${id}.raw.json`;
@@ -211,7 +217,7 @@ function promotionFixture() {
     });
     const artifact = `${candidateDirectory}/${id}.evidence.json`;
     const artifactSha = writeTracked(artifact, {
-      contractVersion: "handleplan.release-evidence.v1",
+      contractVersion: "handleplan.release-evidence.v2",
       candidateId,
       evidenceId: id,
       kind,
@@ -224,6 +230,8 @@ function promotionFixture() {
       reviewer: `fixture-${kind}-reviewer`,
       reportArtifacts: [{ path: rawPath, sha256: rawSha }],
       registryReadback,
+      gateIds: [gateId],
+      protocol: requiredEvidenceProtocolByGate[gateId],
     });
     return {
       id,
@@ -235,7 +243,7 @@ function promotionFixture() {
       reviewedAt,
     };
   };
-  const ciProof = evidence("ci-proof", "ci", {
+  const ciProof = evidence("ci-proof", "ci", "G10", {
     registryReadback: {
       repository,
       immutableReference,
@@ -245,9 +253,37 @@ function promotionFixture() {
       observedAt: reviewedAt,
     },
   });
-  const testProof = evidence("test-proof", "tests");
-  const scanProof = evidence("scan-proof", "scans");
-  const reviewProof = evidence("review-proof", "reviews");
+  const testProof = evidence("test-proof", "tests", "G2");
+  const scanProof = evidence("scan-proof", "scans", "G9");
+  const reviewProof = evidence("review-proof", "reviews", "G1");
+  const evidenceByGate = {
+    G1: [reviewProof],
+    G2: [testProof],
+    G3: [evidence("g3-test-proof", "tests", "G3")],
+    G4: [evidence("g4-test-proof", "tests", "G4")],
+    G5: [evidence("g5-test-proof", "tests", "G5")],
+    G6: [evidence("g6-test-proof", "tests", "G6")],
+    G7: [
+      evidence("g7-test-proof", "tests", "G7"),
+      evidence("g7-review-proof", "reviews", "G7"),
+    ],
+    G8: [
+      evidence("g8-test-proof", "tests", "G8"),
+      evidence("g8-review-proof", "reviews", "G8"),
+    ],
+    G9: [scanProof, evidence("g9-review-proof", "reviews", "G9")],
+    G10: [
+      ciProof,
+      evidence("g10-test-proof", "tests", "G10"),
+      evidence("g10-scan-proof", "scans", "G10"),
+    ],
+    G11: [
+      evidence("g11-test-proof", "tests", "G11"),
+      evidence("g11-review-proof", "reviews", "G11"),
+    ],
+    G12: [evidence("g12-review-proof", "reviews", "G12")],
+  };
+  const allGateEvidence = Object.values(evidenceByGate).flat();
 
   const backupReportPath = `${candidateDirectory}/backup-restore.raw.json`;
   const backupReportSha = writeTracked(backupReportPath, { result: "restored" });
@@ -345,10 +381,10 @@ function promotionFixture() {
       sha256: coverageSha,
     },
     evidence: {
-      ci: [ciProof],
-      tests: [testProof],
-      scans: [scanProof],
-      reviews: [reviewProof],
+      ci: allGateEvidence.filter(({ id }) => id === "ci-proof"),
+      tests: allGateEvidence.filter(({ id }) => id === "test-proof" || id.includes("-test-proof")),
+      scans: allGateEvidence.filter(({ id }) => id === "scan-proof" || id.includes("-scan-proof")),
+      reviews: allGateEvidence.filter(({ id }) => id === "review-proof" || id.includes("-review-proof")),
     },
     backup: {
       status: "restore_verified",
@@ -382,20 +418,11 @@ function promotionFixture() {
         verifiedAt: "2026-07-17T03:00:00Z",
       },
     },
-    gates: [
-      { id: "G1", status: "passed", evidenceIds: ["review-proof"] },
-      { id: "G2", status: "passed", evidenceIds: ["test-proof"] },
-      { id: "G3", status: "passed", evidenceIds: ["test-proof"] },
-      { id: "G4", status: "passed", evidenceIds: ["test-proof"] },
-      { id: "G5", status: "passed", evidenceIds: ["test-proof"] },
-      { id: "G6", status: "passed", evidenceIds: ["test-proof"] },
-      { id: "G7", status: "passed", evidenceIds: ["test-proof", "review-proof"] },
-      { id: "G8", status: "passed", evidenceIds: ["test-proof", "review-proof"] },
-      { id: "G9", status: "passed", evidenceIds: ["scan-proof", "review-proof"] },
-      { id: "G10", status: "passed", evidenceIds: ["ci-proof", "test-proof", "scan-proof"] },
-      { id: "G11", status: "passed", evidenceIds: ["test-proof", "review-proof"] },
-      { id: "G12", status: "passed", evidenceIds: ["review-proof"] },
-    ],
+    gates: gateIds.map((id) => ({
+      id,
+      status: "passed",
+      evidenceIds: evidenceByGate[id].map(({ id: evidenceId }) => evidenceId),
+    })),
     missingOrUnverifiedGateIds: [],
     limitations: [],
   };
@@ -409,6 +436,71 @@ function withPromotionFixture(callback) {
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
   }
+}
+
+function addExternalTrustReceipt(fixture, {
+  expiresAt = "2026-07-17T05:00:00Z",
+  keyPair = generateKeyPairSync("ed25519"),
+  keyId = "fixture-release-trust-key",
+  verifiedAt = "2026-07-17T04:00:00Z",
+} = {}) {
+  const { manifest, root, trackedFiles } = fixture;
+  const manifestPath = `docs/evidence/v1/${manifest.candidateId}/release-candidate.v1.json`;
+  const manifestSha256 = write(root, manifestPath, manifest);
+  trackedFiles.add(manifestPath);
+  const statement = {
+    candidateId: manifest.candidateId,
+    sourceCommitSha: manifest.source.commitSha,
+    candidateManifestSha256: manifestSha256,
+    repository: manifest.image.repository,
+    immutableReference: manifest.image.immutableReference,
+    manifestDigest: manifest.image.manifestDigest,
+    verifiedAt,
+    expiresAt,
+    reviewer: "fixture independent release reviewer",
+    checks: {
+      registryReadback: "verified",
+      imageSignature: {
+        status: "verified",
+        signer: "fixture-release-identity",
+      },
+      provenance: {
+        status: "verified",
+        signer: "fixture-provenance-identity",
+      },
+      gateEvidence: {
+        status: "verified",
+        gateIds,
+      },
+    },
+  };
+  const receiptPath = `docs/evidence/v1/${manifest.candidateId}/external-release-trust-receipt.v1.json`;
+  write(root, receiptPath, {
+    contractVersion: "handleplan.external-release-trust.v1",
+    statement,
+    signature: {
+      algorithm: "ed25519",
+      keyId,
+      value: sign(
+        null,
+        Buffer.from(canonicalReleaseTrustStatement(statement), "utf8"),
+        keyPair.privateKey,
+      ).toString("base64"),
+    },
+  });
+  trackedFiles.add(receiptPath);
+  return {
+    manifestPath,
+    receiptPath,
+    trustPolicy: {
+      imageSigner: "fixture-release-identity",
+      keyId,
+      provenanceSigner: "fixture-provenance-identity",
+      publicKey: keyPair.publicKey.export({ format: "pem", type: "spki" }).toString(),
+      repository: manifest.image.repository,
+    },
+    verificationTime: new Date("2026-07-17T04:30:00Z"),
+  };
 }
 
 function draftWriterFixture() {
@@ -596,7 +688,7 @@ test("a draft can identify an unverified backup without claiming a restore", () 
   );
 });
 
-test("even a structurally complete fixture cannot pass as a promotion", () => {
+test("a structurally complete fixture cannot pass without external trust", () => {
   withPromotionFixture(({ commitSha, manifest, root, trackedFiles }) => {
     const evidenceCommitSha = sha256("fixture evidence commit").slice(0, 40);
     assert.throws(
@@ -612,8 +704,73 @@ test("even a structurally complete fixture cannot pass as a promotion", () => {
         trackedFiles,
         worktreeDirty: false,
       }),
-      /promotion verification is intentionally unsupported/u,
+      /must add the external release trust receipt/u,
     );
+  });
+});
+
+test("a current externally signed receipt unlocks only its exact promotion candidate", () => {
+  withPromotionFixture((fixture) => {
+    const { manifest, root, trackedFiles } = fixture;
+    const evidenceCommitSha = sha256("fixture evidence commit").slice(0, 40);
+    const trust = addExternalTrustReceipt(fixture);
+    const result = verifyCandidateManifest(manifest, {
+      manifestPath: trust.manifestPath,
+      repositoryCommit: evidenceCommitSha,
+      root,
+      sourceCandidateEvidencePaths: [],
+      sourceCommitIsAncestor: true,
+      sourceToEvidenceChangedPaths: [trust.manifestPath, trust.receiptPath],
+      sourceToEvidenceCommitCount: 1,
+      trackedFiles,
+      trustPolicy: trust.trustPolicy,
+      verificationTime: trust.verificationTime,
+      worktreeDirty: false,
+    });
+    assert.deepEqual(result, {
+      candidateId: manifest.candidateId,
+      mode: "promotion_candidate",
+      releaseDecision: "eligible",
+    });
+  });
+});
+
+test("external trust rejects manifest drift, an untrusted key, and an expired receipt", () => {
+  const verify = (fixture, trust, overrides = {}) => verifyCandidateManifest(fixture.manifest, {
+    manifestPath: trust.manifestPath,
+    repositoryCommit: sha256("fixture evidence commit").slice(0, 40),
+    root: fixture.root,
+    sourceCandidateEvidencePaths: [],
+    sourceCommitIsAncestor: true,
+    sourceToEvidenceChangedPaths: [trust.manifestPath, trust.receiptPath],
+    sourceToEvidenceCommitCount: 1,
+    trackedFiles: fixture.trackedFiles,
+    trustPolicy: trust.trustPolicy,
+    verificationTime: trust.verificationTime,
+    worktreeDirty: false,
+    ...overrides,
+  });
+
+  withPromotionFixture((fixture) => {
+    const trust = addExternalTrustReceipt(fixture);
+    fixture.manifest.createdAt = "2026-07-17T03:01:00Z";
+    write(fixture.root, trust.manifestPath, fixture.manifest);
+    assert.throws(() => verify(fixture, trust), /not bound to the candidate manifest and image/u);
+  });
+
+  withPromotionFixture((fixture) => {
+    const trust = addExternalTrustReceipt(fixture);
+    const otherKey = generateKeyPairSync("ed25519");
+    trust.trustPolicy.publicKey = otherKey.publicKey
+      .export({ format: "pem", type: "spki" }).toString();
+    assert.throws(() => verify(fixture, trust), /signature is invalid/u);
+  });
+
+  withPromotionFixture((fixture) => {
+    const trust = addExternalTrustReceipt(fixture, {
+      expiresAt: "2026-07-17T04:15:00Z",
+    });
+    assert.throws(() => verify(fixture, trust), /not current within its bounded validity window/u);
   });
 });
 
@@ -626,6 +783,7 @@ test("promotion requires one append-only evidence commit after the immutable sou
       sourceCommitIsAncestor: true,
       sourceToEvidenceChangedPaths: [
         `docs/evidence/v1/${manifest.candidateId}/release-candidate.v1.json`,
+        `docs/evidence/v1/${manifest.candidateId}/external-release-trust-receipt.v1.json`,
       ],
       sourceToEvidenceCommitCount: 1,
       trackedFiles,
@@ -660,6 +818,7 @@ test("promotion requires one append-only evidence commit after the immutable sou
         ...baseOptions,
         sourceToEvidenceChangedPaths: [
           `docs/evidence/v1/${manifest.candidateId}/release-candidate.v1.json`,
+          `docs/evidence/v1/${manifest.candidateId}/external-release-trust-receipt.v1.json`,
           "apps/web/app/page.tsx",
         ],
       }),
@@ -669,9 +828,9 @@ test("promotion requires one append-only evidence commit after the immutable sou
 });
 
 test("file verification derives the one-commit source-to-evidence boundary from Git", () => {
-  withPromotionFixture(({ manifest, root }) => {
-    const manifestPath = `docs/evidence/v1/${manifest.candidateId}/release-candidate.v1.json`;
-    write(root, manifestPath, manifest);
+  withPromotionFixture((fixture) => {
+    const { manifest, root } = fixture;
+    const trust = addExternalTrustReceipt(fixture);
     execFileSync("git", ["add", "docs/evidence"], { cwd: root });
     execFileSync(
       "git",
@@ -679,10 +838,11 @@ test("file verification derives the one-commit source-to-evidence boundary from 
       { cwd: root },
     );
 
-    assert.throws(
-      () => verifyManifestFile(manifestPath, root, { requirePromotion: true }),
-      /promotion verification is intentionally unsupported until registry and signature proofs/u,
-    );
+    assert.equal(verifyManifestFile(trust.manifestPath, root, {
+      requirePromotion: true,
+      trustPolicy: trust.trustPolicy,
+      verificationTime: trust.verificationTime,
+    }).releaseDecision, "eligible");
   });
 });
 
@@ -708,6 +868,26 @@ test("a generic CI result cannot stand in for gate-specific manual evidence", ()
         worktreeDirty: false,
       }),
       /G1 lacks passed reviews evidence/u,
+    );
+  });
+});
+
+test("a valid evidence kind cannot be reused outside its gate protocol", () => {
+  withPromotionFixture(({ commitSha, manifest, root, trackedFiles }) => {
+    const review = manifest.evidence.reviews[0];
+    const wrapper = JSON.parse(readFileSync(join(root, review.artifact), "utf8"));
+    wrapper.gateIds = ["G2"];
+    wrapper.protocol = requiredEvidenceProtocolByGate.G2;
+    review.sha256 = write(root, review.artifact, wrapper);
+
+    assert.throws(
+      () => verifyCandidateManifest(manifest, {
+        repositoryCommit: commitSha,
+        root,
+        trackedFiles,
+        worktreeDirty: false,
+      }),
+      /G1 references evidence outside its gate-specific protocol contract/u,
     );
   });
 });

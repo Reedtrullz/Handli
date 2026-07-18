@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://handle.reidar.tech/schemas/v1-candidate-manifest.schema.json",
   "title": "Handleplan v1 release candidate evidence manifest",
-  "$comment": "The promotion_candidate shape uses a source commit followed by exactly one evidence-only commit. The repository semantic verifier still rejects final promotion until independent live cryptographic verification and gate-specific trust policy are implemented.",
+  "$comment": "The promotion_candidate shape uses a source commit followed by exactly one evidence-only commit. Successful verification additionally requires a short-lived Ed25519 receipt and trust policy supplied outside candidate-controlled repository data.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -35,12 +35,12 @@
       "pattern": "^[a-z0-9][a-z0-9.-]*$"
     },
     "mode": {
-      "description": "draft_unverified is supported. promotion_candidate receives strict two-commit preflight validation but remains ineligible until independent live trust verification is implemented.",
+      "description": "draft_unverified remains blocked. promotion_candidate requires strict two-commit validation plus an externally keyed release-trust receipt.",
       "enum": ["draft_unverified", "promotion_candidate"]
     },
     "createdAt": { "type": "string", "format": "date-time" },
     "releaseDecision": {
-      "description": "eligible is reserved by the schema and can be declared only by a promotion candidate that passes the complete external release workflow; the current repository verifier still fails closed before returning it.",
+      "description": "eligible is reserved for a promotion candidate that passes the complete repository and externally trusted release workflow.",
       "enum": ["blocked", "eligible"]
     },
     "source": { "$ref": "#/$defs/source" },

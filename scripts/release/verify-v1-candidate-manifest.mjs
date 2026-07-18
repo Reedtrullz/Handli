@@ -1,5 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import {
+  createHash,
+  createPublicKey,
+  verify as verifySignature,
+} from "node:crypto";
 import {
   readFileSync,
   readdirSync,
@@ -42,6 +46,20 @@ const requiredEvidenceKindsByGate = Object.freeze({
   G11: ["tests", "reviews"],
   G12: ["reviews"],
 });
+export const requiredEvidenceProtocolByGate = Object.freeze({
+  G1: "handleplan.gate-evidence.source-rights.v1",
+  G2: "handleplan.gate-evidence.declared-coverage.v1",
+  G3: "handleplan.gate-evidence.data-truth.v1",
+  G4: "handleplan.gate-evidence.planner-correctness.v1",
+  G5: "handleplan.gate-evidence.three-chain.v1",
+  G6: "handleplan.gate-evidence.travel-privacy.v1",
+  G7: "handleplan.gate-evidence.offline-shopping.v1",
+  G8: "handleplan.gate-evidence.accessibility.v1",
+  G9: "handleplan.gate-evidence.security-privacy-legal.v1",
+  G10: "handleplan.gate-evidence.operations.v1",
+  G11: "handleplan.gate-evidence.real-baskets.v1",
+  G12: "handleplan.gate-evidence.public-good-governance.v1",
+});
 
 const schema = JSON.parse(readFileSync(
   resolve(repositoryRoot, "docs/release/v1-candidate-manifest.schema.json"),
@@ -55,14 +73,21 @@ const coverageManifestSchema = JSON.parse(readFileSync(
   resolve(repositoryRoot, "docs/data/launch-coverage.v1.schema.json"),
   "utf8",
 ));
+const externalTrustReceiptSchema = JSON.parse(readFileSync(
+  resolve(repositoryRoot, "docs/release/v1-external-trust-receipt.schema.json"),
+  "utf8",
+));
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 addFormats(ajv);
 const validateSchema = ajv.compile(schema);
 const validateSourceRegistrySchema = ajv.compile(sourceRegistrySchema);
 const validateCoverageManifestSchema = ajv.compile(coverageManifestSchema);
+const validateExternalTrustReceiptSchema = ajv.compile(externalTrustReceiptSchema);
 const placeholderPattern = /(?:^|[^a-z0-9])(todo|tbd|placeholder|replace[-_ ]?me|fill[-_ ]?me)(?:$|[^a-z0-9])/iu;
 const migrationNamePattern = /^\d{3}_[a-z0-9_]+\.sql$/u;
 const repositoryImagePattern = /^[a-z0-9.-]+(?::[1-9]\d{0,4})?\/(?:[a-z0-9._-]+\/)*[a-z0-9._-]+$/u;
+const releaseTrustReceiptFilename = "external-release-trust-receipt.v1.json";
+const releaseTrustMaximumValidityMilliseconds = 24 * 60 * 60 * 1_000;
 
 function fail(message) {
   throw new Error(`candidate manifest rejected: ${message}`);
@@ -136,6 +161,187 @@ function assertExactKeys(value, expectedKeys, label) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     fail(`${label} has unexpected or missing fields`);
   }
+}
+
+export function canonicalReleaseTrustStatement(value) {
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) fail("external trust statement contains a non-finite number");
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalReleaseTrustStatement(entry)).join(",")}]`;
+  }
+  if (typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => (
+      `${JSON.stringify(key)}:${canonicalReleaseTrustStatement(value[key])}`
+    )).join(",")}}`;
+  }
+  fail("external trust statement contains a non-JSON value");
+}
+
+export function releaseTrustPolicyFromEnvironment(environment = process.env) {
+  const required = {
+    imageSigner: environment.HANDLEPLAN_RELEASE_IMAGE_SIGNER,
+    keyId: environment.HANDLEPLAN_RELEASE_TRUST_KEY_ID,
+    provenanceSigner: environment.HANDLEPLAN_RELEASE_PROVENANCE_SIGNER,
+    publicKeyBase64: environment.HANDLEPLAN_RELEASE_TRUST_PUBLIC_KEY_BASE64,
+    repository: environment.HANDLEPLAN_RELEASE_TRUST_REPOSITORY,
+  };
+  const missing = Object.entries(required)
+    .filter(([, value]) => typeof value !== "string" || value.trim().length === 0)
+    .map(([key]) => key);
+  if (missing.length > 0) {
+    fail(`promotion requires external trust policy values: ${missing.join(", ")}`);
+  }
+  if (
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u
+      .test(required.publicKeyBase64)
+  ) {
+    fail("external trust public key is not canonical base64");
+  }
+  const publicKey = Buffer.from(required.publicKeyBase64, "base64").toString("utf8");
+  if (publicKey.length < 80 || publicKey.length > 8_192) {
+    fail("external trust public key has an unsafe size");
+  }
+  return {
+    imageSigner: required.imageSigner,
+    keyId: required.keyId,
+    provenanceSigner: required.provenanceSigner,
+    publicKey,
+    repository: required.repository,
+  };
+}
+
+function assertExternalReleaseTrustReceipt({
+  manifest,
+  manifestPath,
+  now,
+  root,
+  trackedFiles,
+  trustPolicy,
+}) {
+  if (trustPolicy === null || typeof trustPolicy !== "object") {
+    fail("promotion requires a cryptographically verified external release trust receipt");
+  }
+  for (const key of ["imageSigner", "keyId", "provenanceSigner", "publicKey", "repository"]) {
+    if (typeof trustPolicy[key] !== "string" || trustPolicy[key].trim().length === 0) {
+      fail(`external trust policy has no ${key}`);
+    }
+  }
+  if (trustPolicy.repository !== manifest.image.repository) {
+    fail("external trust policy does not authorize the candidate registry repository");
+  }
+  if (trustPolicy.imageSigner !== manifest.attestations.imageSignature.signer) {
+    fail("external trust policy does not authorize the candidate image signer");
+  }
+  if (typeof manifestPath !== "string") {
+    fail("promotion trust verification requires the candidate manifest path");
+  }
+  const expectedManifestPath = `docs/evidence/v1/${manifest.candidateId}/release-candidate.v1.json`;
+  if (manifestPath !== expectedManifestPath) {
+    fail(`promotion trust verification requires ${expectedManifestPath}`);
+  }
+  const receiptPath = `docs/evidence/v1/${manifest.candidateId}/${releaseTrustReceiptFilename}`;
+  assertCandidateEvidencePath(
+    receiptPath,
+    manifest,
+    "external release trust receipt",
+    true,
+    trackedFiles,
+  );
+  const receiptFile = checkedRepositoryFile(root, receiptPath, "external release trust receipt");
+  let receipt;
+  try {
+    receipt = JSON.parse(readFileSync(receiptFile, "utf8"));
+  } catch {
+    fail("external release trust receipt is not valid JSON");
+  }
+  if (!validateExternalTrustReceiptSchema(receipt)) {
+    fail(`external release trust receipt schema validation failed:\n${ajv.errorsText(
+      validateExternalTrustReceiptSchema.errors,
+      { separator: "\n" },
+    )}`);
+  }
+  const statement = receipt.statement;
+  const manifestFile = checkedRepositoryFile(root, manifestPath, "candidate manifest");
+  if (
+    statement.candidateId !== manifest.candidateId
+    || statement.sourceCommitSha !== manifest.source.commitSha
+    || statement.candidateManifestSha256 !== sha256File(manifestFile)
+    || statement.repository !== manifest.image.repository
+    || statement.immutableReference !== manifest.image.immutableReference
+    || statement.manifestDigest !== manifest.image.manifestDigest
+  ) {
+    fail("external release trust receipt is not bound to the candidate manifest and image");
+  }
+  if (
+    statement.checks.registryReadback !== "verified"
+    || statement.checks.imageSignature.status !== "verified"
+    || statement.checks.imageSignature.signer !== trustPolicy.imageSigner
+    || statement.checks.provenance.status !== "verified"
+    || statement.checks.provenance.signer !== trustPolicy.provenanceSigner
+    || statement.checks.gateEvidence.status !== "verified"
+    || JSON.stringify(statement.checks.gateEvidence.gateIds) !== JSON.stringify(gateIds)
+  ) {
+    fail("external release trust receipt does not verify every required trust domain");
+  }
+  const verifiedAt = Date.parse(statement.verifiedAt);
+  const expiresAt = Date.parse(statement.expiresAt);
+  const verificationTime = now instanceof Date ? now.getTime() : Date.parse(now ?? "");
+  if (
+    !Number.isFinite(verificationTime)
+    || expiresAt <= verifiedAt
+    || expiresAt - verifiedAt > releaseTrustMaximumValidityMilliseconds
+    || verificationTime < verifiedAt
+    || verificationTime > expiresAt
+  ) {
+    fail("external release trust receipt is not current within its bounded validity window");
+  }
+  const candidateEvidenceTimes = [
+    manifest.createdAt,
+    manifest.backup.restoreTestedAt,
+    manifest.attestations.imageSignature.verifiedAt,
+    ...Object.values(manifest.evidence).flatMap((entries) => (
+      entries.map(({ reviewedAt }) => reviewedAt)
+    )),
+  ].filter((value) => value !== null).map((value) => Date.parse(value));
+  if (
+    candidateEvidenceTimes.some((value) => !Number.isFinite(value))
+    || candidateEvidenceTimes.some((value) => value > verifiedAt)
+  ) {
+    fail("external release trust receipt predates candidate evidence or review");
+  }
+  if (
+    receipt.signature.algorithm !== "ed25519"
+    || receipt.signature.keyId !== trustPolicy.keyId
+  ) {
+    fail("external release trust receipt uses an unauthorized signing identity");
+  }
+  const signatureBytes = Buffer.from(receipt.signature.value, "base64");
+  if (signatureBytes.byteLength !== 64) {
+    fail("external release trust receipt has an invalid Ed25519 signature size");
+  }
+  let publicKey;
+  try {
+    publicKey = createPublicKey(trustPolicy.publicKey);
+  } catch {
+    fail("external release trust policy public key cannot be parsed");
+  }
+  if (publicKey.asymmetricKeyType !== "ed25519") {
+    fail("external release trust policy requires an Ed25519 public key");
+  }
+  if (!verifySignature(
+    null,
+    Buffer.from(canonicalReleaseTrustStatement(statement), "utf8"),
+    publicKey,
+    signatureBytes,
+  )) {
+    fail("external release trust receipt signature is invalid");
+  }
+  return receiptPath;
 }
 
 function readBoundArtifactJson(root, binding, label) {
@@ -252,7 +458,7 @@ function assertEvidence(root, manifest, promotion, trackedFiles) {
         { artifact: entry.artifact, sha256: entry.sha256 },
         label,
       );
-      assertExactKeys(wrapper, [
+      const wrapperKeys = [
         "contractVersion",
         "candidateId",
         "evidenceId",
@@ -266,9 +472,14 @@ function assertEvidence(root, manifest, promotion, trackedFiles) {
         "reviewer",
         "reportArtifacts",
         "registryReadback",
-      ], `${label} wrapper`);
+      ];
+      if (wrapper.contractVersion === "handleplan.release-evidence.v2") {
+        wrapperKeys.push("gateIds", "protocol");
+      }
+      assertExactKeys(wrapper, wrapperKeys, `${label} wrapper`);
       if (
-        wrapper.contractVersion !== "handleplan.release-evidence.v1"
+        !["handleplan.release-evidence.v1", "handleplan.release-evidence.v2"]
+          .includes(wrapper.contractVersion)
         || wrapper.candidateId !== manifest.candidateId
         || wrapper.evidenceId !== entry.id
         || wrapper.kind !== entry.kind
@@ -280,6 +491,29 @@ function assertEvidence(root, manifest, promotion, trackedFiles) {
         || wrapper.reviewedAt !== entry.reviewedAt
       ) {
         fail(`${label} wrapper is not bound to this candidate and evidence record`);
+      }
+      if (promotion && wrapper.contractVersion !== "handleplan.release-evidence.v2") {
+        fail(`${label} promotion evidence requires a gate-specific v2 wrapper`);
+      }
+      if (wrapper.contractVersion === "handleplan.release-evidence.v2") {
+        if (
+          !Array.isArray(wrapper.gateIds)
+          || wrapper.gateIds.length === 0
+          || new Set(wrapper.gateIds).size !== wrapper.gateIds.length
+          || wrapper.gateIds.some((gateId) => !gateIds.includes(gateId))
+          || JSON.stringify(wrapper.gateIds) !== JSON.stringify(
+            gateIds.filter((gateId) => wrapper.gateIds.includes(gateId)),
+          )
+          || typeof wrapper.protocol !== "string"
+          || !Object.values(requiredEvidenceProtocolByGate).includes(wrapper.protocol)
+        ) {
+          fail(`${label} has an invalid gate-specific protocol binding`);
+        }
+        entry.gateIds = wrapper.gateIds;
+        entry.protocol = wrapper.protocol;
+      } else {
+        entry.gateIds = [];
+        entry.protocol = null;
       }
       if (entry.status === "passed") {
         if (typeof wrapper.reviewer !== "string" || wrapper.reviewer.trim().length === 0) {
@@ -686,6 +920,13 @@ function assertGates(manifest, evidenceById, promotion) {
           fail(`${gate.id} lacks passed ${requiredKind} evidence required by its acceptance rule`);
         }
       }
+      const expectedProtocol = requiredEvidenceProtocolByGate[gate.id];
+      if (gate.evidenceIds.some((id) => {
+        const evidence = evidenceById.get(id);
+        return !evidence.gateIds.includes(gate.id) || evidence.protocol !== expectedProtocol;
+      })) {
+        fail(`${gate.id} references evidence outside its gate-specific protocol contract`);
+      }
     }
   }
 
@@ -711,6 +952,7 @@ function assertBoundDocumentSchema(label, validate, document) {
 }
 
 export function verifyCandidateManifest(manifest, {
+  manifestPath,
   root = repositoryRoot,
   repositoryCommit,
   sourceCandidateEvidencePaths,
@@ -718,6 +960,8 @@ export function verifyCandidateManifest(manifest, {
   sourceToEvidenceChangedPaths,
   sourceToEvidenceCommitCount,
   trackedFiles,
+  trustPolicy = null,
+  verificationTime = new Date(),
   worktreeDirty,
 } = {}) {
   assertManifestSchema(manifest);
@@ -925,14 +1169,23 @@ export function verifyCandidateManifest(manifest, {
     if (!sourceToEvidenceChangedPaths.includes(expectedManifestPath)) {
       fail("promotion evidence commit must add the candidate manifest");
     }
+    const trustReceiptPath = `${evidencePrefix}${releaseTrustReceiptFilename}`;
+    if (!sourceToEvidenceChangedPaths.includes(trustReceiptPath)) {
+      fail("promotion evidence commit must add the external release trust receipt");
+    }
     if (sourceToEvidenceChangedPaths.some((path) => !path.startsWith(evidencePrefix))) {
       fail("promotion evidence commit may change only its candidate evidence directory");
     }
-    fail(
-      "promotion verification is intentionally unsupported until registry and signature proofs are verified live by an independent trust policy and G1-G12 use externally reviewed gate-specific evidence contracts",
-    );
+    assertExternalReleaseTrustReceipt({
+      manifest,
+      manifestPath,
+      now: verificationTime,
+      root,
+      trackedFiles,
+      trustPolicy,
+    });
   }
-  if (manifest.releaseDecision !== "blocked") {
+  if (!promotion && manifest.releaseDecision !== "blocked") {
     fail("draft manifests must remain blocked");
   }
   return {
@@ -1013,7 +1266,7 @@ function repositoryState(root, manifest) {
 export function verifyManifestFile(
   manifestPath,
   root = repositoryRoot,
-  { requirePromotion = false } = {},
+  { requirePromotion = false, trustPolicy, verificationTime } = {},
 ) {
   const resolvedPath = checkedRepositoryFile(root, manifestPath, "candidate manifest");
   const manifest = JSON.parse(readFileSync(resolvedPath, "utf8"));
@@ -1034,7 +1287,11 @@ export function verifyManifestFile(
   if (manifest.mode === "promotion_candidate" && !state.trackedFiles.has(manifestPath)) {
     fail("promotion candidate manifest is not a tracked blob at candidate HEAD");
   }
+  const effectiveTrustPolicy = manifest.mode === "promotion_candidate"
+    ? trustPolicy ?? releaseTrustPolicyFromEnvironment()
+    : null;
   return verifyCandidateManifest(manifest, {
+    manifestPath,
     repositoryCommit: state.commit,
     root,
     sourceCandidateEvidencePaths: state.sourceCandidateEvidencePaths,
@@ -1042,6 +1299,8 @@ export function verifyManifestFile(
     sourceToEvidenceChangedPaths: state.sourceToEvidenceChangedPaths,
     sourceToEvidenceCommitCount: state.sourceToEvidenceCommitCount,
     trackedFiles: state.trackedFiles,
+    trustPolicy: effectiveTrustPolicy,
+    verificationTime,
     worktreeDirty: state.dirty,
   });
 }
