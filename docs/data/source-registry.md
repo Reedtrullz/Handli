@@ -1,6 +1,6 @@
 # Handleplan source registry
 
-- Last reviewed: 2026-07-16
+- Last reviewed: 2026-07-18
 - Machine-readable contract: [source-registry.v1.json](./source-registry.v1.json)
 - Revocation procedure: [source-kill-switch.md](./source-kill-switch.md)
 - Candidate coverage: [launch-coverage.v1.json](./launch-coverage.v1.json)
@@ -23,7 +23,7 @@ Unknown permission fails closed to `blocked`. Every source defaults off. Public 
 
 | Source | Intended role | State | Public ranking | Binding reason |
 |---|---|---:|---:|---|
-| Kassalapp API | catalog, ordinary prices, history, stores | conditional | no | Commercial app access is advertised, but the current credential tier and storage/display/redistribution terms are not recorded |
+| Kassalapp API | catalog, ordinary prices, history, stores | conditional | no | Hobby permits all endpoints for non-commercial use and Bedrift supports app embedding, but the current key tier and storage/display/redistribution terms are not recorded |
 | Tjek API | structured official offers | conditional | no | Customer-only API; the signed agreement defines the permitted services and Handleplan has no verified agreement |
 | Bunnpris public web | stores and customer papers | blocked | no | Public presentation is not affirmative permission for automated reuse |
 | REMA 1000 public web | stores and regional customer papers | blocked | no | Public presentation is not affirmative permission for automated reuse |
@@ -36,14 +36,23 @@ No grocery source is approved as of this review. Consequently, no candidate regi
 
 ## Primary evidence
 
-All observations below were retrieved from official pages on 2026-07-16. They record what the public source says; they do not substitute for a project-specific agreement.
+The Kassalapp observations below were refreshed from official pages on
+2026-07-18; the remaining source observations were retrieved on 2026-07-16.
+They record what the public source says and do not substitute for a
+project-specific agreement.
 
 ### Kassalapp
 
-- [Kassalapp pricing](https://kassal.app/pris) describes Hobby access as non-commercial and limited to 60 requests per minute. It describes Bedrift as suitable for embedding price and product functionality in an app and asks users to make an agreement. This supports a viable commercial path but does not prove the current key's tier or full downstream rights.
-- [Kassalapp API documentation](https://kassal.app/api/docs) documents product search, EAN lookup, physical stores, and bulk price history. The documented bulk endpoint accepts at most 100 EANs and distinguishes regular and premium history windows. Endpoint documentation proves technical capability, not retention or republication permission.
+- [Kassalapp pricing](https://kassal.app/pris) describes Hobby as access to all endpoints with a 60 requests/minute limit and no commercial use. It describes Bedrift as suitable for embedding price and product functionality in an app, priced at NOK 750/month, and requiring contact for an agreement. Handleplan's intended AGPL public-good model has no ads, affiliate links, paywall, data sale, or other monetization, but Kassalapp has not confirmed that this qualifies for Hobby use.
+- [Kassalapp API documentation](https://kassal.app/api) documents product search, EAN lookup, physical stores for the three required chains, and bulk price history. The documented bulk endpoint accepts at most 100 EANs and distinguishes regular and premium history windows. Endpoint documentation proves technical capability, not retention or republication permission.
+- [Kassalapp's pricing explanation](https://kassal.app/blogg/kassalapp-kommersiell-api-priser) says hobby projects remain free while commercial use requires payment. It does not define Handleplan-specific storage, derived ranking, public display, imagery, attribution, or termination rights.
 
-Unresolved: credential tier; persistent raw and derived storage; historical aggregation; public rankings; imagery; marks; attribution; rate limits; termination; deletion; and measured three-chain regional coverage.
+Unresolved: whether the public-good model qualifies as Hobby use; credential
+tier; persistent raw and derived storage; historical aggregation; public
+rankings; imagery; marks; attribution; rate limits; termination; deletion; and
+measured three-chain regional coverage. The ready-to-send permission request
+and acceptance checklist are tracked in
+[issue #5](https://github.com/Reedtrullz/Handli/issues/5).
 
 ### Tjek
 
@@ -92,4 +101,9 @@ Written permission should be linked or referenced by a non-secret agreement iden
 
 ## Review result
 
-Gate A is not passed. Kassalapp, Tjek, and retailer rights remain unresolved. The safe next move is commercial/rights outreach plus a measured Kassalapp coverage probe under verified terms. Until then, the launch manifest stays candidate-only and every grocery comparison is ineligible for public v1 claims.
+Gate A is not passed. Kassalapp, Tjek, and retailer rights remain unresolved.
+The immediate next action is the written Kassalapp confirmation in
+[issue #5](https://github.com/Reedtrullz/Handli/issues/5), followed by a
+measured coverage probe only under the confirmed terms. Until then, the launch
+manifest stays candidate-only and every grocery comparison is ineligible for
+public v1 claims.

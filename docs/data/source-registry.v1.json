@@ -1,7 +1,7 @@
 {
   "$schema": "./source-registry.v1.schema.json",
   "registryVersion": "1.0.0",
-  "reviewedAt": "2026-07-16",
+  "reviewedAt": "2026-07-18",
   "intendedUse": "Handleplan public price comparison, basket planning, offer discovery, branch lookup, and opt-in route estimates",
   "states": {
     "approved": "The intended use is supported by recorded primary evidence and all known obligations are accepted.",
@@ -45,17 +45,18 @@
         "marks": "unknown",
         "attribution": "unknown"
       },
-      "rateLimit": "Credential tier is unknown. The public pricing page lists 60 requests/minute for Hobby and no rate limit for Bedrift; current-key terms have not been verified.",
+      "rateLimit": "Credential tier is unknown. The current public pricing page lists 60 requests/minute for Hobby and no rate limit for Bedrift; current-key terms have not been verified.",
       "terminationRisk": "Access and downstream retention rights after termination are unknown.",
       "killSwitchKey": "source.kassalapp.enabled",
       "requiredActions": [
-        "Record the current credential tier and governing agreement without copying the credential value.",
+        "Resolve https://github.com/Reedtrullz/Handli/issues/5 and record the current credential tier and governing agreement without copying the credential value.",
         "Obtain or record permission for persistent storage, derived rankings, public display, and any redistribution.",
         "Clarify product imagery, retailer marks, attribution, rate limits, termination, and deletion obligations.",
         "Run a representative endpoint and coverage probe only after the agreement permits it."
       ],
       "knownUnknowns": [
         "Whether the current credential is Hobby, Bedrift, premium, or governed by custom terms",
+        "Whether a public AGPL service with no ads, affiliate links, paywall, data sale, or other monetization qualifies for Hobby use",
         "Whether ordinary-price observations may be retained append-only",
         "Whether public basket rankings and historical aggregates are allowed",
         "Whether image URLs or retailer marks may be displayed",
@@ -66,14 +67,20 @@
         {
           "url": "https://kassal.app/pris",
           "kind": "official_commercial_page",
-          "accessedAt": "2026-07-16",
-          "finding": "The Hobby tier is described as non-commercial with a 60 requests/minute limit. The Bedrift tier is described for embedding price and product information in an app and requires an agreement."
+          "accessedAt": "2026-07-18",
+          "finding": "The current page describes Hobby as access to all endpoints with a 60 requests/minute limit and no commercial use. It describes Bedrift as suitable for embedding price and product information in an app, priced at NOK 750/month, and requiring contact for an agreement."
         },
         {
-          "url": "https://kassal.app/api/docs",
+          "url": "https://kassal.app/api",
           "kind": "official_api_documentation",
-          "accessedAt": "2026-07-16",
-          "finding": "Documents products, EAN lookup, bulk price history, and physical stores. Bulk history accepts at most 100 EANs and documents 90 days for regular users or 365 days for premium users."
+          "accessedAt": "2026-07-18",
+          "finding": "The current official API page documents products, EAN lookup, bulk price history, and physical stores for Bunnpris, REMA 1000, and Coop Extra. Bulk history accepts at most 100 EANs and documents 90 days for regular users or 365 days for premium users."
+        },
+        {
+          "url": "https://kassal.app/blogg/kassalapp-kommersiell-api-priser",
+          "kind": "official_pricing_explanation",
+          "accessedAt": "2026-07-18",
+          "finding": "Kassalapp states that hobby projects remain free while commercial use requires payment, but it does not define Handleplan-specific storage, derived ranking, public display, imagery, attribution, or termination rights."
         }
       ],
       "revocationDisposition": "Stop fetch and serving; quarantine derived records; apply the governing agreement's deletion or retention requirements before reactivation."
