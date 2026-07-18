@@ -52,6 +52,10 @@ const ociLayerMediaTypes = new Set([
   "application/vnd.docker.image.rootfs.diff.tar",
   "application/vnd.docker.image.rootfs.diff.tar.gzip",
 ]);
+const uncompressedOciLayerMediaTypes = new Set([
+  "application/vnd.oci.image.layer.v1.tar",
+  "application/vnd.docker.image.rootfs.diff.tar",
+]);
 const ociDigestPattern = /^sha256:([0-9a-f]{64})$/u;
 const ociBlobPathPattern = /^blobs\/sha256\/([0-9a-f]{64})$/u;
 const runtimeSourceInputPaths = Object.freeze([
@@ -819,8 +823,49 @@ function validateDockerArchiveManifestShape(
     && contentStoreConfigPattern.test(entry.Config);
   const isDirectLegacyConfig = entry?.Config === expectedLegacyConfig;
   const isExpectedContentStoreConfig = entry?.Config === expectedContentStoreConfig;
+  const entryKeys = entry?.LayerSources === undefined
+    ? ["Config", "Layers", "RepoTags"]
+    : ["Config", "LayerSources", "Layers", "RepoTags"];
+  const hasSafeLayerSources = (() => {
+    if (entry?.LayerSources === undefined) return true;
+    if (
+      !allowLinkedContentStoreConfig
+      || !isContentStoreConfig
+      || !isExpectedContentStoreConfig
+      || entry.LayerSources === null
+      || typeof entry.LayerSources !== "object"
+      || Array.isArray(entry.LayerSources)
+      || !Array.isArray(entry.Layers)
+    ) {
+      return false;
+    }
+    const expectedSourceKeys = entry.Layers.map((layer) => {
+      const digest = typeof layer === "string"
+        ? ociBlobPathPattern.exec(layer)?.[1]
+        : undefined;
+      return digest === undefined ? undefined : `sha256:${digest}`;
+    });
+    if (expectedSourceKeys.some((key) => key === undefined)) return false;
+    const actualSourceKeys = Object.keys(entry.LayerSources).sort();
+    const sortedExpectedSourceKeys = [...expectedSourceKeys].sort();
+    if (
+      new Set(sortedExpectedSourceKeys).size !== sortedExpectedSourceKeys.length
+      || actualSourceKeys.length !== sortedExpectedSourceKeys.length
+      || actualSourceKeys.some((key, index) => key !== sortedExpectedSourceKeys[index])
+    ) {
+      return false;
+    }
+    return actualSourceKeys.every((key) => {
+      const descriptor = entry.LayerSources[key];
+      return exactKeys(descriptor, ["digest", "mediaType", "size"])
+        && descriptor.digest === key
+        && uncompressedOciLayerMediaTypes.has(descriptor.mediaType)
+        && Number.isSafeInteger(descriptor.size)
+        && descriptor.size > 0;
+    });
+  })();
   if (
-    !exactKeys(entry, ["Config", "Layers", "RepoTags"])
+    !exactKeys(entry, entryKeys)
     || typeof entry.Config !== "string"
     || (!isDirectLegacyConfig
       && !(allowLinkedContentStoreConfig
@@ -834,6 +879,7 @@ function validateDockerArchiveManifestShape(
       typeof layer !== "string" || !legacyLayerPattern.test(layer)))
     || (isContentStoreConfig && entry.Layers.some((layer) =>
       typeof layer !== "string" || !contentStoreLayerPattern.test(layer)))
+    || !hasSafeLayerSources
   ) {
     fail("Docker image archive manifest has an unsafe shape or the wrong revision tag");
   }
@@ -885,6 +931,48 @@ function readVerifiedOciJsonBlob(archivePath, descriptor, commandRunner, label) 
   return parseArchiveJson(raw, `${label} blob`);
 }
 
+const streamDigestProgram = [
+  'const { createHash } = require("node:crypto");',
+  'const hash = createHash("sha256");',
+  "let size = 0;",
+  "process.stdin.on(\"data\", (chunk) => { size += chunk.length; hash.update(chunk); });",
+  "process.stdin.on(\"error\", () => { process.exitCode = 1; });",
+  "process.stdin.on(\"end\", () => {",
+  "  process.stdout.write(JSON.stringify({ digest: `sha256:${hash.digest(\"hex\")}`, size }));",
+  "});",
+].join("\n");
+
+function validateOciLayerBlob(archivePath, descriptor, commandRunner, label) {
+  const digest = ociDigestPattern.exec(descriptor.digest)?.[1];
+  if (digest === undefined) fail(`Docker image archive ${label} digest is invalid`);
+  const blobPath = `blobs/sha256/${digest}`;
+  let proof;
+  try {
+    const raw = commandRunner("bash", [
+      "-o",
+      "pipefail",
+      "-c",
+      'tar -xOf "$1" "$2" | "$3" -e "$4"',
+      "handleplan-layer-proof",
+      archivePath,
+      blobPath,
+      process.execPath,
+      streamDigestProgram,
+    ]);
+    proof = JSON.parse(raw);
+  } catch (error) {
+    if (error instanceof ProductionImageVerificationError) throw error;
+    fail(`Docker image archive ${label} blob is missing or unreadable`);
+  }
+  if (
+    !exactKeys(proof, ["digest", "size"])
+    || proof.digest !== descriptor.digest
+    || proof.size !== descriptor.size
+  ) {
+    fail(`Docker image archive ${label} blob does not match its descriptor`);
+  }
+}
+
 function validateOciRuntimeManifest(
   archivePath,
   entry,
@@ -930,11 +1018,22 @@ function validateOciRuntimeManifest(
   const manifestLayerDigests = manifest.layers.map(
     (layer) => ociDigestPattern.exec(layer.digest)?.[1],
   );
+  const layerSourcesMatchManifest = entry.LayerSources === undefined
+    || manifest.layers.every((layer, index) => {
+      const archivedDigest = archivedLayerDigests[index];
+      const source = archivedDigest === undefined
+        ? undefined
+        : entry.LayerSources[`sha256:${archivedDigest}`];
+      return source?.digest === layer.digest
+        && source.mediaType === layer.mediaType
+        && source.size === layer.size;
+    });
   if (
     configDigest === undefined
     || configDigest !== archivedConfigDigest
     || archivedLayerDigests.some((digest) => digest === undefined)
     || JSON.stringify(archivedLayerDigests) !== JSON.stringify(manifestLayerDigests)
+    || !layerSourcesMatchManifest
   ) {
     fail("Docker image archive manifest.json is not linked to the OCI runtime manifest");
   }
@@ -944,14 +1043,31 @@ function validateOciRuntimeManifest(
     commandRunner,
     "runtime config",
   );
+  const hasMobyLayerSources = entry.LayerSources !== undefined;
+  const expectedDiffIds = archivedLayerDigests.map((digest) => `sha256:${digest}`);
   if (
     config?.os !== "linux"
     || config?.architecture !== "amd64"
     || config?.config?.Labels?.["org.opencontainers.image.revision"] !== expectedRevision
+    || (hasMobyLayerSources
+      && (!exactKeys(config?.rootfs, ["diff_ids", "type"])
+        || config.rootfs.type !== "layers"
+        || !Array.isArray(config.rootfs.diff_ids)
+        || JSON.stringify(config.rootfs.diff_ids) !== JSON.stringify(expectedDiffIds)))
     || (platform !== undefined
       && (platform.os !== config.os || platform.architecture !== config.architecture))
   ) {
     fail("Docker image archive runtime config is invalid or has a mismatched platform");
+  }
+  if (hasMobyLayerSources) {
+    for (const [index, layer] of manifest.layers.entries()) {
+      validateOciLayerBlob(
+        archivePath,
+        layer,
+        commandRunner,
+        `runtime layer ${index + 1}`,
+      );
+    }
   }
 }
 
@@ -994,8 +1110,10 @@ function validateOciArchiveBinding(archivePath, entry, expected, commandRunner) 
     "root",
   );
   const expectedCanonicalName = `docker.io/library/${expected.imageReference}`;
+  const isMobyImageStoreArchive = entry.LayerSources !== undefined;
   if (
-    rootDescriptor.digest !== expected.expectedImageId
+    (!isMobyImageStoreArchive && rootDescriptor.digest !== expected.expectedImageId)
+    || (isMobyImageStoreArchive && !ociManifestMediaTypes.has(rootDescriptor.mediaType))
     || !exactKeys(rootDescriptor.annotations, [
       "io.containerd.image.name",
       "org.opencontainers.image.ref.name",

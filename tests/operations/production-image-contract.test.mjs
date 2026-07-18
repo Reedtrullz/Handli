@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   cpSync,
@@ -528,6 +529,258 @@ test("cryptographically links a containerd OCI index image ID to manifest.json",
   assert.throws(
     () => readAndValidateDockerArchive(archive, armRuntime.expected, armRuntime.runner),
     /child descriptor is invalid/u,
+  );
+});
+
+test("cryptographically links a Docker 28 image-store archive to its config image ID", (t) => {
+  const temp = mkdtempSync(path.join(tmpdir(), "handleplan-moby-archive-test-"));
+  t.after(() => rmSync(temp, { force: true, recursive: true }));
+  const archive = path.join(temp, "image.tar");
+  writeFileSync(archive, "archive fixture\n");
+  const digest = (raw) => `sha256:${createHash("sha256").update(raw).digest("hex")}`;
+  const layerBlobs = [Buffer.from("first Docker 28 layer\n"), Buffer.from("second layer\n")];
+  const layers = layerBlobs.map((raw, index) => ({
+    digest: digest(raw),
+    mediaType: index === 0
+      ? "application/vnd.oci.image.layer.v1.tar"
+      : "application/vnd.docker.image.rootfs.diff.tar",
+    size: raw.length,
+  }));
+  const configRaw = JSON.stringify({
+    architecture: "amd64",
+    config: { Labels: { "org.opencontainers.image.revision": revision } },
+    os: "linux",
+    rootfs: { diff_ids: layers.map((layer) => layer.digest), type: "layers" },
+  });
+  const configDescriptor = {
+    digest: digest(configRaw),
+    mediaType: "application/vnd.oci.image.config.v1+json",
+    size: Buffer.byteLength(configRaw),
+  };
+  const runtimeManifestRaw = JSON.stringify({
+    config: configDescriptor,
+    layers,
+    mediaType: "application/vnd.oci.image.manifest.v1+json",
+    schemaVersion: 2,
+  });
+  const rootDescriptor = {
+    annotations: {
+      "io.containerd.image.name": `docker.io/library/${imageReference}`,
+      "org.opencontainers.image.ref.name": revision,
+    },
+    digest: digest(runtimeManifestRaw),
+    mediaType: "application/vnd.oci.image.manifest.v1+json",
+    size: Buffer.byteLength(runtimeManifestRaw),
+  };
+  const index = {
+    manifests: [rootDescriptor],
+    mediaType: "application/vnd.oci.image.index.v1+json",
+    schemaVersion: 2,
+  };
+  const manifest = [{
+    Config: `blobs/sha256/${configDescriptor.digest.slice("sha256:".length)}`,
+    LayerSources: Object.fromEntries(layers.map((layer) => [layer.digest, layer])),
+    Layers: layers.map((layer) => `blobs/sha256/${layer.digest.slice("sha256:".length)}`),
+    RepoTags: [imageReference],
+  }];
+  const blobs = new Map([
+    [`blobs/sha256/${rootDescriptor.digest.slice("sha256:".length)}`, runtimeManifestRaw],
+    [`blobs/sha256/${configDescriptor.digest.slice("sha256:".length)}`, configRaw],
+    ...layers.map((layer, index) => [
+      `blobs/sha256/${layer.digest.slice("sha256:".length)}`,
+      layerBlobs[index],
+    ]),
+  ]);
+  function commandRunner(_command, arguments_) {
+    if (_command === "bash") {
+      const member = arguments_.at(-3);
+      const blob = blobs.get(member);
+      if (blob === undefined) throw new Error(`unexpected archive member ${member}`);
+      return JSON.stringify({ digest: digest(blob), size: Buffer.byteLength(blob) });
+    }
+    const member = arguments_.at(-1);
+    if (member === "manifest.json") return JSON.stringify(manifest);
+    if (member === "oci-layout") return JSON.stringify({ imageLayoutVersion: "1.0.0" });
+    if (member === "index.json") return JSON.stringify(index);
+    const blob = blobs.get(member);
+    if (blob === undefined) throw new Error(`unexpected archive member ${member}`);
+    return blob;
+  }
+  const expected = {
+    expectedImageId: configDescriptor.digest,
+    expectedRevision: revision,
+    imageReference,
+  };
+  const archiveRoot = path.join(temp, "archive-root");
+  const blobRoot = path.join(archiveRoot, "blobs", "sha256");
+  mkdirSync(blobRoot, { recursive: true });
+  writeFileSync(path.join(archiveRoot, "manifest.json"), JSON.stringify(manifest));
+  writeFileSync(path.join(archiveRoot, "index.json"), JSON.stringify(index));
+  writeFileSync(
+    path.join(archiveRoot, "oci-layout"),
+    JSON.stringify({ imageLayoutVersion: "1.0.0" }),
+  );
+  for (const [member, raw] of blobs) {
+    writeFileSync(path.join(archiveRoot, member), raw);
+  }
+  const tarResult = spawnSync(
+    "tar",
+    ["-cf", archive, "-C", archiveRoot, "manifest.json", "index.json", "oci-layout", "blobs"],
+    { encoding: "utf8" },
+  );
+  assert.equal(tarResult.status, 0, tarResult.stderr);
+  assert.equal(
+    readAndValidateDockerArchive(archive, expected).RepoTags[0],
+    imageReference,
+    "the default verifier streams and hashes real Docker 28 layer members",
+  );
+  assert.equal(
+    readAndValidateDockerArchive(archive, expected, commandRunner).RepoTags[0],
+    imageReference,
+  );
+  assert.throws(
+    () => validateDockerArchiveManifest(manifest, expected),
+    /archive/u,
+    "manifest.json alone must not authorize the Docker 28 content-store layout",
+  );
+  const firstLayerSource = manifest[0].LayerSources[layers[0].digest];
+  const externalLayerSourceManifest = [{
+    ...manifest[0],
+    LayerSources: {
+      ...manifest[0].LayerSources,
+      [layers[0].digest]: {
+        ...firstLayerSource,
+        urls: ["https://layers.invalid/external.tar"],
+      },
+    },
+  }];
+  assert.throws(
+    () => readAndValidateDockerArchive(archive, expected, (_command, arguments_) =>
+      arguments_.at(-1) === "manifest.json"
+        ? JSON.stringify(externalLayerSourceManifest)
+        : commandRunner(_command, arguments_)),
+    /unsafe shape/u,
+    "Docker 28 layer-source metadata must not authorize external layer URLs",
+  );
+  const incompleteLayerSourcesManifest = [{
+    ...manifest[0],
+    LayerSources: { [layers[0].digest]: firstLayerSource },
+  }];
+  assert.throws(
+    () => readAndValidateDockerArchive(archive, expected, (_command, arguments_) =>
+      arguments_.at(-1) === "manifest.json"
+        ? JSON.stringify(incompleteLayerSourcesManifest)
+        : commandRunner(_command, arguments_)),
+    /unsafe shape/u,
+    "Docker 28 layer-source metadata must bind every archived layer exactly once",
+  );
+  const wrongConfigManifest = [{
+    ...manifest[0],
+    Config: `blobs/sha256/${"f".repeat(64)}`,
+  }];
+  assert.throws(
+    () => readAndValidateDockerArchive(archive, expected, (_command, arguments_) =>
+      arguments_.at(-1) === "manifest.json"
+        ? JSON.stringify(wrongConfigManifest)
+        : commandRunner(_command, arguments_)),
+    /unsafe shape/u,
+    "the Docker 28 config blob path must be the exact inspected image ID",
+  );
+  const mismatchedLayerSourceManifest = [{
+    ...manifest[0],
+    LayerSources: {
+      ...manifest[0].LayerSources,
+      [layers[0].digest]: { ...firstLayerSource, size: firstLayerSource.size + 1 },
+    },
+  }];
+  assert.throws(
+    () => readAndValidateDockerArchive(archive, expected, (_command, arguments_) =>
+      arguments_.at(-1) === "manifest.json"
+        ? JSON.stringify(mismatchedLayerSourceManifest)
+        : commandRunner(_command, arguments_)),
+    /not linked/u,
+    "layer-source sizes must match the hash-verified runtime manifest",
+  );
+  assert.throws(
+    () => readAndValidateDockerArchive(archive, expected, (_command, arguments_) => {
+      if (_command === "bash" && arguments_.at(-3) === manifest[0].Layers[0]) {
+        throw new Error("missing layer");
+      }
+      return commandRunner(_command, arguments_);
+    }),
+    /missing or unreadable/u,
+    "every Docker 28 runtime layer must be present in the archive",
+  );
+  assert.throws(
+    () => readAndValidateDockerArchive(archive, expected, (_command, arguments_) => {
+      if (_command === "bash" && arguments_.at(-3) === manifest[0].Layers[0]) {
+        return JSON.stringify({ digest: `sha256:${"0".repeat(64)}`, size: layers[0].size });
+      }
+      return commandRunner(_command, arguments_);
+    }),
+    /does not match its descriptor/u,
+    "every Docker 28 runtime layer must match its digest and size",
+  );
+  const rootfsFreeConfigRaw = JSON.stringify({
+    architecture: "amd64",
+    config: { Labels: { "org.opencontainers.image.revision": revision } },
+    os: "linux",
+  });
+  const rootfsFreeConfigDescriptor = {
+    ...configDescriptor,
+    digest: digest(rootfsFreeConfigRaw),
+    size: Buffer.byteLength(rootfsFreeConfigRaw),
+  };
+  const rootfsFreeRuntimeRaw = JSON.stringify({
+    ...JSON.parse(runtimeManifestRaw),
+    config: rootfsFreeConfigDescriptor,
+  });
+  const rootfsFreeRootDescriptor = {
+    ...rootDescriptor,
+    digest: digest(rootfsFreeRuntimeRaw),
+    size: Buffer.byteLength(rootfsFreeRuntimeRaw),
+  };
+  const rootfsFreeExpected = { ...expected, expectedImageId: rootfsFreeConfigDescriptor.digest };
+  const rootfsFreeManifest = [{
+    ...manifest[0],
+    Config: `blobs/sha256/${rootfsFreeConfigDescriptor.digest.slice("sha256:".length)}`,
+  }];
+  assert.throws(
+    () => readAndValidateDockerArchive(
+      archive,
+      rootfsFreeExpected,
+      (_command, arguments_) => {
+        const member = arguments_.at(-1);
+        if (member === "manifest.json") return JSON.stringify(rootfsFreeManifest);
+        if (member === "index.json") {
+          return JSON.stringify({ ...index, manifests: [rootfsFreeRootDescriptor] });
+        }
+        if (member === `blobs/sha256/${rootfsFreeRootDescriptor.digest.slice("sha256:".length)}`) {
+          return rootfsFreeRuntimeRaw;
+        }
+        if (member === `blobs/sha256/${rootfsFreeConfigDescriptor.digest.slice("sha256:".length)}`) {
+          return rootfsFreeConfigRaw;
+        }
+        return commandRunner(_command, arguments_);
+      },
+    ),
+    /runtime config is invalid/u,
+    "the inspected config ID must bind the ordered uncompressed layer diff IDs",
+  );
+  const indexRoot = {
+    ...index,
+    manifests: [{
+      ...rootDescriptor,
+      mediaType: "application/vnd.oci.image.index.v1+json",
+    }],
+  };
+  assert.throws(
+    () => readAndValidateDockerArchive(archive, expected, (_command, arguments_) =>
+      arguments_.at(-1) === "index.json"
+        ? JSON.stringify(indexRoot)
+        : commandRunner(_command, arguments_)),
+    /exact image ID and revision tag/u,
+    "the Docker 28 dialect must point directly to one runtime manifest",
   );
 });
 
