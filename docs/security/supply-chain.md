@@ -86,8 +86,13 @@ release remains compatible.
 
 ## Change policy
 
-- A lockfile change must refresh the committed inventory and review every new
-  license expression before CI may pass.
+- A lockfile change and its refreshed committed license inventory must land in
+  the same commit. Review every new license expression before committing, and
+  run `pnpm security:licenses:write` followed by `pnpm security:licenses` after
+  the final frozen install. Push CI builds the exact first-parent commit as the
+  previous application image; splitting the lockfile and inventory across two
+  commits therefore creates an intentionally unbuildable intermediate revision
+  and must not be used as the release branch workflow.
 - No vulnerability ignore, license exception, secret-scan bypass, or weakened
   severity threshold may be added without a dated rationale and owner.
 - Candidate release evidence must retain the SPDX document, signed provenance,
