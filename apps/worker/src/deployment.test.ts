@@ -604,12 +604,24 @@ describe("production runtime deployment", () => {
     expect(continuousIntegration).toContain(
       ".scheduler.lastCycle.leaseAcquired == true",
     );
+    expect(continuousIntegration).toContain(
+      "Reset the exact-image PostgreSQL database",
+    );
+    expect(
+      continuousIntegration.indexOf(
+        "Reset the exact-image PostgreSQL database",
+      ),
+    ).toBeGreaterThan(
+      continuousIntegration.indexOf("Validate deployment assets"),
+    );
     expect(
       continuousIntegration.indexOf(
         "Prove the packaged migrator and worker from the exact image",
       ),
     ).toBeGreaterThan(
-      continuousIntegration.indexOf("Validate deployment assets"),
+      continuousIntegration.indexOf(
+        "Reset the exact-image PostgreSQL database",
+      ),
     );
     expect(
       continuousIntegration.indexOf("run: corepack pnpm e2e:image"),

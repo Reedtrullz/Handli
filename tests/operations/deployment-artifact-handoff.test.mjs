@@ -774,8 +774,14 @@ test("CI uploads one exact revision/run-attempt image bundle", () => {
     "run: corepack pnpm e2e:public-lifecycle",
   );
   const deploymentAssetGate = ciWorkflow.indexOf("name: Validate deployment assets");
+  const exactDatabaseResetGate = ciWorkflow.indexOf(
+    "name: Reset the exact-image PostgreSQL database",
+  );
   const privateRuntimeGate = ciWorkflow.indexOf(
     "name: Prove the packaged migrator and worker from the exact image",
+  );
+  const governedSeedGate = ciWorkflow.indexOf(
+    "name: Seed the governed exact-image browser fixture from the host",
   );
   const imageBrowserGate = ciWorkflow.indexOf("run: corepack pnpm e2e:image");
   const handlemodusGate = ciWorkflow.indexOf("run: corepack pnpm e2e:handlemodus");
@@ -787,12 +793,34 @@ test("CI uploads one exact revision/run-attempt image bundle", () => {
   assert.ok(buildGate > 0);
   assert.ok(publicHarnessLifecycleGate > buildGate);
   assert.ok(deploymentAssetGate > publicHarnessLifecycleGate);
-  assert.ok(privateRuntimeGate > deploymentAssetGate);
-  assert.ok(imageBrowserGate > privateRuntimeGate);
+  assert.ok(exactDatabaseResetGate > deploymentAssetGate);
+  assert.ok(privateRuntimeGate > exactDatabaseResetGate);
+  assert.ok(governedSeedGate > privateRuntimeGate);
+  assert.ok(imageBrowserGate > governedSeedGate);
   assert.ok(handlemodusGate > imageBrowserGate);
   assert.ok(publicBrowserGate > handlemodusGate);
   assert.ok(exactImageRecheck > publicBrowserGate);
   assert.ok(upload > exactImageRecheck);
+
+  const exactDatabaseReset = ciWorkflow.slice(exactDatabaseResetGate, privateRuntimeGate);
+  assert.match(
+    exactDatabaseReset,
+    /POSTGRES_SERVICE_CONTAINER: \$\{\{ job\.services\.postgres\.id \}\}/u,
+  );
+  assert.match(exactDatabaseReset, /drop database if exists handleplan with \(force\);/u);
+  assert.match(
+    exactDatabaseReset,
+    /create database handleplan\s+with owner handleplan template template0 encoding 'UTF8';/u,
+  );
+  assert.match(exactDatabaseReset, /revoke all privileges on database handleplan from public;/u);
+  assert.match(exactDatabaseReset, /revoke all privileges on schema public from public;/u);
+  assert.match(
+    exactDatabaseReset,
+    /to_regclass\('public\.handleplan_schema_migrations'\) is null/u,
+  );
+  assert.match(exactDatabaseReset, /not has_database_privilege\(/u);
+  assert.doesNotMatch(exactDatabaseReset, /postgres(?:ql)?:\/\//u);
+  assert.doesNotMatch(exactDatabaseReset, /(?:DATABASE_URL|PASSWORD)/u);
 });
 
 test("the production image includes and verifies the sealed public browser artifact", () => {

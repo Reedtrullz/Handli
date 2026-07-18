@@ -105,6 +105,18 @@ async function safeServerFailureDiagnostic(response: PlaywrightResponse): Promis
   return `${response.request().method()} ${url.pathname} status=${response.status()} code=${code} scan=${scan}`;
 }
 
+async function assertScannedBrowserSuccess(response: PlaywrightResponse): Promise<void> {
+  const url = new URL(response.url());
+  const diagnostic = response.status() >= 500
+    ? await safeServerFailureDiagnostic(response)
+    : `${response.request().method()} ${url.pathname} status=${response.status()}`;
+  expect(response.status(), diagnostic).toBe(200);
+  expect(
+    response.headers()[responseScanHeader],
+    `${response.request().method()} ${url.pathname} response scan`,
+  ).toBe("passed-v1");
+}
+
 async function assertSafeLeakRejection(response: APIResponse): Promise<void> {
   const body = await response.body();
   const headers = Buffer.from(JSON.stringify(response.headers()));
@@ -487,8 +499,7 @@ test("the exact production image searches and plans from governed PostgreSQL evi
   });
   await productCombobox.fill("Handleplan verifisert lettmelk");
   const uiProductSearchResponse = await uiProductSearchResponsePromise;
-  expect(uiProductSearchResponse.status()).toBe(200);
-  expect(uiProductSearchResponse.headers()[responseScanHeader]).toBe("passed-v1");
+  await assertScannedBrowserSuccess(uiProductSearchResponse);
   expect(publicProductSearchResponseSchema.parse(await uiProductSearchResponse.json()))
     .toEqual(productSearchPayload);
   const exactOption = page.getByRole("option").filter({ hasText: databaseFixture.productName });
@@ -578,8 +589,7 @@ test("the exact production image searches and plans from governed PostgreSQL evi
   await expect(page).toHaveTitle("Oppdag | Handleplan");
   await expect(page.getByRole("heading", { name: "Oppdag" })).toBeVisible();
   const initialDiscoveryResponse = await initialDiscoveryResponsePromise;
-  expect(initialDiscoveryResponse.status()).toBe(200);
-  expect(initialDiscoveryResponse.headers()[responseScanHeader]).toBe("passed-v1");
+  await assertScannedBrowserSuccess(initialDiscoveryResponse);
   const initialDiscovery = publicDiscoveryResponseSchemaFor(initialDiscoveryRequest)
     .parse(await initialDiscoveryResponse.json());
   expect(initialDiscovery.products.length).toBeGreaterThan(0);
@@ -600,8 +610,7 @@ test("the exact production image searches and plans from governed PostgreSQL evi
   });
   await page.getByRole("button", { name: "Søk", exact: true }).click();
   const uiDiscoveryResponse = await uiDiscoveryResponsePromise;
-  expect(uiDiscoveryResponse.status()).toBe(200);
-  expect(uiDiscoveryResponse.headers()[responseScanHeader]).toBe("passed-v1");
+  await assertScannedBrowserSuccess(uiDiscoveryResponse);
   publicDiscoveryResponseSchemaFor(discoveryRequest).parse(await uiDiscoveryResponse.json());
   await expect(page.getByRole("heading", {
     name: "Treff for «Handleplan verifisert lettmelk»",

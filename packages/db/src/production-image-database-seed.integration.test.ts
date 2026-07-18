@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import {
+  PUBLIC_DISCOVERY_CATALOG_SCAN_MAX,
   SYNTHETIC_OFFER_LAYOUT_FINGERPRINT,
   SYNTHETIC_OFFER_SCHEMA_FINGERPRINT,
   type OfficialOfferAuthorizationFenceV1,
@@ -527,8 +528,8 @@ describe.skipIf(!runProductionImageDatabaseSeed).sequential(
         policyWasEnabled = false;
 
         const evaluatedAt = await databaseNow();
-        const catalog = await new PostgresPublicCatalogIndexReader(web.db)
-          .search("verifisert lettmelk", 10, evaluatedAt);
+        const catalogReader = new PostgresPublicCatalogIndexReader(web.db);
+        const catalog = await catalogReader.search("verifisert lettmelk", 10, evaluatedAt);
         expect(catalog).toEqual([
           expect.objectContaining({
             brand: fixture.brand,
@@ -536,7 +537,27 @@ describe.skipIf(!runProductionImageDatabaseSeed).sequential(
             gtin: fixture.gtin,
           }),
         ]);
-        const planning = await new PostgresPlanningEvidenceReader(web.db)
+        const discoveryCatalog = await catalogReader.readDiscoveryPage({
+          limit: PUBLIC_DISCOVERY_CATALOG_SCAN_MAX,
+        }, evaluatedAt);
+        expect(discoveryCatalog.entries.length).toBeGreaterThan(0);
+        expect(discoveryCatalog.entries).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            product: expect.objectContaining({
+              brand: fixture.brand,
+              displayName: fixture.productName,
+              gtin: fixture.gtin,
+            }),
+          }),
+        ]));
+        const discoveryGtins = discoveryCatalog.entries
+          .map(({ product }) => product.gtin)
+          .sort();
+        const planningReader = new PostgresPlanningEvidenceReader(web.db);
+        const discoveryPlanning = await planningReader.getMany(discoveryGtins, evaluatedAt);
+        expect(discoveryPlanning.products.map(({ gtin }) => gtin).sort())
+          .toEqual(discoveryGtins);
+        const planning = await planningReader
           .getMany([fixture.gtin], evaluatedAt);
         expect(planning.priceEvidence).toEqual([
           expect.objectContaining({

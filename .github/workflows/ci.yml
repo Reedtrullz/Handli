@@ -295,6 +295,57 @@ jobs:
           printf 'image_id=%s\n' "$image_id" >> "$GITHUB_OUTPUT"
           printf 'bundle_manifest_sha256=%s\n' "$bundle_manifest_sha256" >> "$GITHUB_OUTPUT"
           sha256sum "$artifact_dir"/*
+      - name: Reset the exact-image PostgreSQL database
+        env:
+          POSTGRES_SERVICE_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -eu
+          test -n "$POSTGRES_SERVICE_CONTAINER"
+          test "$(docker inspect --format '{{.State.Running}}' "$POSTGRES_SERVICE_CONTAINER")" = true
+          docker exec --interactive "$POSTGRES_SERVICE_CONTAINER" \
+            psql -X --no-password --username handleplan --dbname postgres \
+            --set ON_ERROR_STOP=1 <<'SQL'
+          drop database if exists handleplan with (force);
+          create database handleplan
+            with owner handleplan template template0 encoding 'UTF8';
+          revoke all privileges on database handleplan from public;
+          SQL
+          docker exec --interactive "$POSTGRES_SERVICE_CONTAINER" \
+            psql -X --no-password --username handleplan --dbname handleplan \
+            --set ON_ERROR_STOP=1 <<'SQL'
+          revoke all privileges on schema public from public;
+          SQL
+          reset_proof=$(
+            docker exec "$POSTGRES_SERVICE_CONTAINER" \
+              psql -X --quiet --no-password \
+              --username handleplan --dbname handleplan \
+              --tuples-only --no-align --set ON_ERROR_STOP=1 \
+              --command "
+                select
+                  current_database() = 'handleplan'
+                  and current_user = 'handleplan'
+                  and pg_get_userbyid((
+                    select datdba from pg_database where datname = 'handleplan'
+                  )) = 'handleplan'
+                  and to_regclass('public.handleplan_schema_migrations') is null
+                  and not exists (
+                    select 1 from pg_tables where schemaname = 'public'
+                  )
+                  and not has_database_privilege(
+                    'handleplan_app', 'handleplan', 'connect'
+                  )
+                  and not has_database_privilege(
+                    'handleplan_web', 'handleplan', 'connect'
+                  )
+                  and not has_database_privilege(
+                    'handleplan_review', 'handleplan', 'connect'
+                  )
+                  and not has_database_privilege(
+                    'handleplan_operations', 'handleplan', 'connect'
+                  );
+              "
+          )
+          test "$reset_proof" = t
       - name: Prove the packaged migrator and worker from the exact image
         env:
           APP_COMMIT_SHA: ${{ github.sha }}
