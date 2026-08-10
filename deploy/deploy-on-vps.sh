@@ -1014,6 +1014,10 @@ deploy() {
 }
 
 cleanup_failed_candidate_runtime() {
+  for diag_container in $(docker ps -aq --filter label=com.docker.compose.project=handleplan 2>/dev/null || true); do
+    echo "===== candidate container logs: $diag_container =====" >&2
+    docker logs --tail 30 "$diag_container" >&2 2>&1 || true
+  done
   remove_runtime_services "$revision" "$revision" \
     "Failed deployment could not prove private runtimes, worker, and app absent; fallback refused" \
     review operations worker app || return 1
