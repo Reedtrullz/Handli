@@ -1024,12 +1024,24 @@ cleanup_failed_candidate_runtime() {
       'name={{.Name}} status={{.State.Status}} restarts={{.RestartCount}} image={{.Config.Image}}' \
       "$diag_container" >&2 2>&1 || true
   done
-  review_container=$(docker ps -aq --filter label=com.docker.compose.service=review 2>/dev/null | head -1 || true)
-  if [ -n "$review_container" ]; then
-    echo "===== review healthcheck result =====" >&2
-    docker exec "$review_container" node -e \
-      "fetch('http://127.0.0.1:3000/api/internal/health/review',{headers:{'user-agent':'handleplan-review-health-v1','x-handleplan-internal-health':'handleplan-review-health-v1'}}).then(async r=>{const t=await r.text();console.log('status='+r.status+' body='+t.slice(0,400))}).catch(e=>{console.log('fetch-error='+e.message);process.exit(1)})" \
-      >&2 2>&1 || true
+  for private_runtime in review operations; do
+    private_container=$(docker ps -aq --filter label=com.docker.compose.service=$private_runtime 2>/dev/null | head -1 || true)
+    if [ -n "$private_container" ]; then
+      echo "===== $private_runtime healthcheck result =====" >&2
+      docker exec "$private_container" node -e \
+        "fetch('http://127.0.0.1:3000/api/internal/health/$private_runtime',{headers:{'user-agent':'handleplan-$private_runtime-health-v1','x-handleplan-internal-health':'handleplan-$private_runtime-health-v1'}}).then(async r=>{const t=await r.text();console.log('status='+r.status+' body='+t.slice(0,400))}).catch(e=>{console.log('fetch-error='+e.message);process.exit(1)})" \
+        2>&1 >&2 || echo "  (exec failed)" >&2
+    fi
+  done
+  postgres_container=$(docker ps -aq --filter label=com.docker.compose.service=postgres 2>/dev/null | head -1 || true)
+  if [ -n "$postgres_container" ]; then
+    echo "===== postgres roles and migration state =====" >&2
+    docker exec "$postgres_container" sh -c \
+      'PGPASSWORD=$POSTGRES_PASSWORD psql -U handleplan -d handleplan -tAc "select rolname from pg_roles where rolname like '\''handleplan%'\'' order by 1"' \
+      2>&1 >&2 || echo "  (roles query failed)" >&2
+    docker exec "$postgres_container" sh -c \
+      'PGPASSWORD=$POSTGRES_PASSWORD psql -U handleplan -d handleplan -tAc "select count(*) from public.handleplan_schema_migrations"' \
+      2>&1 >&2 || echo "  (migration count failed)" >&2
   fi
   remove_runtime_services "$revision" "$revision" \
     "Failed deployment could not prove private runtimes, worker, and app absent; fallback refused" \
