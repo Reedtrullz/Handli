@@ -237,7 +237,7 @@ jobs:
           exit 1
           HANDLEPLAN_STORE_SCRIPT
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            deploy@198.23.137.16 "sh -c '$(cat /tmp/handleplan-store-script.sh)'"
+            deploy@198.23.137.16 "$(cat /tmp/handleplan-store-script.sh)"
 
       - name: Provision the protected production environment
         shell: bash
@@ -265,7 +265,7 @@ jobs:
           echo "production env provisioned with all required keys" >&2
           HANDLEPLAN_PROVISION_SCRIPT
           printf '%s' "$HANDLEPLAN_PRODUCTION_ENV" | ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            deploy@198.23.137.16 "sh -c '$(cat /tmp/handleplan-provision-script.sh)'"
+            deploy@198.23.137.16 "$(cat /tmp/handleplan-provision-script.sh)"
 
       - name: Capture the exact immutable rollback guard
         id: rollback_guard
