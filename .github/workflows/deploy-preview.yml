@@ -253,6 +253,10 @@ jobs:
                 if [ -z "$stale_nonhex" ] && [ "${#stale_revision}" -eq 40 ] \
                   && docker image inspect "handleplan:$stale_revision" >/dev/null 2>&1; then
                   echo "current-revision points at an existing legacy image; refusing to overwrite" >&2
+                  echo "current-revision content: $stale_revision" >&2
+                  docker image inspect --format \
+                    'legacy image id={{.Id}} revision={{index .Config.Labels "org.opencontainers.image.revision"}} created={{.Created}}' \
+                    "handleplan:$stale_revision" >&2
                   exit 1
                 fi
                 echo "Overwriting stale current-revision marker with the first-deployment baseline" >&2
