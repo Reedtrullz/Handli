@@ -1018,6 +1018,19 @@ cleanup_failed_candidate_runtime() {
     echo "===== candidate container logs: $diag_container =====" >&2
     docker logs --tail 30 "$diag_container" >&2 2>&1 || true
   done
+  for diag_container in $(docker ps -aq --filter label=com.docker.compose.project=handleplan 2>/dev/null || true); do
+    echo "===== candidate container state: $diag_container =====" >&2
+    docker inspect --format \
+      'name={{.Name}} status={{.State.Status}} restarts={{.RestartCount}} image={{.Config.Image}}' \
+      "$diag_container" >&2 2>&1 || true
+  done
+  review_container=$(docker ps -aq --filter label=com.docker.compose.service=review 2>/dev/null | head -1 || true)
+  if [ -n "$review_container" ]; then
+    echo "===== review healthcheck result =====" >&2
+    docker exec "$review_container" node -e \
+      "fetch('http://127.0.0.1:3000/api/internal/health/review',{headers:{'user-agent':'handleplan-review-health-v1','x-handleplan-internal-health':'handleplan-review-health-v1'}}).then(async r=>{const t=await r.text();console.log('status='+r.status+' body='+t.slice(0,400))}).catch(e=>{console.log('fetch-error='+e.message);process.exit(1)})" \
+      >&2 2>&1 || true
+  fi
   remove_runtime_services "$revision" "$revision" \
     "Failed deployment could not prove private runtimes, worker, and app absent; fallback refused" \
     review operations worker app || return 1
