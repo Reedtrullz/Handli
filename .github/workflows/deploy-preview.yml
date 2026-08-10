@@ -192,6 +192,34 @@ jobs:
           chmod 600 ~/.ssh/known_hosts
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes deploy@198.23.137.16 true
 
+      - name: Provision the protected production environment
+        shell: bash
+        env:
+          HANDLEPLAN_PRODUCTION_ENV: ${{ secrets.HANDLEPLAN_PRODUCTION_ENV }}
+        run: |
+          set -euo pipefail
+          test -n "$HANDLEPLAN_PRODUCTION_ENV"
+          env_sha256=$(printf '%s' "$HANDLEPLAN_PRODUCTION_ENV" | sha256sum | awk '{print $1}')
+          [[ "$env_sha256" =~ ^[0-9a-f]{64}$ ]]
+          cat > /tmp/handleplan-provision-script.sh <<'HANDLEPLAN_PROVISION_SCRIPT'
+          set -eu
+          umask 077
+          install -d -m 700 /opt/apps/handleplan/shared
+          env_tmp=/opt/apps/handleplan/shared/.production.env.$$.tmp
+          cat > "$env_tmp"
+          chmod 600 "$env_tmp"
+          mv -f "$env_tmp" /opt/apps/handleplan/shared/production.env
+          for key in APP_DATABASE_PASSWORD KASSAL_API_KEY KASSAL_SOURCE_ACCESS OPERATIONS_ACCESS_AUDIENCE OPERATIONS_ACCESS_ISSUER OPERATIONS_ACCESS_TEAM_DOMAIN OPERATIONS_BASE_URL OPERATIONS_DATABASE_PASSWORD OPERATIONS_SOURCE_ROSTER_JSON POSTGRES_PASSWORD REVIEW_ACCESS_AUDIENCE REVIEW_ACCESS_ISSUER REVIEW_ACCESS_TEAM_DOMAIN REVIEW_BASE_URL REVIEW_DATABASE_PASSWORD REVIEW_EVIDENCE_PROOF_SECRET WEB_DATABASE_PASSWORD; do
+          grep -q "^$key=." /opt/apps/handleplan/shared/production.env || {
+          echo "Protected production env is missing $key" >&2
+          exit 1
+          }
+          done
+          echo "production env provisioned with all required keys" >&2
+          HANDLEPLAN_PROVISION_SCRIPT
+          printf '%s' "$HANDLEPLAN_PRODUCTION_ENV" | ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy@198.23.137.16 "sh -c '$(cat /tmp/handleplan-provision-script.sh)'"
+
       - name: Capture the exact immutable rollback guard
         id: rollback_guard
         shell: bash
