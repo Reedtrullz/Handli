@@ -208,108 +208,114 @@ jobs:
           first_deployment_sentinel_revision=0000000000000000000000000000000000000000
           first_deployment_sentinel_image_id=sha256:0000000000000000000000000000000000000000000000000000000000000000
           state_dir=/opt/apps/handleplan/state
+          is_sentinel() {
+          [ "$1" = "$first_deployment_sentinel_revision" ] \
+          && [ "$2" = "$first_deployment_sentinel_image_id" ]
+          }
           if test -f "$state_dir/current-deployment"; then
-            manifest=$(cat "$state_dir/current-deployment")
-            test ! -e "$state_dir/pending-deployment"
-            test ! -L "$state_dir/pending-deployment"
-            set -- $manifest
-            test "$#" -eq 3
-            test "$1" = v1
-            test "$3" = current
-            previous_revision=$2
-            previous_image_id=$(cat "$state_dir/current-image-id")
-            test "$(cat "$state_dir/current-revision")" = "$previous_revision"
-            test "$(cat "$state_dir/verified-images/$previous_revision")" = "v1 $previous_revision $previous_image_id"
-            test "$(docker image inspect --format "{{.Id}}" "$previous_image_id")" = "$previous_image_id"
-            test "$(docker image inspect --format "{{index .Config.Labels \"org.opencontainers.image.revision\"}}" "$previous_image_id")" = "$previous_revision"
-            printf "%s %s\n" "$previous_revision" "$previous_image_id"
+          manifest=$(cat "$state_dir/current-deployment")
+          test ! -e "$state_dir/pending-deployment"
+          test ! -L "$state_dir/pending-deployment"
+          set -- $manifest
+          test "$#" -eq 3
+          test "$1" = v1
+          test "$3" = current
+          previous_revision=$2
+          previous_image_id=$(cat "$state_dir/current-image-id")
+          test "$(cat "$state_dir/current-revision")" = "$previous_revision"
+          test "$(cat "$state_dir/verified-images/$previous_revision")" = "v1 $previous_revision $previous_image_id"
+          if ! is_sentinel "$previous_revision" "$previous_image_id"; then
+          test "$(docker image inspect --format "{{.Id}}" "$previous_image_id")" = "$previous_image_id"
+          test "$(docker image inspect --format "{{index .Config.Labels \"org.opencontainers.image.revision\"}}" "$previous_image_id")" = "$previous_revision"
+          fi
+          printf "%s %s\n" "$previous_revision" "$previous_image_id"
           elif test -e "$state_dir/current-deployment"; then
-            echo "current-deployment is not a regular file" >&2
-            exit 1
+          echo "current-deployment is not a regular file" >&2
+          exit 1
           elif test "$ALLOW_FIRST_DEPLOY" = "true"; then
-            # First deployment: seed the explicit baseline. Create-only and
-            # provably-empty gated; any pre-existing state fails closed. A
-            # provisioning-time current-revision marker naming a real legacy image on
-            # this host is adopted as the verified predecessor so the first v1 deploy
-            # keeps an exact rollback target.
-            install -d -m 700 "$state_dir"
-            for artifact in current-image-id deployment-high-water pending-deployment accepted-deployment; do
-              test ! -e "$state_dir/$artifact" && test ! -L "$state_dir/$artifact" || {
-                echo "First-deploy baseline requires provably empty deployment state; existing state entries:" >&2
-                find "$state_dir" -mindepth 1 -maxdepth 2 -printf "%y %p\n" >&2
-                exit 1
-              }
-            done
-            baseline_revision=$first_deployment_sentinel_revision
-            baseline_image_id=$first_deployment_sentinel_image_id
-            if test -e "$state_dir/current-revision" || test -L "$state_dir/current-revision"; then
-              test -f "$state_dir/current-revision" && test ! -L "$state_dir/current-revision" || {
-                echo "current-revision is not a regular file; refusing to overwrite" >&2
-                find "$state_dir" -mindepth 1 -maxdepth 2 -printf "%y %p\n" >&2
-                exit 1
-              }
-              stale_revision=$(cat "$state_dir/current-revision")
-              stale_nonhex=$(printf '%s' "$stale_revision" | tr -d "0-9a-f")
-              if [ -z "$stale_nonhex" ] && [ "${#stale_revision}" -eq 40 ] \
-                && docker image inspect "handleplan:$stale_revision" >/dev/null 2>&1; then
-                adopted_image_id=$(docker image inspect --format '{{.Id}}' \
-                  "handleplan:$stale_revision")
-                adopted_revision_label=$(docker image inspect --format \
-                  '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
-                  "handleplan:$stale_revision")
-                adopted_created=$(docker image inspect --format '{{.Created}}' \
-                  "handleplan:$stale_revision")
-                adoption_ok=0
-                if [ "$adopted_revision_label" = "$stale_revision" ]; then
-                  case "$adopted_image_id" in
-                    sha256:[0-9a-f][0-9a-f]*)
-                      if [ "${#adopted_image_id}" -eq 71 ]; then
-                        adoption_ok=1
-                      fi
-                      ;;
-                  esac
-                fi
-                if [ "$adoption_ok" -eq 1 ]; then
-                  baseline_revision=$stale_revision
-                  baseline_image_id=$adopted_image_id
-                  echo "Adopting legacy image $stale_revision as the verified predecessor" >&2
-                else
-                  echo "Legacy image for $stale_revision is not authentic (revision label: $adopted_revision_label, created: $adopted_created); treating the marker as stale" >&2
-                fi
-              else
-                echo "Overwriting stale current-revision marker with the first-deployment baseline" >&2
-              fi
-            fi
-            verified_images="$state_dir/verified-images"
-            if test -e "$verified_images"; then
-              test -d "$verified_images" && test ! -L "$verified_images" || {
-                echo "verified-images is not a regular directory" >&2
-                exit 1
-              }
-              test -z "$(find "$verified_images" -mindepth 1 -maxdepth 1 -printf x -quit 2>/dev/null)" || {
-                echo "First-deploy baseline requires an empty verified-images directory" >&2
-                exit 1
-              }
-            else
-              install -d -m 700 "$verified_images"
-            fi
-            umask 077
-            printf "v1 %s current\n" "$baseline_revision" > "$state_dir/.current-deployment.tmp"
-            printf "%s\n" "$baseline_revision" > "$state_dir/.current-revision.tmp"
-            printf "%s\n" "$baseline_image_id" > "$state_dir/.current-image-id.tmp"
-            printf "%s\n" "$baseline_revision" > "$state_dir/.deployment-high-water.tmp"
-            printf "v1 %s %s\n" "$baseline_revision" "$baseline_image_id" > "$verified_images/.verified-image.tmp"
-            chmod 600 "$state_dir"/.current-deployment.tmp "$state_dir"/.current-revision.tmp "$state_dir"/.current-image-id.tmp "$state_dir"/.deployment-high-water.tmp "$verified_images/.verified-image.tmp"
-            mv -f "$state_dir/.current-deployment.tmp" "$state_dir/current-deployment"
-            mv -f "$state_dir/.current-revision.tmp" "$state_dir/current-revision"
-            mv -f "$state_dir/.current-image-id.tmp" "$state_dir/current-image-id"
-            mv -f "$state_dir/.deployment-high-water.tmp" "$state_dir/deployment-high-water"
-            ln "$verified_images/.verified-image.tmp" "$verified_images/$baseline_revision"
-            rm -f "$verified_images/.verified-image.tmp"
-            printf "%s %s\n" "$baseline_revision" "$baseline_image_id"
+          # First deployment: seed the explicit baseline. Create-only and
+          # provably-empty gated; any pre-existing state fails closed. A
+          # provisioning-time current-revision marker naming a real legacy image on
+          # this host is adopted as the verified predecessor so the first v1 deploy
+          # keeps an exact rollback target.
+          install -d -m 700 "$state_dir"
+          for artifact in current-image-id deployment-high-water pending-deployment accepted-deployment; do
+          test ! -e "$state_dir/$artifact" && test ! -L "$state_dir/$artifact" || {
+          echo "First-deploy baseline requires provably empty deployment state; existing state entries:" >&2
+          find "$state_dir" -mindepth 1 -maxdepth 2 -printf "%y %p\n" >&2
+          exit 1
+          }
+          done
+          baseline_revision=$first_deployment_sentinel_revision
+          baseline_image_id=$first_deployment_sentinel_image_id
+          if test -e "$state_dir/current-revision" || test -L "$state_dir/current-revision"; then
+          test -f "$state_dir/current-revision" && test ! -L "$state_dir/current-revision" || {
+          echo "current-revision is not a regular file; refusing to overwrite" >&2
+          find "$state_dir" -mindepth 1 -maxdepth 2 -printf "%y %p\n" >&2
+          exit 1
+          }
+          stale_revision=$(cat "$state_dir/current-revision")
+          stale_nonhex=$(printf '%s' "$stale_revision" | tr -d "0-9a-f")
+          if [ -z "$stale_nonhex" ] && [ "${#stale_revision}" -eq 40 ] \
+          && docker image inspect "handleplan:$stale_revision" >/dev/null 2>&1; then
+          adopted_image_id=$(docker image inspect --format '{{.Id}}' \
+          "handleplan:$stale_revision")
+          adopted_revision_label=$(docker image inspect --format \
+          '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+          "handleplan:$stale_revision")
+          adopted_created=$(docker image inspect --format '{{.Created}}' \
+          "handleplan:$stale_revision")
+          adoption_ok=0
+          if [ "$adopted_revision_label" = "$stale_revision" ]; then
+          case "$adopted_image_id" in
+          sha256:[0-9a-f][0-9a-f]*)
+          if [ "${#adopted_image_id}" -eq 71 ]; then
+          adoption_ok=1
+          fi
+          ;;
+          esac
+          fi
+          if [ "$adoption_ok" -eq 1 ]; then
+          baseline_revision=$stale_revision
+          baseline_image_id=$adopted_image_id
+          echo "Adopting legacy image $stale_revision as the verified predecessor" >&2
           else
-            echo "First deployment requires the HANDLEPLAN_ALLOW_FIRST_DEPLOY repository variable and provably empty deployment state" >&2
-            exit 1
+          echo "Legacy image for $stale_revision is not authentic (revision label: $adopted_revision_label, created: $adopted_created); treating the marker as stale" >&2
+          fi
+          else
+          echo "Overwriting stale current-revision marker with the first-deployment baseline" >&2
+          fi
+          fi
+          verified_images="$state_dir/verified-images"
+          if test -e "$verified_images"; then
+          test -d "$verified_images" && test ! -L "$verified_images" || {
+          echo "verified-images is not a regular directory" >&2
+          exit 1
+          }
+          test -z "$(find "$verified_images" -mindepth 1 -maxdepth 1 -printf x -quit 2>/dev/null)" || {
+          echo "First-deploy baseline requires an empty verified-images directory" >&2
+          exit 1
+          }
+          else
+          install -d -m 700 "$verified_images"
+          fi
+          umask 077
+          printf "v1 %s current\n" "$baseline_revision" > "$state_dir/.current-deployment.tmp"
+          printf "%s\n" "$baseline_revision" > "$state_dir/.current-revision.tmp"
+          printf "%s\n" "$baseline_image_id" > "$state_dir/.current-image-id.tmp"
+          printf "%s\n" "$baseline_revision" > "$state_dir/.deployment-high-water.tmp"
+          printf "v1 %s %s\n" "$baseline_revision" "$baseline_image_id" > "$verified_images/.verified-image.tmp"
+          chmod 600 "$state_dir"/.current-deployment.tmp "$state_dir"/.current-revision.tmp "$state_dir"/.current-image-id.tmp "$state_dir"/.deployment-high-water.tmp "$verified_images/.verified-image.tmp"
+          mv -f "$state_dir/.current-deployment.tmp" "$state_dir/current-deployment"
+          mv -f "$state_dir/.current-revision.tmp" "$state_dir/current-revision"
+          mv -f "$state_dir/.current-image-id.tmp" "$state_dir/current-image-id"
+          mv -f "$state_dir/.deployment-high-water.tmp" "$state_dir/deployment-high-water"
+          ln "$verified_images/.verified-image.tmp" "$verified_images/$baseline_revision"
+          rm -f "$verified_images/.verified-image.tmp"
+          printf "%s %s\n" "$baseline_revision" "$baseline_image_id"
+          else
+          echo "First deployment requires the HANDLEPLAN_ALLOW_FIRST_DEPLOY repository variable and provably empty deployment state" >&2
+          exit 1
           fi
           HANDLEPLAN_GUARD_SCRIPT
           rollback_guard=$(ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
