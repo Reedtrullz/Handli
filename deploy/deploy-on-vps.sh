@@ -866,6 +866,10 @@ loaded_image_id=$(docker image inspect --format '{{.Id}}' "$image") || {
 }
 test "$loaded_image_id" = "$expected_image_id" || {
   echo "Loaded image config digest does not match the CI bundle" >&2
+  echo "expected_image_id=$expected_image_id" >&2
+  echo "loaded_image_id=$loaded_image_id" >&2
+  docker version --format 'client={{.Client.Version}} server={{.Server.Version}}' >&2 2>/dev/null || :
+  docker image inspect --format 'loaded arch={{.Os}}/{{.Architecture}}' "$image" >&2 2>/dev/null || :
   exit 1
 }
 loaded_image_revision=$(docker image inspect \
