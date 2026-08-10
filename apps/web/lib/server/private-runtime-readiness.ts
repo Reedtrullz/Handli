@@ -378,7 +378,12 @@ export function isLoopbackPrivateHealthRequest(
   }
   return request.method === "GET"
     && url.protocol === "http:"
-    && url.hostname === "127.0.0.1"
+    // Next.js builds the request URL from the server's bound HOSTNAME
+    // (0.0.0.0 in the container, localhost in dev). The loopback pin comes
+    // from the exact host header below, not the synthetic URL host.
+    && (url.hostname === "127.0.0.1"
+      || url.hostname === "0.0.0.0"
+      || url.hostname === "localhost")
     && url.port === "3000"
     && url.pathname === INTERNAL_HEALTH_PATHS[runtime]
     && url.search === ""

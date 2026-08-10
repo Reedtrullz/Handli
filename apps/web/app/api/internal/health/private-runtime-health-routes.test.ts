@@ -101,6 +101,22 @@ describe("loopback-only private runtime health routes", () => {
       }));
       expect(response.status).toBe(200);
     }
+    // Next builds the request URL from the bound HOSTNAME (0.0.0.0 in the
+    // container), so the loopback pin must come from the exact host header.
+    const boundHost = await handler(new Request(
+      "http://0.0.0.0:3000/api/internal/health/review",
+      {
+        headers: {
+          host: "127.0.0.1:3000",
+          "x-forwarded-for": "127.0.0.1",
+          "x-forwarded-host": "127.0.0.1:3000",
+          "x-forwarded-port": "3000",
+          "x-forwarded-proto": "http",
+          ...privateRuntimeHealthRequestHeaders("review"),
+        },
+      },
+    ));
+    expect(boundHost.status).toBe(200);
   });
 
   it("sanitizes configuration, database, timeout, and runtime-mismatch failures", async () => {
