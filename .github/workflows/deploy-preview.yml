@@ -203,8 +203,7 @@ jobs:
             true|false) ;;
             *) echo "HANDLEPLAN_ALLOW_FIRST_DEPLOY must be true or false" >&2; exit 1 ;;
           esac
-          rollback_guard=$(ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "ALLOW_FIRST_DEPLOY='$ALLOW_FIRST_DEPLOY' sh -s" <<'HANDLEPLAN_GUARD_SCRIPT'
+          cat > /tmp/handleplan-guard-script.sh <<'HANDLEPLAN_GUARD_SCRIPT'
           set -eu
           first_deployment_sentinel_revision=0000000000000000000000000000000000000000
           first_deployment_sentinel_image_id=sha256:0000000000000000000000000000000000000000000000000000000000000000
@@ -313,7 +312,8 @@ jobs:
             exit 1
           fi
           HANDLEPLAN_GUARD_SCRIPT
-          )
+          rollback_guard=$(ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "ALLOW_FIRST_DEPLOY='$ALLOW_FIRST_DEPLOY' $(cat /tmp/handleplan-guard-script.sh)")
           read -r previous_revision previous_image_id extra <<< "$rollback_guard"
           [[ "$previous_revision" =~ ^[0-9a-f]{40}$ ]]
           [[ "$previous_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
