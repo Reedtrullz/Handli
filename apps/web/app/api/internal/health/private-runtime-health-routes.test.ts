@@ -67,6 +67,9 @@ describe("loopback-only private runtime health routes", () => {
       }),
       request("review", { headers: { forwarded: "for=203.0.113.8" } }),
       request("review", { headers: { "x-forwarded-for": "203.0.113.8" } }),
+      request("review", { headers: { "x-forwarded-host": "handle.reidar.tech" } }),
+      request("review", { headers: { "x-forwarded-port": "443" } }),
+      request("review", { headers: { "x-forwarded-proto": "https" } }),
       request("review", { headers: { "x-handleplan-internal-health": "wrong" } }),
       new Request("http://127.0.0.1:3000/api/internal/health/review?probe=1", {
         headers: {
@@ -82,6 +85,22 @@ describe("loopback-only private runtime health routes", () => {
       await expect(response.json()).resolves.toEqual({ code: "NOT_FOUND" });
     }
     expect(provider).not.toHaveBeenCalled();
+  });
+
+  it("accepts the exact loopback metadata Next.js injects on direct requests", async () => {
+    const provider = vi.fn(async () => probe("review"));
+    const handler = createPrivateRuntimeReadyHandler("review", provider);
+    for (const forwardedFor of ["127.0.0.1", "::ffff:127.0.0.1"]) {
+      const response = await handler(request("review", {
+        headers: {
+          "x-forwarded-for": forwardedFor,
+          "x-forwarded-host": "127.0.0.1:3000",
+          "x-forwarded-port": "3000",
+          "x-forwarded-proto": "http",
+        },
+      }));
+      expect(response.status).toBe(200);
+    }
   });
 
   it("sanitizes configuration, database, timeout, and runtime-mismatch failures", async () => {

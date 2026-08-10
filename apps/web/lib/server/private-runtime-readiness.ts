@@ -336,14 +336,27 @@ function privateHealthResponse(value: unknown, status: number): Response {
 }
 
 function hasProxyHeaders(headers: Headers): boolean {
-  for (const [name] of headers) {
+  for (const [name, value] of headers) {
     if (
       name.startsWith("cf-")
       || name === "forwarded"
       || name === "via"
-      || name.startsWith("x-forwarded-")
       || name === "x-real-ip"
     ) return true;
+    if (name.startsWith("x-forwarded-")) {
+      // Next.js injects these on every inbound request. Accept only the exact
+      // direct-loopback values; any real proxy rewrites them.
+      const directLoopback = name === "x-forwarded-for"
+        ? value === "127.0.0.1" || value === "::ffff:127.0.0.1"
+        : name === "x-forwarded-host"
+          ? value === "127.0.0.1:3000"
+          : name === "x-forwarded-port"
+            ? value === "3000"
+            : name === "x-forwarded-proto"
+              ? value === "http"
+              : false;
+      if (!directLoopback) return true;
+    }
   }
   return false;
 }
