@@ -192,6 +192,53 @@ jobs:
           chmod 600 ~/.ssh/known_hosts
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes deploy@198.23.137.16 true
 
+      - name: Ensure the VPS docker uses the classic image store
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/handleplan-store-script.sh <<'HANDLEPLAN_STORE_SCRIPT'
+          set -eu
+          driver=$(docker info 2>/dev/null | sed -n 's/^ Storage Driver: //p')
+          if [ "$driver" = "overlay2" ]; then
+          echo "classic image store active" >&2
+          exit 0
+          fi
+          sudo -n true || {
+          echo "VPS docker storage driver is '$driver'; the classic image store is required and sudo is unavailable" >&2
+          exit 1
+          }
+          backup_path=""
+          if [ -f /etc/docker/daemon.json ]; then
+          backup_path="/etc/docker/daemon.json.bak.$$"
+          sudo -n cp -a /etc/docker/daemon.json "$backup_path"
+          fi
+          restore_store_config() {
+          if [ -n "$backup_path" ]; then
+          sudo -n cp -a "$backup_path" /etc/docker/daemon.json
+          else
+          sudo -n rm -f /etc/docker/daemon.json
+          fi
+          sudo -n systemctl restart docker || true
+          }
+          printf '{\n  "features": {"containerd-snapshotter": false}\n}\n' > /tmp/handleplan-daemon.json
+          chmod 644 /tmp/handleplan-daemon.json
+          sudo -n install -m 644 /tmp/handleplan-daemon.json /etc/docker/daemon.json
+          sudo -n systemctl restart docker
+          for attempt in 1 2 3 4 5 6; do
+          sleep 5
+          new_driver=$(docker info 2>/dev/null | sed -n 's/^ Storage Driver: //p')
+          if [ "$new_driver" = "overlay2" ]; then
+          echo "classic image store active after daemon restart" >&2
+          exit 0
+          fi
+          done
+          echo "docker restart did not activate the classic image store; restoring the previous daemon config" >&2
+          restore_store_config
+          exit 1
+          HANDLEPLAN_STORE_SCRIPT
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy@198.23.137.16 "sh -c '$(cat /tmp/handleplan-store-script.sh)'"
+
       - name: Provision the protected production environment
         shell: bash
         env:
