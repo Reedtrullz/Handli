@@ -249,16 +249,12 @@ jobs:
                   exit 1
                 }
                 stale_revision=$(cat "$state_dir/current-revision")
-                case "$stale_revision" in
-                  ''|*[!0-9a-f]*) : ;;
-                  *)
-                    if [ "${#stale_revision}" -eq 40 ] \
-                      && docker image inspect "handleplan:$stale_revision" >/dev/null 2>&1; then
-                      echo "current-revision points at an existing legacy image; refusing to overwrite" >&2
-                      exit 1
-                    fi
-                    ;;
-                esac
+                stale_nonhex=$(printf '%s' "$stale_revision" | tr -d "0-9a-f")
+                if [ -z "$stale_nonhex" ] && [ "${#stale_revision}" -eq 40 ] \
+                  && docker image inspect "handleplan:$stale_revision" >/dev/null 2>&1; then
+                  echo "current-revision points at an existing legacy image; refusing to overwrite" >&2
+                  exit 1
+                fi
                 echo "Overwriting stale current-revision marker with the first-deployment baseline" >&2
               fi
               verified_images="$state_dir/verified-images"
