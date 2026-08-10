@@ -868,7 +868,14 @@ test "$loaded_image_id" = "$expected_image_id" || {
   echo "Loaded image config digest does not match the CI bundle" >&2
   echo "expected_image_id=$expected_image_id" >&2
   echo "loaded_image_id=$loaded_image_id" >&2
-  docker version --format 'client={{.Client.Version}} server={{.Server.Version}}' >&2 2>/dev/null || :
+  docker version >&2 2>/dev/null || :
+  docker info 2>/dev/null | grep -E "Server Version|Storage Driver|Driver Type|Operating System" >&2 || :
+  archive_config=$(tar -tf "$image_archive" 2>/dev/null | grep -E '^[0-9a-f]{64}\.json$' | head -1 || true)
+  if [ -n "$archive_config" ]; then
+    echo "archive config file: $archive_config" >&2
+    archive_config_digest=$(tar -xOf "$image_archive" "$archive_config" 2>/dev/null | sha256sum | awk '{print $1}' || true)
+    echo "archive config digest: sha256:$archive_config_digest" >&2
+  fi
   docker image inspect --format 'loaded arch={{.Os}}/{{.Architecture}}' "$image" >&2 2>/dev/null || :
   exit 1
 }
