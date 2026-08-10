@@ -1,0 +1,78 @@
+.card {
+  margin: 0;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.card h2 {
+  margin: 3px 0 8px;
+  color: var(--forest-950);
+  font: 700 1.3rem/1.2 var(--font-display);
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--forest-700);
+  font: 700 12px var(--font-display);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.copy {
+  margin: 0 0 18px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.button {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid var(--forest-800);
+  border-radius: var(--radius);
+  background: var(--forest-800);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.button:disabled {
+  cursor: progress;
+  opacity: .58;
+}
+
+.status,
+.error {
+  display: grid;
+  gap: 7px;
+  margin: 14px 0 0;
+  padding: 13px 14px;
+  border-radius: 10px;
+  line-height: 1.4;
+}
+
+.status {
+  border: 1px solid #8eb79b;
+  background: #edf7ef;
+  color: var(--forest-950);
+}
+
+.error {
+  border: 1px solid #c5867f;
+  background: #fff1ee;
+  color: #732b25;
+}
+
+.status a,
+.error a {
+  color: inherit;
+  font-weight: 750;
+}
+
+@media (max-width: 620px) {
+  .card {
+    padding: 20px 16px;
+  }
+}

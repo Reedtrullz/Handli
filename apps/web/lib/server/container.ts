@@ -1,18 +1,95 @@
 import "server-only";
 
-import { PostgresPriceCache, type PriceCache } from "@handleplan/db";
+import { PostgresActiveCatalogReader } from "@handleplan/db/catalog-reader";
+import { PostgresBranchDirectory } from "@handleplan/db/branch-directory";
 import { createDatabase } from "@handleplan/db/client";
-import type { PriceObservation, Product } from "@handleplan/domain";
-import { FakeKassalappGateway, KassalappClient, type KassalappGateway } from "@handleplan/kassalapp";
+import { PostgresGeographicDirectoryReader } from "@handleplan/db/geographic-directory";
+import {
+  PostgresPublicCatalogIndexReader,
+  PublicCatalogIndexReaderError,
+  type PublicCatalogIndexReader,
+  type PublicCatalogCategory,
+  type PublicCatalogDiscoveryIndexReader,
+  type PublicCatalogDiscoveryPageOptions,
+} from "@handleplan/db/public-catalog-index-reader";
+import {
+  PostgresPlanningEvidenceReader,
+  type PlanningEvidenceReader,
+  type PlanningEvidenceSnapshot,
+} from "@handleplan/db/planning-evidence-reader";
+import {
+  EmptyPublicOfficialOfferReader,
+  PostgresPublicOfficialOfferReader,
+} from "@handleplan/db/public-official-offer-reader";
+import {
+  PermissivePublicApiRequestBudget,
+  PostgresPublicApiRequestBudget,
+} from "@handleplan/db/public-api-request-budget";
+import {
+  PostgresReviewedFamilyReader,
+  ReviewedFamilyReaderError,
+  type ReviewedFamilyCatalogMatch,
+  type ReviewedFamilyReader,
+  type ReviewedFamilySnapshot,
+} from "@handleplan/db/reviewed-family-reader";
+import {
+  PostgresPublicSourceStatusReader,
+  PublicSourceStatusReaderError,
+  type PublicSourceStatusReader,
+} from "@handleplan/db/source-status-reader";
+import type {
+  ExactProductPlanApiProductSummary,
+  PriceObservation,
+  Product,
+} from "@handleplan/domain";
 
-import { readServerEnv, type ServerEnv } from "./env";
+import {
+  allowsLoopbackProductionBrowserFake,
+  readServerEnv,
+  type ServerEnv,
+} from "./env";
 import { DiscoveryService, type DiscoveryServiceContract } from "./discovery-service";
-import { PlanService, type PlanServiceContract } from "./plan-service";
+import {
+  DiscoveryImpactService,
+  type DiscoveryImpactServiceContract,
+} from "./discovery-impact-service";
+import {
+  FamilyCandidateService,
+  type FamilyCandidateServiceContract,
+} from "./family-candidate-service";
+import { getPublicApiOperationCoalescer } from "./in-flight-operation-coalescer";
+import {
+  PlanService,
+  type ActiveCatalogReader,
+  type PlanServiceContract,
+} from "./plan-service";
+import { PriceService } from "./price-service";
+import {
+  PublicApiRuntimeControls,
+  type PublicApiRuntimeControlsContract,
+} from "./public-api-runtime-controls";
+import {
+  BoundedDatabaseReadinessProbe,
+  createPostgresMigrationCheck,
+  type DatabaseReadinessProbe,
+  REQUIRED_DATABASE_MIGRATION,
+} from "./readiness";
+import {
+  SourceStatusService,
+  type SourceStatusServiceContract,
+} from "./source-status-service";
+import type { BranchDirectory } from "./travel/gateways";
 
 export interface ServerContainer {
+  branchDirectory?: BranchDirectory;
+  discoveryImpactService: DiscoveryImpactServiceContract;
   discoveryService: DiscoveryServiceContract;
-  gateway: KassalappGateway;
+  familyCandidateService: FamilyCandidateServiceContract;
   planService: PlanServiceContract;
+  publicApiRuntimeControls: PublicApiRuntimeControlsContract;
+  publicCatalogIndex: PublicCatalogIndexReader;
+  readinessProbe: DatabaseReadinessProbe;
+  sourceStatusService: SourceStatusServiceContract;
 }
 
 let singleton: ServerContainer | undefined;
@@ -22,10 +99,10 @@ const FRESH_OBSERVED_AT = "2026-07-15T10:00:00.000Z";
 const STALE_OBSERVED_AT = "2026-07-12T11:59:59.999Z";
 
 const fakeProducts = [
-  { ean: "7038010000013", name: "TINE Lettmelk 1 % 1 l", brand: "TINE", packageQuantity: 1000, packageUnit: "ml", productFamily: "lettmelk" },
-  { ean: "7038010000020", name: "Evergood Kaffe 500 g", brand: "Evergood", packageQuantity: 500, packageUnit: "g", productFamily: "kaffe" },
-  { ean: "7038010000037", name: "Norsk grovbrød 750 g", brand: "Bakehuset", packageQuantity: 750, packageUnit: "g", productFamily: "brød" },
-  { ean: "7038010000044", name: "Stale testvare 1 stk", brand: "Test", packageQuantity: 1, packageUnit: "each", productFamily: "stale" },
+  { ean: "7038010000010", name: "TINE Lettmelk 1 % 1 l", brand: "TINE", packageQuantity: 1000, packageUnit: "ml", productFamily: "lettmelk" },
+  { ean: "7038010000027", name: "Evergood Kaffe 500 g", brand: "Evergood", packageQuantity: 500, packageUnit: "g", productFamily: "kaffe" },
+  { ean: "7038010000034", name: "Norsk grovbrød 750 g", brand: "Bakehuset", packageQuantity: 750, packageUnit: "g", productFamily: "brød" },
+  { ean: "7038010000041", name: "Stale testvare 1 stk", brand: "Test", packageQuantity: 1, packageUnit: "each", productFamily: "stale" },
 ] satisfies Product[];
 
 function fakePrice(ean: string, chain: PriceObservation["chain"], amountOre: number, observedAt = FRESH_OBSERVED_AT): PriceObservation {
@@ -33,77 +110,459 @@ function fakePrice(ean: string, chain: PriceObservation["chain"], amountOre: num
 }
 
 const fakePrices: PriceObservation[] = [
-  fakePrice("7038010000013", "bunnpris", 2000),
-  fakePrice("7038010000013", "rema-1000", 2500),
-  fakePrice("7038010000013", "extra", 2600),
-  fakePrice("7038010000020", "bunnpris", 5500),
-  fakePrice("7038010000020", "rema-1000", 6000),
-  fakePrice("7038010000020", "extra", 4000),
-  fakePrice("7038010000037", "bunnpris", 3500),
-  fakePrice("7038010000037", "rema-1000", 2000),
-  fakePrice("7038010000037", "extra", 3200),
-  fakePrice("7038010000044", "extra", 100, STALE_OBSERVED_AT),
+  fakePrice("7038010000010", "bunnpris", 2000),
+  fakePrice("7038010000010", "rema-1000", 2500),
+  fakePrice("7038010000010", "extra", 2600),
+  fakePrice("7038010000027", "bunnpris", 5500),
+  fakePrice("7038010000027", "rema-1000", 6000),
+  fakePrice("7038010000027", "extra", 4000),
+  fakePrice("7038010000034", "bunnpris", 3500),
+  fakePrice("7038010000034", "rema-1000", 2000),
+  fakePrice("7038010000034", "extra", 3200),
+  fakePrice("7038010000041", "extra", 100, STALE_OBSERVED_AT),
 ];
 
-export class InMemoryPriceCache implements PriceCache {
-  private readonly rows = new Map<string, PriceObservation>();
+const fakeCatalogProducts: ExactProductPlanApiProductSummary[] = fakeProducts.map((product, index) => ({
+  ...(product.brand === undefined ? {} : { brand: product.brand }),
+  catalogEvidence: {
+    observedAt: FRESH_OBSERVED_AT,
+    source: {
+      contractVersion: 1,
+      displayName: "Deterministic fake catalog fixture",
+      id: "fixture-catalog-source",
+      sourceClass: "catalog",
+      state: "approved",
+    },
+    sourceRecordId: `source-record:${(index + 1).toString(16).padStart(64, "0")}`,
+  },
+  displayName: product.name,
+  gtin: product.ean,
+  packageMeasure: {
+    amount: product.packageQuantity ?? 1,
+    unit: product.packageUnit === "each" ? "piece" : product.packageUnit ?? "package",
+  },
+  unitsPerPack: 1,
+}));
 
-  async getMany(eans: string[]): Promise<PriceObservation[]> {
-    const selected = new Set(eans);
-    return [...this.rows.values()]
-      .filter(({ ean }) => selected.has(ean))
-      .sort((left, right) => left.ean.localeCompare(right.ean) || left.chain.localeCompare(right.chain))
-      .map((row) => ({ ...row }));
+const fakeReviewedCatalogProducts = fakeCatalogProducts.slice(0, 3).map((product) => ({
+  ...product,
+  catalogEvidence: {
+    ...product.catalogEvidence,
+    source: {
+      contractVersion: 1 as const,
+      displayName: "Deterministic fake catalog fixture",
+      id: "fixture-catalog-source",
+      sourceClass: "catalog" as const,
+      state: "approved" as const,
+    },
+  },
+}));
+
+const fakeReviewedTaxonomy = {
+  contentSha256: "1d917ee4268615ad510a622ea30d69977191cffc143313a7dbecbad37debf520",
+  contractVersion: 1 as const,
+  publishedAt: "2026-07-15T00:00:00.000Z",
+  taxonomyId: "handleplan-reviewed-families" as const,
+  taxonomyVersion: "1.0.0",
+  versionId: "handleplan-reviewed-families@1.0.0",
+};
+
+const fakeReviewedFamilies = [
+  {
+    aliases: ["mjølk"],
+    id: "family:melk",
+    labelNo: "Melk",
+    product: fakeReviewedCatalogProducts[0]!,
+    slug: "melk",
+  },
+  {
+    aliases: [],
+    id: "family:kaffe",
+    labelNo: "Kaffe",
+    product: fakeReviewedCatalogProducts[1]!,
+    slug: "kaffe",
+  },
+  {
+    aliases: ["brød"],
+    id: "family:brod",
+    labelNo: "Brød",
+    product: fakeReviewedCatalogProducts[2]!,
+    slug: "brod",
+  },
+] as const;
+
+class InMemoryReviewedFamilyReader implements ReviewedFamilyReader {
+  private readonly snapshots = new Map<string, Extract<ReviewedFamilySnapshot, { state: "active" }>>(
+    fakeReviewedFamilies.map((entry, index) => {
+      const family = {
+        aliases: [...entry.aliases],
+        id: entry.id,
+        labelNo: entry.labelNo,
+        slug: entry.slug,
+        status: "active" as const,
+      };
+      const match: ReviewedFamilyCatalogMatch = {
+        canonicalProductId: `product:${entry.product.gtin}`,
+        family,
+        membership: {
+          confidence: 100,
+          decision: "approved",
+          decisionId: `family-membership:${index + 1}`,
+          method: "deterministic-rule",
+          reviewedAt: "2026-07-15T09:00:00.000Z",
+          ruleVersion: "fake-reviewed-family@1",
+        },
+        product: entry.product,
+        taxonomy: fakeReviewedTaxonomy,
+      };
+      return [entry.id, {
+        complete: true,
+        family,
+        familyId: entry.id,
+        matches: [match],
+        state: "active",
+        taxonomy: fakeReviewedTaxonomy,
+      }];
+    }),
+  );
+
+  async getSnapshots(
+    familyIds: readonly string[],
+    productsPerFamily: number,
+    _at: Date,
+    signal?: AbortSignal,
+  ): Promise<ReviewedFamilySnapshot[]> {
+    if (signal?.aborted) throw new ReviewedFamilyReaderError("CANCELLED");
+    return familyIds.map((familyId) => {
+      const snapshot = this.snapshots.get(familyId);
+      if (snapshot === undefined) {
+        return { complete: false, familyId, matches: [], state: "unknown" as const };
+      }
+      return {
+        ...snapshot,
+        family: { ...snapshot.family, aliases: [...snapshot.family.aliases] },
+        matches: snapshot.matches.slice(0, productsPerFamily).map((candidate) => ({
+          ...candidate,
+          family: { ...candidate.family, aliases: [...candidate.family.aliases] },
+          product: { ...candidate.product },
+        })),
+      };
+    });
   }
 
-  async putMany(rows: PriceObservation[]): Promise<void> {
-    const latestInBatch = new Map<string, PriceObservation>();
-    for (const row of rows) {
-      const key = `${row.ean}\u0000${row.chain}`;
-      const candidate = latestInBatch.get(key);
-      if (candidate === undefined || row.observedAt >= candidate.observedAt) {
-        latestInBatch.set(key, row);
-      }
+  async getMany(
+    familyIds: readonly string[],
+    productsPerFamily: number,
+    at: Date,
+    signal?: AbortSignal,
+  ): Promise<ReviewedFamilyCatalogMatch[]> {
+    return (await this.getSnapshots(familyIds, productsPerFamily, at, signal))
+      .flatMap((snapshot) => snapshot.state === "active" ? snapshot.matches : []);
+  }
+}
+
+const fakeCategories = {
+  bakery: {
+    depth: 1,
+    id: `category:${"3".repeat(64)}`,
+    name: "Bakeri",
+    sourceId: "fixture-catalog-source",
+  },
+  dairy: {
+    depth: 1,
+    id: `category:${"1".repeat(64)}`,
+    name: "Meieri",
+    sourceId: "fixture-catalog-source",
+  },
+  pantry: {
+    depth: 1,
+    id: `category:${"2".repeat(64)}`,
+    name: "Tørrvarer",
+    sourceId: "fixture-catalog-source",
+  },
+} satisfies Record<string, PublicCatalogCategory>;
+
+const fakeCategoryPathByGtin = new Map<string, PublicCatalogCategory[] | null>([
+  ["7038010000010", [fakeCategories.dairy]],
+  ["7038010000027", [fakeCategories.pantry]],
+  ["7038010000034", [fakeCategories.bakery]],
+  ["7038010000041", null],
+]);
+
+class InMemoryPublicCatalogIndexReader implements
+  ActiveCatalogReader,
+  PublicCatalogIndexReader,
+  PublicCatalogDiscoveryIndexReader {
+  private readonly byGtin = new Map(
+    fakeCatalogProducts.map((product) => [product.gtin, Object.freeze({ ...product })]),
+  );
+
+  async browse(
+    limit: number,
+    _at: Date,
+    signal?: AbortSignal,
+  ): Promise<ExactProductPlanApiProductSummary[]> {
+    if (signal?.aborted) throw new PublicCatalogIndexReaderError("CANCELLED");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 36) {
+      throw new PublicCatalogIndexReaderError("INVALID_REQUEST");
     }
-    for (const [key, row] of latestInBatch) {
-      const persisted = this.rows.get(key);
-      if (persisted === undefined || row.observedAt > persisted.observedAt) {
-        this.rows.set(key, { ...row });
-      }
+    return [...this.byGtin.values()]
+      .map((product) => ({ ...product }))
+      .sort((left, right) => left.displayName.localeCompare(right.displayName, "nb-NO")
+        || left.gtin.localeCompare(right.gtin))
+      .slice(0, limit);
+  }
+
+  async search(
+    query: string,
+    limit: number,
+    _at: Date,
+    signal?: AbortSignal,
+  ): Promise<ExactProductPlanApiProductSummary[]> {
+    if (signal?.aborted) throw new PublicCatalogIndexReaderError("CANCELLED");
+    const normalized = query.trim().toLocaleLowerCase("nb-NO");
+    if (
+      normalized.length < 2
+      || normalized.length > 120
+      || !Number.isSafeInteger(limit)
+      || limit < 1
+      || limit > 20
+    ) {
+      throw new PublicCatalogIndexReaderError("INVALID_REQUEST");
     }
+    return [...this.byGtin.values()]
+      .filter((product) => product.gtin === query.trim()
+        || product.displayName.toLocaleLowerCase("nb-NO").includes(normalized)
+        || product.brand?.toLocaleLowerCase("nb-NO").includes(normalized) === true)
+      .map((product) => ({ ...product }))
+      .sort((left, right) => left.displayName.localeCompare(right.displayName, "nb-NO")
+        || left.gtin.localeCompare(right.gtin))
+      .slice(0, limit);
+  }
+
+  async getMany(
+    gtins: readonly string[],
+    _at: Date,
+    signal?: AbortSignal,
+  ): Promise<ExactProductPlanApiProductSummary[]> {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    return gtins
+      .map((gtin) => this.byGtin.get(gtin))
+      .filter((product): product is ExactProductPlanApiProductSummary => product !== undefined)
+      .map((product) => ({ ...product }))
+      .sort((left, right) => left.gtin.localeCompare(right.gtin));
+  }
+
+  async readDiscoveryPage(
+    options: PublicCatalogDiscoveryPageOptions,
+    _at: Date,
+    signal?: AbortSignal,
+  ) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    void _at;
+    if (
+      options === null
+      || typeof options !== "object"
+      || !Number.isSafeInteger(options.limit)
+      || options.limit < 1
+      || options.limit > 50
+      || (options.categoryId !== undefined
+        && !/^category:[0-9a-f]{64}$/u.test(options.categoryId))
+    ) {
+      throw new PublicCatalogIndexReaderError("INVALID_REQUEST");
+    }
+    const query = options.query?.trim().toLocaleLowerCase("nb-NO");
+    if (options.query !== undefined && (query === undefined || query.length < 2 || query.length > 120)) {
+      throw new PublicCatalogIndexReaderError("INVALID_REQUEST");
+    }
+    const entries = [...this.byGtin.values()]
+      .filter((product) => query === undefined
+        || product.gtin === options.query?.trim()
+        || product.displayName.toLocaleLowerCase("nb-NO").includes(query)
+        || product.brand?.toLocaleLowerCase("nb-NO").includes(query) === true)
+      .sort((left, right) => left.displayName.toLocaleLowerCase("nb-NO")
+        .localeCompare(right.displayName.toLocaleLowerCase("nb-NO"), "nb-NO")
+        || left.gtin.localeCompare(right.gtin))
+      .map((product) => ({
+        catalogPosition: {
+          gtin: product.gtin,
+          rank: 0,
+          sortName: product.displayName.toLocaleLowerCase("nb-NO"),
+        },
+        categoryPath: fakeCategoryPathByGtin.get(product.gtin) ?? null,
+        product: { ...product },
+      }))
+      .filter(({ categoryPath }) => options.categoryId === undefined
+        || categoryPath?.some(({ id }) => id === options.categoryId) === true)
+      .filter(({ catalogPosition }) => options.cursor === undefined
+        || catalogPosition.rank > options.cursor.rank
+        || (catalogPosition.rank === options.cursor.rank
+          && catalogPosition.sortName > options.cursor.sortName)
+        || (catalogPosition.rank === options.cursor.rank
+          && catalogPosition.sortName === options.cursor.sortName
+          && catalogPosition.gtin > options.cursor.gtin));
+    const scanned = entries.slice(0, options.limit);
+    const hasMore = entries.length > options.limit;
+    return {
+      entries: scanned,
+      hasMore,
+      ...(hasMore ? { nextPosition: scanned.at(-1)!.catalogPosition } : {}),
+      scannedCount: scanned.length,
+    };
+  }
+
+  async categoryFacets(
+    limit: number,
+    _at: Date,
+    signal?: AbortSignal,
+  ) {
+    if (signal?.aborted) throw new PublicCatalogIndexReaderError("CANCELLED");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new PublicCatalogIndexReaderError("INVALID_REQUEST");
+    }
+    const facets = [fakeCategories.bakery, fakeCategories.dairy, fakeCategories.pantry]
+      .map((category) => ({ ...category, productCount: 1 }))
+      .slice(0, limit);
+    return { facets, hasMore: limit < 3 };
+  }
+}
+
+class InMemoryPlanningEvidenceReader implements PlanningEvidenceReader {
+  async getMany(
+    gtins: readonly string[],
+    at: Date,
+    signal?: AbortSignal,
+  ): Promise<PlanningEvidenceSnapshot> {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const requested = new Set(gtins);
+    const rows = fakePrices.filter(({ ean, observedAt }) =>
+      requested.has(ean) && Date.parse(observedAt) <= at.getTime());
+    return {
+      coverageChecks: [],
+      historicalEligibleEvidenceIds: [],
+      priceEvidence: rows.map((row) => ({
+        amountOre: row.amountOre,
+        chainId: row.chain,
+        contractVersion: 1,
+        evidenceLevel: "observed",
+        geographicScope: { countryCode: "NO", kind: "national" },
+        id: `fixture-price:${row.ean}:${row.chain}:${row.observedAt}`,
+        kind: "price-evidence",
+        observedAt: row.observedAt,
+        priceKind: "ordinary",
+        productMatch: {
+          canonicalProductId: `product:${row.ean}`,
+          kind: "exact",
+        },
+        sourceId: "fixture-price-source",
+        sourceRecordId: `fixture-record:${row.ean}:${row.chain}:${row.observedAt}`,
+      })),
+      products: gtins.map((gtin) => ({
+        canonicalProductId: `product:${gtin}`,
+        gtin,
+      })),
+      sources: rows.length === 0 ? [] : [{
+        contractVersion: 1,
+        displayName: "Deterministic fake price fixture",
+        id: "fixture-price-source",
+        sourceClass: "ordinary-price",
+        state: "approved",
+      }],
+    };
+  }
+}
+
+class EmptyPublicSourceStatusReader implements PublicSourceStatusReader {
+  async read(_limit: number, _at: Date, signal?: AbortSignal) {
+    if (signal?.aborted) {
+      throw new PublicSourceStatusReaderError("CANCELLED");
+    }
+    return { entries: [], hasMore: false };
   }
 }
 
 export function createServerContainer(env: ServerEnv): ServerContainer {
   if (env.mode === "fake") {
-    if (process.env.NODE_ENV === "production") {
+    if (
+      process.env.NODE_ENV === "production"
+      && !allowsLoopbackProductionBrowserFake(process.env)
+    ) {
       throw new Error("Fake server composition is disabled in production");
     }
-    const gateway = new FakeKassalappGateway(fakeProducts, fakePrices);
+    const catalog = new InMemoryPublicCatalogIndexReader();
+    const priceService = new PriceService({
+      officialOfferReader: new EmptyPublicOfficialOfferReader(),
+      reader: new InMemoryPlanningEvidenceReader(),
+    });
+    const familyCandidateService = new FamilyCandidateService({
+      now: () => new Date(FAKE_EVALUATION_TIME),
+      reader: new InMemoryReviewedFamilyReader(),
+    });
+    const planService = new PlanService({
+      catalog,
+      familyCandidateService,
+      now: () => new Date(FAKE_EVALUATION_TIME),
+      priceService,
+    });
     return {
-      discoveryService: new DiscoveryService({ cache: new InMemoryPriceCache(), gateway, now: () => new Date(FAKE_EVALUATION_TIME) }),
-      gateway,
-      planService: new PlanService({
-        cache: new InMemoryPriceCache(),
-        gateway,
+      discoveryImpactService: new DiscoveryImpactService({ resolver: planService }),
+      discoveryService: new DiscoveryService({
+        catalog,
         now: () => new Date(FAKE_EVALUATION_TIME),
+        priceService,
+      }),
+      familyCandidateService,
+      planService,
+      publicApiRuntimeControls: new PublicApiRuntimeControls(
+        new PermissivePublicApiRequestBudget(),
+        getPublicApiOperationCoalescer(),
+      ),
+      publicCatalogIndex: catalog,
+      readinessProbe: new BoundedDatabaseReadinessProbe({
+        checkMigration: async () => true,
+        requiredMigration: REQUIRED_DATABASE_MIGRATION,
+        timeoutMs: 1_500,
+      }),
+      sourceStatusService: new SourceStatusService({
+        now: () => new Date(FAKE_EVALUATION_TIME),
+        reader: new EmptyPublicSourceStatusReader(),
       }),
     };
   }
 
   const connection = createDatabase(env.DATABASE_URL);
-  const gateway = new KassalappClient({
-    apiKey: env.KASSAL_API_KEY,
-    baseUrl: env.KASSAL_BASE_URL,
-    fetch,
+  const publicCatalogIndex = new PostgresPublicCatalogIndexReader(connection.db);
+  const priceService = new PriceService({
+    geographicDirectoryReader: new PostgresGeographicDirectoryReader(connection.db),
+    officialOfferReader: new PostgresPublicOfficialOfferReader(connection.db),
+    reader: new PostgresPlanningEvidenceReader(connection.db),
   });
-  const cache = new PostgresPriceCache(connection.db);
+  const familyCandidateService = new FamilyCandidateService({
+    reader: new PostgresReviewedFamilyReader(connection.db),
+  });
+  const planService = new PlanService({
+    catalog: new PostgresActiveCatalogReader(connection.db),
+    familyCandidateService,
+    priceService,
+  });
   return {
-    discoveryService: new DiscoveryService({ cache, gateway }),
-    gateway,
-    planService: new PlanService({
-      cache,
-      gateway,
+    branchDirectory: new PostgresBranchDirectory(connection.db),
+    discoveryImpactService: new DiscoveryImpactService({ resolver: planService }),
+    discoveryService: new DiscoveryService({ catalog: publicCatalogIndex, priceService }),
+    familyCandidateService,
+    planService,
+    publicApiRuntimeControls: new PublicApiRuntimeControls(
+      new PostgresPublicApiRequestBudget(connection.db),
+      getPublicApiOperationCoalescer(),
+    ),
+    publicCatalogIndex,
+    readinessProbe: new BoundedDatabaseReadinessProbe({
+      checkMigration: createPostgresMigrationCheck(connection.db),
+      requiredMigration: REQUIRED_DATABASE_MIGRATION,
+      timeoutMs: 1_500,
+    }),
+    sourceStatusService: new SourceStatusService({
+      reader: new PostgresPublicSourceStatusReader(connection.db),
     }),
   };
 }

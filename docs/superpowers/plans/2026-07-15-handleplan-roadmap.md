@@ -1,13 +1,17 @@
 # Handleplan Implementation Roadmap
 
-The approved design is intentionally split into four implementation plans. Each plan ends with independently testable working software and preserves the contracts in `docs/superpowers/specs/2026-07-15-handleplan-design.md`.
+> **Current implementation source of truth:** [Handleplan v1 comprehensive work plan](2026-07-16-handleplan-v1-comprehensive-work-plan.md)
+>
+> The original sequence below records the product decomposition used to build the protected alpha. The comprehensive v1 plan supersedes its execution order after the v1 audit found that data rights, durable evidence, explicit coverage, and offer semantics must precede travel and public claims. The approved product specification remains valid.
+
+The approved design was intentionally split into four implementation plans. Each plan ends with independently testable working software and preserves the contracts in `docs/superpowers/specs/2026-07-15-handleplan-design.md`.
 
 1. **Foundation and Planlegg base-price slice** — anonymous basket, matching rules, server-only Kassalapp integration, complete one-to-three-chain plans, and the approved workspace result UI. Detailed in `2026-07-15-handleplan-planlegg-foundation.md`.
 2. **Travel and Handlemodus** — branch candidates, temporary origin, route-provider abstraction, Pareto travel dimension, and the offline mobile checklist.
 3. **Flyer ingestion and review** — Bunnpris, REMA 1000, and Extra direct-source adapters; immutable captures; extraction; validation; geographic scope; review queue; expiry; and offer-price precedence.
 4. **Oppdag and public-release hardening** — basket impact, 30-day price-drop evidence, accessibility, operations health, multi-region acceptance checks, and permission/terms gates.
 
-The plans are executed in order. A later plan may extend an earlier interface but must not silently weaken complete-basket, freshness, privacy, provenance, or maximum-three-store invariants.
+The original plans are no longer executed in the order below. Use the comprehensive v1 plan for dependencies and release gates. A later plan may extend an earlier interface but must not silently weaken complete-basket, freshness, privacy, provenance, explicit-coverage, or maximum-three-store invariants.
 
 ## Specification coverage
 

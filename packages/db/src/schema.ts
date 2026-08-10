@@ -25,3 +25,5 @@ export const priceCache = pgTable(
 
 export type PriceCacheRow = typeof priceCache.$inferSelect;
 export type NewPriceCacheRow = typeof priceCache.$inferInsert;
+
+export * from "./evidence-schema";

@@ -1,0 +1,68 @@
+name: External public monitor
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+    inputs:
+      expected_revision:
+        description: Full deployed Git revision; defaults to the repository variable
+        required: false
+        type: string
+      expected_migration:
+        description: Required migration filename; defaults to the repository variable
+        required: false
+        type: string
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify monitor contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check out monitor revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Use repository Node version
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.22.3
+      - name: Check and test the dependency-free monitor
+        run: |
+          node --check scripts/operations/check-public-monitor.mjs
+          node --test tests/operations/public-monitor.test.mjs
+
+  monitor:
+    name: Probe protected public contracts
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref_name == github.event.repository.default_branch)
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: external-public-monitor
+    env:
+      HANDLEPLAN_MONITOR_BASE_URL: https://handle.reidar.tech/
+      HANDLEPLAN_MONITOR_CF_ACCESS_CLIENT_ID: ${{ secrets.HANDLEPLAN_MONITOR_CF_ACCESS_CLIENT_ID }}
+      HANDLEPLAN_MONITOR_CF_ACCESS_CLIENT_SECRET: ${{ secrets.HANDLEPLAN_MONITOR_CF_ACCESS_CLIENT_SECRET }}
+      HANDLEPLAN_MONITOR_EXPECTED_MIGRATION: ${{ inputs.expected_migration || vars.HANDLEPLAN_MONITOR_EXPECTED_MIGRATION }}
+      HANDLEPLAN_MONITOR_EXPECTED_REVISION: ${{ inputs.expected_revision || vars.HANDLEPLAN_MONITOR_EXPECTED_REVISION }}
+    steps:
+      - name: Check out monitor revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Use repository Node version
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.22.3
+      - name: Probe liveness, readiness, and source status
+        run: node scripts/operations/check-public-monitor.mjs

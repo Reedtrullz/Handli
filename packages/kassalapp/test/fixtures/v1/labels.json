@@ -1,0 +1,28 @@
+{
+  "data": [
+    {
+      "name": "organic",
+      "display_name": "Økologisk",
+      "description": "Sertifisert økologisk",
+      "organization": "Debio",
+      "alternative_names": "Øko",
+      "type": "certification",
+      "year_established": "1986",
+      "about": "Norsk økologimerke",
+      "note": "",
+      "icon": { "svg": "https://example.invalid/organic.svg", "png": "https://example.invalid/organic.png" }
+    },
+    {
+      "name": "keyhole",
+      "display_name": "Nøkkelhullet",
+      "description": "Ernæringsmerke",
+      "organization": "Helsedirektoratet",
+      "alternative_names": "Keyhole",
+      "type": "nutrition",
+      "year_established": "2009",
+      "about": "Felles nordisk ernæringsmerke",
+      "note": "",
+      "icon": { "svg": "https://example.invalid/keyhole.svg", "png": "https://example.invalid/keyhole.png" }
+    }
+  ]
+}

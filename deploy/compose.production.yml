@@ -19,6 +19,31 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
+  migrate:
+    image: ${HANDLEPLAN_MIGRATION_IMAGE:?HANDLEPLAN_MIGRATION_IMAGE is required}
+    restart: "no"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    entrypoint:
+      - node
+      - /app/deploy/migrate.mjs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_DATABASE_PASSWORD: ${APP_DATABASE_PASSWORD:?APP_DATABASE_PASSWORD is required}
+      DATABASE_MIGRATION_URL: postgresql://handleplan:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/handleplan
+      NODE_ENV: production
+      OPERATIONS_DATABASE_PASSWORD: ${OPERATIONS_DATABASE_PASSWORD:?OPERATIONS_DATABASE_PASSWORD is required}
+      REVIEW_DATABASE_PASSWORD: ${REVIEW_DATABASE_PASSWORD:?REVIEW_DATABASE_PASSWORD is required}
+      WEB_DATABASE_PASSWORD: ${WEB_DATABASE_PASSWORD:?WEB_DATABASE_PASSWORD is required}
+    networks:
+      - database
+
   app:
     image: ${HANDLEPLAN_IMAGE:?HANDLEPLAN_IMAGE is required}
     restart: unless-stopped
@@ -30,19 +55,19 @@ services:
       - no-new-privileges:true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
+    entrypoint:
+      - node
+      - /app/apps/web/server.js
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       APP_COMMIT_SHA: ${APP_COMMIT_SHA:?APP_COMMIT_SHA is required}
-      DATABASE_URL: postgresql://handleplan:${POSTGRES_PASSWORD}@postgres:5432/handleplan
-      KASSAL_API_KEY: ${KASSAL_API_KEY:?KASSAL_API_KEY is required}
-      KASSAL_BASE_URL: https://kassal.app/api/v1
-      KASSAL_MODE: real
+      DATABASE_URL: postgresql://handleplan_web:${WEB_DATABASE_PASSWORD:?WEB_DATABASE_PASSWORD is required}@postgres:5432/handleplan
       NEXT_TELEMETRY_DISABLED: "1"
       NODE_ENV: production
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health | grep -q '\"status\":\"ok\"'"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/ready | grep -q '\"status\":\"ok\"'"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -53,10 +78,172 @@ services:
     ports:
       - "127.0.0.1:3004:3000"
 
+  review:
+    image: ${HANDLEPLAN_IMAGE:?HANDLEPLAN_IMAGE is required}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    entrypoint:
+      - node
+      - /app/apps/web/server.js
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_COMMIT_SHA: ${APP_COMMIT_SHA:?APP_COMMIT_SHA is required}
+      NEXT_TELEMETRY_DISABLED: "1"
+      NODE_ENV: production
+      REVIEW_ACCESS_AUDIENCE: ${REVIEW_ACCESS_AUDIENCE:?REVIEW_ACCESS_AUDIENCE is required}
+      REVIEW_ACCESS_ISSUER: ${REVIEW_ACCESS_ISSUER:?REVIEW_ACCESS_ISSUER is required}
+      REVIEW_ACCESS_TEAM_DOMAIN: ${REVIEW_ACCESS_TEAM_DOMAIN:?REVIEW_ACCESS_TEAM_DOMAIN is required}
+      REVIEW_BASE_URL: ${REVIEW_BASE_URL:?REVIEW_BASE_URL is required}
+      REVIEW_DATABASE_URL: postgresql://handleplan_review:${REVIEW_DATABASE_PASSWORD:?REVIEW_DATABASE_PASSWORD is required}@postgres:5432/handleplan
+      REVIEW_EVIDENCE_PROOF_SECRET: ${REVIEW_EVIDENCE_PROOF_SECRET:?REVIEW_EVIDENCE_PROOF_SECRET is required}
+      REVIEW_PRIVATE_CAPTURE_ROOT: /var/lib/handleplan/private-captures
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/api/internal/health/review',{headers:
+          {'user-agent':'handleplan-review-health-v1',
+          'x-handleplan-internal-health':'handleplan-review-health-v1'}}).then(async
+          response=>{const text=await response.text();if(response.status!==200||
+          text.length>1024)process.exit(1);const body=JSON.parse(text);if(body.status
+          !=='ok'||body.runtime!=='review'||body.database?.status!=='ok'||
+          body.database?.role!=='handleplan_review'||body.database?.requiredMigration
+          !=='028_private_review_image_evidence_only.sql')process.exit(1)}).catch(()
+          =>process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - database
+      - frontend
+    ports:
+      - "127.0.0.1:3006:3000"
+    volumes:
+      - type: volume
+        source: private-captures
+        target: /var/lib/handleplan/private-captures
+        read_only: true
+
+  operations:
+    image: ${HANDLEPLAN_IMAGE:?HANDLEPLAN_IMAGE is required}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    entrypoint:
+      - node
+      - /app/apps/web/server.js
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_COMMIT_SHA: ${APP_COMMIT_SHA:?APP_COMMIT_SHA is required}
+      NEXT_TELEMETRY_DISABLED: "1"
+      NODE_ENV: production
+      OPERATIONS_ACCESS_AUDIENCE: ${OPERATIONS_ACCESS_AUDIENCE:?OPERATIONS_ACCESS_AUDIENCE is required}
+      OPERATIONS_ACCESS_ISSUER: ${OPERATIONS_ACCESS_ISSUER:?OPERATIONS_ACCESS_ISSUER is required}
+      OPERATIONS_ACCESS_TEAM_DOMAIN: ${OPERATIONS_ACCESS_TEAM_DOMAIN:?OPERATIONS_ACCESS_TEAM_DOMAIN is required}
+      OPERATIONS_ALERT_EVALUATION_ENABLED: "false"
+      OPERATIONS_BASE_URL: ${OPERATIONS_BASE_URL:?OPERATIONS_BASE_URL is required}
+      OPERATIONS_DATABASE_URL: postgresql://handleplan_operations:${OPERATIONS_DATABASE_PASSWORD:?OPERATIONS_DATABASE_PASSWORD is required}@postgres:5432/handleplan
+      OPERATIONS_SOURCE_ROSTER_JSON: ${OPERATIONS_SOURCE_ROSTER_JSON:?OPERATIONS_SOURCE_ROSTER_JSON is required}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/api/internal/health/operations',{headers:
+          {'user-agent':'handleplan-operations-health-v1',
+          'x-handleplan-internal-health':'handleplan-operations-health-v1'}}).then(async
+          response=>{const text=await response.text();if(response.status!==200||
+          text.length>1024)process.exit(1);const body=JSON.parse(text);if(body.status
+          !=='ok'||body.runtime!=='operations'||body.database?.status!=='ok'||
+          body.database?.role!=='handleplan_operations'||
+          body.database?.requiredMigration!==
+          '028_private_review_image_evidence_only.sql')process.exit(1)}).catch(()
+          =>process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - database
+      - frontend
+    ports:
+      - "127.0.0.1:3007:3000"
+
+  worker:
+    image: ${HANDLEPLAN_IMAGE:?HANDLEPLAN_IMAGE is required}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    entrypoint:
+      - node
+      - /app/apps/worker/dist/main.mjs
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_COMMIT_SHA: ${APP_COMMIT_SHA:?APP_COMMIT_SHA is required}
+      DATABASE_URL: postgresql://handleplan_app:${APP_DATABASE_PASSWORD:?APP_DATABASE_PASSWORD is required}@postgres:5432/handleplan
+      KASSAL_API_KEY: ${KASSAL_API_KEY:-}
+      KASSAL_BASE_URL: https://kassal.app/api/v1
+      KASSAL_SOURCE_ACCESS: ${KASSAL_SOURCE_ACCESS:-conditional}
+      NODE_ENV: production
+      OFFICIAL_OFFER_FOUNDATION_ENABLED: "false"
+      OFFICIAL_OFFER_PRIVATE_CAPTURE_ROOT: /var/lib/handleplan/private-captures
+      WORKER_CYCLE_INTERVAL_MS: ${WORKER_CYCLE_INTERVAL_MS:-30000}
+      WORKER_LEASE_TTL_MS: ${WORKER_LEASE_TTL_MS:-120000}
+      WORKER_REQUEST_BUDGET_LIMIT: ${WORKER_REQUEST_BUDGET_LIMIT:-60}
+      WORKER_REQUEST_BUDGET_MAX_WAIT_MS: ${WORKER_REQUEST_BUDGET_MAX_WAIT_MS:-65000}
+      WORKER_REQUEST_BUDGET_WINDOW_MS: ${WORKER_REQUEST_BUDGET_WINDOW_MS:-60000}
+      WORKER_SHUTDOWN_GRACE_MS: ${WORKER_SHUTDOWN_GRACE_MS:-30000}
+      WORKER_TARGET_LIMIT: ${WORKER_TARGET_LIMIT:-500}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3005/health | grep -q '\"ready\":true'"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    networks:
+      - database
+      - frontend
+    volumes:
+      - type: volume
+        source: private-captures
+        target: /var/lib/handleplan/private-captures
+        read_only: false
+    stop_grace_period: 45s
+
 networks:
   database:
     internal: true
   frontend: {}
 
 volumes:
+  private-captures:
   postgres-data:

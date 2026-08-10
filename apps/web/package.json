@@ -2,9 +2,10 @@
   "name": "web",
   "private": true,
   "scripts": {
-    "build": "next build",
+    "build": "node ../../scripts/e2e/public-build-binding.mjs build",
     "dev": "next dev",
     "lint": "eslint .",
+    "test:handlemodus:browser": "playwright test --config playwright.handlemodus.config.ts",
     "test": "vitest run",
     "test:result:browser": "playwright test --config playwright.task8.config.ts",
     "typecheck": "tsc --noEmit"
@@ -12,7 +13,6 @@
   "dependencies": {
     "@handleplan/db": "workspace:*",
     "@handleplan/domain": "workspace:*",
-    "@handleplan/kassalapp": "workspace:*",
     "next": "16.3.0",
     "react": "19.2.7",
     "react-dom": "19.2.7",

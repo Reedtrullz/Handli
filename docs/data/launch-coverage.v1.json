@@ -1,0 +1,404 @@
+{
+  "$schema": "./launch-coverage.v1.schema.json",
+  "manifestVersion": "1.0.0",
+  "reviewedAt": "2026-07-16",
+  "launchDecision": "candidate_only",
+  "publicClaim": "No region is selected or launch-eligible. Three-chain ordinary-price and official-offer coverage remain unmeasured or rights-unresolved.",
+  "requiredChains": [
+    { "id": "bunnpris", "displayName": "Bunnpris" },
+    { "id": "rema-1000", "displayName": "REMA 1000" },
+    { "id": "extra", "displayName": "Extra" }
+  ],
+  "candidateRegions": [
+    {
+      "id": "no-0301-oslo",
+      "name": "Oslo",
+      "municipalityCode": "0301",
+      "boundaryType": "municipality",
+      "selectionStatus": "candidate_unverified",
+      "selected": false,
+      "chainPresenceEvidence": [
+        {
+          "chainId": "bunnpris",
+          "url": "https://www.bunnpris.no/butikker/bunnpris-sinsen",
+          "accessedAt": "2026-07-16",
+          "finding": "Official page lists Bunnpris Sinsen in Oslo. Presence does not prove price or offer coverage."
+        },
+        {
+          "chainId": "rema-1000",
+          "url": "https://www.rema.no/butikker/oslo/oslo/rema-1000-storgata/",
+          "accessedAt": "2026-07-16",
+          "finding": "Official page lists REMA 1000 Storgata in Oslo. Presence does not prove price or offer coverage."
+        },
+        {
+          "chainId": "extra",
+          "url": "https://www.coop.no/butikker/extra/extra-st-halvardsgate-4276",
+          "accessedAt": "2026-07-16",
+          "finding": "Official page lists Extra St. Halvardsgate in Oslo. Presence does not prove price or offer coverage."
+        }
+      ],
+      "offerScopeEvidence": [
+        {
+          "chainId": "rema-1000",
+          "url": "https://www.rema.no/kundeaviser/oslo/",
+          "accessedAt": "2026-07-16",
+          "finding": "Official page says the publication applies in Oslo and Gjelleråsen. Automated reuse permission remains unresolved."
+        }
+      ],
+      "knownGaps": [
+        "No measured product-level ordinary-price coverage for all three chains",
+        "No rights-cleared official-offer source for any chain",
+        "No verified Extra or Bunnpris offer-scope mapping for the municipality",
+        "No freshness, known-not-carried, or branch-directory completeness evidence"
+      ]
+    },
+    {
+      "id": "no-4601-bergen",
+      "name": "Bergen",
+      "municipalityCode": "4601",
+      "boundaryType": "municipality",
+      "selectionStatus": "candidate_unverified",
+      "selected": false,
+      "chainPresenceEvidence": [
+        {
+          "chainId": "bunnpris",
+          "url": "https://www.bunnpris.no/butikker/bunnpris-nygardsgaten",
+          "accessedAt": "2026-07-16",
+          "finding": "Official page lists Bunnpris Nygårdsgaten in Bergen. Presence does not prove price or offer coverage."
+        },
+        {
+          "chainId": "rema-1000",
+          "url": "https://www.rema.no/butikker/vestland/bergen/rema-1000-haukelandsveien/",
+          "accessedAt": "2026-07-16",
+          "finding": "Official page lists REMA 1000 Haukelandsveien in Bergen. Presence does not prove price or offer coverage."
+        },
+        {
+          "chainId": "extra",
+          "url": "https://www.coop.no/butikker/extra/extra-bergen-storsenter-4219",
+          "accessedAt": "2026-07-16",
+          "finding": "Official page lists Extra Bergen Storsenter in Bergen. Presence does not prove price or offer coverage."
+        }
+      ],
+      "offerScopeEvidence": [
+        {
+          "chainId": "rema-1000",
+          "url": "https://www.rema.no/kundeaviser/vest/",
+          "accessedAt": "2026-07-16",
+          "finding": "Official page says the Vest publication applies in old Hordaland except Etne. Automated reuse permission remains unresolved."
+        },
+        {
+          "chainId": "extra",
+          "url": "https://kundeavis.coop.no/aviser/extra/hordaland/",
+          "accessedAt": "2026-07-16",
+          "finding": "Official publication is labelled Hordaland. Store-to-publication mapping and automated reuse permission remain unresolved."
+        }
+      ],
+      "knownGaps": [
+        "No measured product-level ordinary-price coverage for all three chains",
+        "No rights-cleared official-offer source for any chain",
+        "No verified Bunnpris offer-scope mapping for the municipality",
+        "No freshness, known-not-carried, or branch-directory completeness evidence"
+      ]
+    },
+    {
+      "id": "no-5001-trondheim",
+      "name": "Trondheim",
+      "municipalityCode": "5001",
+      "boundaryType": "municipality",
+      "selectionStatus": "candidate_unverified",
+      "selected": false,
+      "chainPresenceEvidence": [
+        {
+          "chainId": "bunnpris",
+          "url": "https://www.bunnpris.no/butikker/bunnpris-munkegaten",
+          "accessedAt": "2026-07-16",
+          "finding": "Official page lists Bunnpris Munkegaten in Trondheim. Presence does not prove price or offer coverage."
+        },
+        {
+          "chainId": "rema-1000",
+          "url": "https://www.rema.no/butikker/trondelag/trondheim/rema-1000-torvet/",
+          "accessedAt": "2026-07-16",
+          "finding": "Official page lists REMA 1000 Torvet in Trondheim. Presence does not prove price or offer coverage."
+        },
+        {
+          "chainId": "extra",
+          "url": "https://www.coop.no/butikker/extra/extra-tempe-4361",
+          "accessedAt": "2026-07-16",
+          "finding": "Official page lists Extra Tempe in Trondheim. Presence does not prove price or offer coverage."
+        }
+      ],
+      "offerScopeEvidence": [
+        {
+          "chainId": "rema-1000",
+          "url": "https://www.rema.no/kundeaviser/midtnorge/",
+          "accessedAt": "2026-07-16",
+          "finding": "Official page says the Midt-Norge publication applies in Trøndelag and at Tynset. Automated reuse permission remains unresolved."
+        },
+        {
+          "chainId": "extra",
+          "url": "https://kundeavis.coop.no/aviser/extra/midt/",
+          "accessedAt": "2026-07-16",
+          "finding": "Official publication is labelled Midt. Store-to-publication mapping and automated reuse permission remain unresolved."
+        }
+      ],
+      "knownGaps": [
+        "No measured product-level ordinary-price coverage for all three chains",
+        "No rights-cleared official-offer source for any chain",
+        "No verified Bunnpris offer-scope mapping for the municipality",
+        "No freshness, known-not-carried, or branch-directory completeness evidence"
+      ]
+    }
+  ],
+  "coverage": [
+    {
+      "regionId": "no-0301-oslo",
+      "chainId": "bunnpris",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": ["kassalapp"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_presence_only",
+      "geographicScope": "chain-level source not measured against Oslo",
+      "refreshTargetHours": 72,
+      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-0301-oslo",
+      "chainId": "bunnpris",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": ["tjek-api", "bunnpris-public-web"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_presence_only",
+      "geographicScope": "unresolved",
+      "refreshTargetHours": 24,
+      "knownGaps": ["Rights-cleared source", "Offer-scope mapping", "Validity and conditions", "Attribution and imagery"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-0301-oslo",
+      "chainId": "rema-1000",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": ["kassalapp"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_presence_only",
+      "geographicScope": "chain-level source not measured against Oslo",
+      "refreshTargetHours": 72,
+      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-0301-oslo",
+      "chainId": "rema-1000",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": ["tjek-api", "rema-public-web"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_scope_only",
+      "geographicScope": "public page says Oslo and Gjelleråsen; authorized machine scope unresolved",
+      "refreshTargetHours": 24,
+      "knownGaps": ["Rights-cleared source", "Offer field coverage", "Membership conditions", "Attribution and imagery"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-0301-oslo",
+      "chainId": "extra",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": ["kassalapp"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_presence_only",
+      "geographicScope": "chain-level source not measured against Oslo",
+      "refreshTargetHours": 72,
+      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-0301-oslo",
+      "chainId": "extra",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": ["tjek-api", "coop-extra-public-web"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_presence_only",
+      "geographicScope": "unresolved",
+      "refreshTargetHours": 24,
+      "knownGaps": ["Rights-cleared source", "Cooperative scope mapping", "Member-only conditions", "Attribution and imagery"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-4601-bergen",
+      "chainId": "bunnpris",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": ["kassalapp"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_presence_only",
+      "geographicScope": "chain-level source not measured against Bergen",
+      "refreshTargetHours": 72,
+      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-4601-bergen",
+      "chainId": "bunnpris",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": ["tjek-api", "bunnpris-public-web"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_presence_only",
+      "geographicScope": "unresolved",
+      "refreshTargetHours": 24,
+      "knownGaps": ["Rights-cleared source", "Offer-scope mapping", "Validity and conditions", "Attribution and imagery"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-4601-bergen",
+      "chainId": "rema-1000",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": ["kassalapp"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_presence_only",
+      "geographicScope": "chain-level source not measured against Bergen",
+      "refreshTargetHours": 72,
+      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-4601-bergen",
+      "chainId": "rema-1000",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": ["tjek-api", "rema-public-web"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_scope_only",
+      "geographicScope": "public page says old Hordaland except Etne; authorized machine scope unresolved",
+      "refreshTargetHours": 24,
+      "knownGaps": ["Rights-cleared source", "Offer field coverage", "Membership conditions", "Attribution and imagery"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-4601-bergen",
+      "chainId": "extra",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": ["kassalapp"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_presence_only",
+      "geographicScope": "chain-level source not measured against Bergen",
+      "refreshTargetHours": 72,
+      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-4601-bergen",
+      "chainId": "extra",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": ["tjek-api", "coop-extra-public-web"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_scope_only",
+      "geographicScope": "public publication is labelled Hordaland; store mapping and authorized machine scope unresolved",
+      "refreshTargetHours": 24,
+      "knownGaps": ["Rights-cleared source", "Cooperative scope mapping", "Member-only conditions", "Attribution and imagery"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-5001-trondheim",
+      "chainId": "bunnpris",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": ["kassalapp"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_presence_only",
+      "geographicScope": "chain-level source not measured against Trondheim",
+      "refreshTargetHours": 72,
+      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-5001-trondheim",
+      "chainId": "bunnpris",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": ["tjek-api", "bunnpris-public-web"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_presence_only",
+      "geographicScope": "unresolved",
+      "refreshTargetHours": 24,
+      "knownGaps": ["Rights-cleared source", "Offer-scope mapping", "Validity and conditions", "Attribution and imagery"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-5001-trondheim",
+      "chainId": "rema-1000",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": ["kassalapp"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_presence_only",
+      "geographicScope": "chain-level source not measured against Trondheim",
+      "refreshTargetHours": 72,
+      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-5001-trondheim",
+      "chainId": "rema-1000",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": ["tjek-api", "rema-public-web"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_scope_only",
+      "geographicScope": "public page says Trøndelag and Tynset; authorized machine scope unresolved",
+      "refreshTargetHours": 24,
+      "knownGaps": ["Rights-cleared source", "Offer field coverage", "Membership conditions", "Attribution and imagery"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-5001-trondheim",
+      "chainId": "extra",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": ["kassalapp"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_presence_only",
+      "geographicScope": "chain-level source not measured against Trondheim",
+      "refreshTargetHours": 72,
+      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-5001-trondheim",
+      "chainId": "extra",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": ["tjek-api", "coop-extra-public-web"],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "public_scope_only",
+      "geographicScope": "public publication is labelled Midt; store mapping and authorized machine scope unresolved",
+      "refreshTargetHours": 24,
+      "knownGaps": ["Rights-cleared source", "Cooperative scope mapping", "Member-only conditions", "Attribution and imagery"],
+      "launchEligible": false
+    }
+  ],
+  "selectionGate": {
+    "requiredEvidence": [
+      "Every chain has an approved sustainable ordinary-price source",
+      "Every chain shown with official offers has an approved offer source for the region",
+      "Twenty benchmark baskets have measured product-level results",
+      "Freshness, unknown, stale, ineligible, and known-not-carried states are measured",
+      "Branch directory coverage and regional applicability are verified",
+      "Public status copy matches this manifest"
+    ],
+    "passed": false,
+    "blockers": [
+      "Kassalapp rights and current credential tier unresolved",
+      "No rights-cleared official-offer source",
+      "No region-level benchmark run has been performed"
+    ]
+  }
+}

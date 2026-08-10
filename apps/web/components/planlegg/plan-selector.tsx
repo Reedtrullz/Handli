@@ -1,183 +1,160 @@
 "use client";
 
-import { formatNok, type PlanResult } from "@handleplan/domain";
+import {
+  formatNok,
+  type OfficialOffer,
+  type PlanDeltaExplanationSetV1,
+  type PlanResultV2,
+  type TravelCalculationState,
+} from "@handleplan/domain";
+
+import {
+  formatTravelDistance,
+  formatTravelDuration,
+} from "./travel-presentation";
+import {
+  hasMembershipCondition,
+  membershipRequirementCopy,
+} from "../../lib/membership-presentation";
 
 interface PlanSelectorProps {
-  plans: PlanResult[];
+  plans: readonly PlanResultV2[];
   selectedPlanId: string;
   onSelect: (planId: string) => void;
+  onPreferenceChange?: (convenienceWeightBasisPoints: number) => void;
+  officialOffers: readonly OfficialOffer[];
+  planDeltaExplanations: PlanDeltaExplanationSetV1;
+  travel?: Extract<TravelCalculationState, { kind: "calculated" }>;
 }
 
-function compareText(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
+export function balancedPlanId(plans: readonly PlanResultV2[]): string | undefined {
+  return planIdForPreference(plans, 5_000);
 }
 
-export function compareConvenience(left: PlanResult, right: PlanResult): number {
-  return (
-    left.chains.length - right.chains.length ||
-    left.totalOre - right.totalOre ||
-    left.substitutions.length - right.substitutions.length ||
-    compareText(left.id, right.id)
-  );
+function preferenceIndex(length: number, convenienceWeightBasisPoints: number): number {
+  if (length <= 1) return 0;
+  const bounded = Math.min(10_000, Math.max(0, convenienceWeightBasisPoints));
+  return Math.floor(((10_000 - bounded) / 10_000) * (length - 1));
 }
 
-export function compareSavings(left: PlanResult, right: PlanResult): number {
-  return (
-    left.totalOre - right.totalOre ||
-    left.substitutions.length - right.substitutions.length ||
-    left.chains.length - right.chains.length ||
-    compareText(left.id, right.id)
-  );
+export function planIdForPreference(
+  plans: readonly PlanResultV2[],
+  convenienceWeightBasisPoints: number,
+): string | undefined {
+  return plans[preferenceIndex(plans.length, convenienceWeightBasisPoints)]?.id;
 }
 
-function compareMiddle(left: PlanResult, right: PlanResult): number {
-  return (
-    left.chains.length - right.chains.length ||
-    right.totalOre - left.totalOre ||
-    left.substitutions.length - right.substitutions.length ||
-    compareText(left.id, right.id)
-  );
+export function convenienceWeightForPlanId(
+  plans: readonly PlanResultV2[],
+  planId: string,
+): number {
+  const index = plans.findIndex(({ id }) => id === planId);
+  if (index <= 0 || plans.length <= 1) return 10_000;
+  return Math.round((1 - index / (plans.length - 1)) * 10_000);
 }
 
-export function orderPlanFrontier(plans: readonly PlanResult[]): PlanResult[] {
-  if (plans.length < 2) return [...plans];
-  const stable = [...plans].sort(compareMiddle);
-  const convenience = [...stable].sort(compareConvenience)[0]!;
-  const savings = [...stable].sort(compareSavings)[0]!;
-
-  if (convenience.id === savings.id) {
-    const alternatives = stable
-      .filter(({ id }) => id !== convenience.id)
-      .sort((left, right) =>
-        left.substitutions.length - right.substitutions.length ||
-        left.totalOre - right.totalOre ||
-        left.chains.length - right.chains.length ||
-        compareText(left.id, right.id),
-      );
-    return [convenience, ...alternatives];
-  }
-  const middle = stable.filter(({ id }) => id !== convenience.id && id !== savings.id);
-  return [convenience, ...middle, savings];
-}
-
-export function balancedPlanId(plans: readonly PlanResult[]): string | undefined {
-  const ordered = orderPlanFrontier(plans);
-  if (ordered.length > 1) {
-    const convenience = [...ordered].sort(compareConvenience)[0];
-    const savings = [...ordered].sort(compareSavings)[0];
-    if (convenience?.id === savings?.id) return convenience?.id;
-  }
-  return ordered[Math.floor((ordered.length - 1) / 2)]?.id;
-}
-
-export const FRONTIER_DISPLAY_MAX = 7;
-
-export function projectPlanFrontier(plans: readonly PlanResult[]): PlanResult[] {
-  const maximum = FRONTIER_DISPLAY_MAX;
-  const ordered = orderPlanFrontier(plans);
-  if (ordered.length <= maximum) return ordered;
-  const indexes = new Set<number>();
-
-  const convenience = [...ordered].sort(compareConvenience)[0]!;
-  const savings = [...ordered].sort(compareSavings)[0]!;
-  indexes.add(ordered.findIndex(({ id }) => id === convenience.id));
-  indexes.add(ordered.findIndex(({ id }) => id === savings.id));
-
-  const transitions = ordered.flatMap((candidate, index) => {
-    const next = ordered[index + 1];
-    return next && candidate.chains.length !== next.chains.length ? [[index, index + 1] as const] : [];
-  });
-  const transitionAdjacency = (index: number) => transitions.reduce(
-    (count, pair) => count + (pair.includes(index) ? 1 : 0),
-    0,
-  );
-
-  const chainCounts = [...new Set(ordered.map(({ chains }) => chains.length))].sort((left, right) => left - right);
-  for (const chainCount of chainCounts) {
-    if ([...indexes].some((index) => ordered[index]?.chains.length === chainCount)) continue;
-    const representative = ordered
-      .map((_candidate, index) => index)
-      .filter((index) => ordered[index]!.chains.length === chainCount)
-      .sort((left, right) => transitionAdjacency(right) - transitionAdjacency(left) || left - right)[0];
-    if (representative !== undefined && indexes.size < maximum) indexes.add(representative);
-  }
-
-  for (const pair of transitions) {
-    const missing = pair.filter((index) => !indexes.has(index));
-    if (missing.length <= maximum - indexes.size) missing.forEach((index) => indexes.add(index));
-  }
-  for (const pair of transitions) {
-    for (const index of pair) {
-      if (indexes.size < maximum) indexes.add(index);
-    }
-  }
-
-  while (indexes.size < maximum) {
-    const remaining = ordered
-      .map((_candidate, index) => index)
-      .filter((index) => !indexes.has(index));
-    if (remaining.length === 0) break;
-    remaining.sort((left, right) => {
-      const leftDistance = Math.min(...[...indexes].map((index) => Math.abs(index - left)));
-      const rightDistance = Math.min(...[...indexes].map((index) => Math.abs(index - right)));
-      return rightDistance - leftDistance || left - right;
-    });
-    indexes.add(remaining[0]!);
-  }
-  return [...indexes].sort((left, right) => left - right).map((index) => ordered[index]!);
-}
-
-function equalObjective(plans: readonly PlanResult[]): boolean {
-  const first = plans[0];
-  return first !== undefined && plans.every(
-    (plan) =>
-      plan.totalOre === first.totalOre &&
-      plan.chains.length === first.chains.length &&
-      plan.substitutions.length === first.substitutions.length,
-  );
-}
-
-function planName(index: number, plans: readonly PlanResult[]): string {
-  if (plans.length === 1) return "Eneste komplette plan";
-  if (equalObjective(plans)) return `Likeverdig alternativ ${index + 1}`;
-  const convenience = [...plans].sort(compareConvenience)[0]!;
-  const savings = [...plans].sort(compareSavings)[0]!;
-  if (convenience.id === savings.id && plans[index]?.id === convenience.id) return "Enklest og lavest pris";
-  if (convenience.id === savings.id && plans[index]!.substitutions.length < convenience.substitutions.length) return "Færre bytter";
-  if (index === 0) return "Enklest";
-  if (index === plans.length - 1) {
-    return plans[index]!.totalOre < plans[0]!.totalOre ? "Mest spart" : "Annet kompromiss";
-  }
-  if (index === Math.floor((plans.length - 1) / 2)) return "Balansert";
-  return `Alternativ ${index + 1}`;
-}
-
-const CHAIN_NAMES: Record<PlanResult["chains"][number], string> = {
+const CHAIN_NAMES: Record<PlanResultV2["chains"][number], string> = {
   bunnpris: "Bunnpris",
   extra: "Extra",
   "rema-1000": "REMA 1000",
 };
 
-export function PlanSelector({ plans, selectedPlanId, onSelect }: PlanSelectorProps) {
-  const ordered = projectPlanFrontier(plans);
-  const convenience = [...ordered].sort(compareConvenience)[0]!;
+function membershipCopyForPlan(
+  plan: PlanResultV2,
+  offersById: ReadonlyMap<string, OfficialOffer>,
+): string | undefined {
+  const membershipChains = [...new Set(plan.assignments.flatMap((assignment) => {
+    const offerId = assignment.checkout.appliedOfferId;
+    const offer = offerId === undefined ? undefined : offersById.get(offerId);
+    return hasMembershipCondition(offer) ? [assignment.chain] : [];
+  }))];
+  return membershipChains.length === 0
+    ? undefined
+    : membershipRequirementCopy(membershipChains);
+}
+
+export function PlanSelector({
+  plans,
+  selectedPlanId,
+  onSelect,
+  onPreferenceChange,
+  officialOffers,
+  planDeltaExplanations,
+  travel,
+}: PlanSelectorProps) {
+  if (plans.length === 0) return null;
+  const selectedIndex = Math.max(0, plans.findIndex(({ id }) => id === selectedPlanId));
+
+  function select(planId: string): void {
+    onSelect(planId);
+    onPreferenceChange?.(convenienceWeightForPlanId(plans, planId));
+  }
+
+  const routesByPlan = new Map(travel?.routes.map((route) => [route.planId, route]) ?? []);
+  const explanationsByPlan = new Map(
+    planDeltaExplanations.entries.map((entry) => [entry.planId, entry]),
+  );
+  const offersById = new Map(officialOffers.map((offer) => [offer.id, offer]));
+  const selectedExplanation = explanationsByPlan.get(plans[selectedIndex]!.id);
+  if (selectedExplanation === undefined) return null;
+  const selectedName = selectedExplanation.presentation.label;
+  const selectedRoute = routesByPlan.get(plans[selectedIndex]!.id);
+  const selectedMembershipCopy = membershipCopyForPlan(
+    plans[selectedIndex]!,
+    offersById,
+  );
 
   return (
     <fieldset className="plan-selector">
       <legend>Valgmuligheter</legend>
+      <div className="plan-preference-slider">
+        <label htmlFor="plan-preference">Velg komplett plan</label>
+        <input
+          id="plan-preference"
+          type="range"
+          min={0}
+          max={Math.max(0, plans.length - 1)}
+          step={1}
+          value={selectedIndex}
+          disabled={plans.length <= 1}
+          aria-valuetext={`${selectedName}, ${formatNok(plans[selectedIndex]!.totalOre)}${selectedRoute === undefined ? "" : `, estimert reisetid ${formatTravelDuration(selectedRoute.aggregate.durationSeconds)}`}${selectedMembershipCopy === undefined ? "" : `, ${selectedMembershipCopy}`}`}
+          onKeyDown={(event) => {
+            let nextIndex: number | undefined;
+            if (event.key === "Home") nextIndex = 0;
+            if (event.key === "End") nextIndex = plans.length - 1;
+            if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+              nextIndex = Math.max(0, selectedIndex - 1);
+            }
+            if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+              nextIndex = Math.min(plans.length - 1, selectedIndex + 1);
+            }
+            const plan = nextIndex === undefined ? undefined : plans[nextIndex];
+            if (plan !== undefined) {
+              event.preventDefault();
+              select(plan.id);
+            }
+          }}
+          onChange={(event) => {
+            const plan = plans[Number(event.currentTarget.value)];
+            if (plan !== undefined) select(plan.id);
+          }}
+        />
+        <small>Velg bare mellom faktiske, komplette handleplaner.</small>
+      </div>
       <div className="plan-option-list">
         <span className="plan-connector" aria-hidden="true" />
-        {ordered.map((plan, index) => {
-          const name = planName(index, ordered);
+        {plans.map((plan) => {
           const selected = plan.id === selectedPlanId;
           const stores = `${plan.chains.length} ${plan.chains.length === 1 ? "butikk" : "butikker"}`;
-          const difference = plan.totalOre - convenience.totalOre;
-          const comparison = difference === 0
-            ? "samme pris"
-            : difference > 0
-              ? `${formatNok(difference)} dyrere`
-              : `${formatNok(-difference)} spart`;
-          const accessibleName = `${name}, ${formatNok(plan.totalOre)}, ${comparison}, ${stores}, ${plan.chains.map((chain) => CHAIN_NAMES[chain]).join(" og ")}`;
+          const explanation = explanationsByPlan.get(plan.id);
+          if (explanation === undefined) return null;
+          const name = explanation.presentation.label;
+          const membershipCopy = membershipCopyForPlan(plan, offersById);
+          const accessibleName = `${name}, ${formatNok(plan.totalOre)}, ${explanation.price.message}, ${stores}, ${plan.chains.map((chain) => CHAIN_NAMES[chain]).join(" og ")}${membershipCopy === undefined ? "" : `, ${membershipCopy}`}`;
+          const route = routesByPlan.get(plan.id);
+          const routeSummary = route === undefined
+            ? undefined
+            : `Estimert reisetid: ${formatTravelDuration(route.aggregate.durationSeconds)} · ${formatTravelDistance(route.aggregate.distanceMeters)} · ${route.stops.length} stopp`;
           return (
             <label className={`plan-option${selected ? " selected" : ""}`} key={plan.id}>
               <input
@@ -185,8 +162,8 @@ export function PlanSelector({ plans, selectedPlanId, onSelect }: PlanSelectorPr
                 name="handleplan"
                 value={plan.id}
                 checked={selected}
-                aria-label={accessibleName}
-                onChange={() => onSelect(plan.id)}
+                aria-label={`${accessibleName}${routeSummary === undefined ? "" : `, ${routeSummary}`}`}
+                onChange={() => select(plan.id)}
               />
               <span className="plan-option-copy">
                 <span className="plan-option-heading">
@@ -195,6 +172,14 @@ export function PlanSelector({ plans, selectedPlanId, onSelect }: PlanSelectorPr
                 </span>
                 <span>{plan.chains.map((chain) => CHAIN_NAMES[chain]).join(" + ")}</span>
                 <small>{stores} · {plan.substitutions.length === 0 ? "Ingen bytter" : `${plan.substitutions.length} godkjente bytter`}</small>
+                {routeSummary === undefined ? null : <small>{routeSummary}</small>}
+                {membershipCopy === undefined ? null : <small>{membershipCopy}</small>}
+                {explanation.travel === undefined ? null : (
+                  <small className="plan-travel-delta">
+                    {explanation.travel.message}
+                  </small>
+                )}
+                <small className="plan-price-delta">{explanation.price.message}</small>
               </span>
             </label>
           );

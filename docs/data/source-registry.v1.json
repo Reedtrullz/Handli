@@ -1,0 +1,469 @@
+{
+  "$schema": "./source-registry.v1.schema.json",
+  "registryVersion": "1.0.0",
+  "reviewedAt": "2026-07-18",
+  "intendedUse": "Handleplan public price comparison, basket planning, offer discovery, branch lookup, and opt-in route estimates",
+  "states": {
+    "approved": "The intended use is supported by recorded primary evidence and all known obligations are accepted.",
+    "conditional": "The source is a viable candidate, but at least one permission, contract, privacy, retention, attribution, quota, or operational condition remains unresolved. It must not feed public ranking.",
+    "blocked": "The intended automated use is not authorized or has no affirmative permission evidence. Fetching and serving are disabled.",
+    "revoked": "Previously considered access has been withdrawn, suspended, terminated, or invalidated. Fetching and serving are disabled immediately."
+  },
+  "policy": {
+    "defaultState": "blocked",
+    "defaultRuntimeEnabled": false,
+    "publicRankingRequires": "approved",
+    "unknownPermissionBehavior": "blocked",
+    "stateChangeRequires": [
+      "dated primary evidence",
+      "named reviewer",
+      "recorded obligations",
+      "coverage manifest regeneration"
+    ]
+  },
+  "sources": [
+    {
+      "id": "kassalapp",
+      "owner": "Kassalapp",
+      "runtimeState": "conditional",
+      "runtimeDefaultEnabled": false,
+      "publicRankingEligible": false,
+      "intendedUse": "Product catalog, ordinary package-price observations, price history, and physical-store directory",
+      "dataClasses": [
+        "product_catalog",
+        "ordinary_price_observation",
+        "price_history",
+        "physical_store"
+      ],
+      "rights": {
+        "access": "conditional",
+        "processing": "unknown",
+        "retention": "unknown",
+        "derivedDisplay": "unknown",
+        "redistribution": "unknown",
+        "imagery": "unknown",
+        "marks": "unknown",
+        "attribution": "unknown"
+      },
+      "rateLimit": "Credential tier is unknown. The current public pricing page lists 60 requests/minute for Hobby and no rate limit for Bedrift; current-key terms have not been verified.",
+      "terminationRisk": "Access and downstream retention rights after termination are unknown.",
+      "killSwitchKey": "source.kassalapp.enabled",
+      "requiredActions": [
+        "Resolve https://github.com/Reedtrullz/Handli/issues/5 and record the current credential tier and governing agreement without copying the credential value.",
+        "Obtain or record permission for persistent storage, derived rankings, public display, and any redistribution.",
+        "Clarify product imagery, retailer marks, attribution, rate limits, termination, and deletion obligations.",
+        "Run a representative endpoint and coverage probe only after the agreement permits it."
+      ],
+      "knownUnknowns": [
+        "Whether the current credential is Hobby, Bedrift, premium, or governed by custom terms",
+        "Whether a public AGPL service with no ads, affiliate links, paywall, data sale, or other monetization qualifies for Hobby use",
+        "Whether ordinary-price observations may be retained append-only",
+        "Whether public basket rankings and historical aggregates are allowed",
+        "Whether image URLs or retailer marks may be displayed",
+        "Required attribution and post-termination data handling",
+        "Measured Bunnpris, REMA 1000, and Extra coverage in each candidate region"
+      ],
+      "evidence": [
+        {
+          "url": "https://kassal.app/pris",
+          "kind": "official_commercial_page",
+          "accessedAt": "2026-07-18",
+          "finding": "The current page describes Hobby as access to all endpoints with a 60 requests/minute limit and no commercial use. It describes Bedrift as suitable for embedding price and product information in an app, priced at NOK 750/month, and requiring contact for an agreement."
+        },
+        {
+          "url": "https://kassal.app/api",
+          "kind": "official_api_documentation",
+          "accessedAt": "2026-07-18",
+          "finding": "The current official API page documents products, EAN lookup, bulk price history, and physical stores for Bunnpris, REMA 1000, and Coop Extra. Bulk history accepts at most 100 EANs and documents 90 days for regular users or 365 days for premium users."
+        },
+        {
+          "url": "https://kassal.app/blogg/kassalapp-kommersiell-api-priser",
+          "kind": "official_pricing_explanation",
+          "accessedAt": "2026-07-18",
+          "finding": "Kassalapp states that hobby projects remain free while commercial use requires payment, but it does not define Handleplan-specific storage, derived ranking, public display, imagery, attribution, or termination rights."
+        }
+      ],
+      "revocationDisposition": "Stop fetch and serving; quarantine derived records; apply the governing agreement's deletion or retention requirements before reactivation."
+    },
+    {
+      "id": "tjek-api",
+      "owner": "Tjek",
+      "runtimeState": "conditional",
+      "runtimeDefaultEnabled": false,
+      "publicRankingEligible": false,
+      "intendedUse": "Structured publications and official offers for authorized chains and regions",
+      "dataClasses": [
+        "publication",
+        "official_offer",
+        "offer_imagery",
+        "offer_scope"
+      ],
+      "rights": {
+        "access": "conditional",
+        "processing": "conditional",
+        "retention": "unknown",
+        "derivedDisplay": "conditional",
+        "redistribution": "prohibited",
+        "imagery": "unknown",
+        "marks": "unknown",
+        "attribution": "unknown"
+      },
+      "rateLimit": "The public terms state a default fair-use ceiling of 8,000,000 API calls per month per country unless agreed otherwise; the project has no verified agreement.",
+      "terminationRisk": "Access may be suspended for misuse or excess use, and the agreement controls the licensed period and services.",
+      "killSwitchKey": "source.tjek-api.enabled",
+      "requiredActions": [
+        "Obtain a Tjek quote/agreement that names Handleplan's public website and intended derived displays.",
+        "Record authorized chains, countries, regions, fields, imagery, attribution, storage, cache, and termination rules.",
+        "Confirm whether offer extraction or any automated classification is permitted; no Tjek content may train or improve an AI model without explicit written approval.",
+        "Record retailer-rights consents where the agreement requires them."
+      ],
+      "knownUnknowns": [
+        "Whether Handleplan will become a Tjek customer",
+        "Which Norwegian retailer publications and offer fields would be licensed",
+        "Whether normalized prices, savings calculations, and cross-store rankings may be retained and displayed",
+        "Whether publication images, product images, and retailer marks may be displayed",
+        "Attribution wording, cache duration, deletion, and post-termination handling"
+      ],
+      "evidence": [
+        {
+          "url": "https://tjek.com/apis-and-sdks",
+          "kind": "official_api_page",
+          "accessedAt": "2026-07-16",
+          "finding": "States that the API is available only to customers and directs prospective users to contact Tjek."
+        },
+        {
+          "url": "https://tjek.com/terms",
+          "kind": "official_terms",
+          "accessedAt": "2026-07-16",
+          "finding": "Sections 8.1-8.6 make API use agreement-specific, restrict use to agreed services on the customer's own platforms, restrict third-party reuse, and prohibit AI/ML training without written approval."
+        }
+      ],
+      "revocationDisposition": "Disable fetch and public display immediately; invalidate active offers; retain or delete content only as the signed agreement permits."
+    },
+    {
+      "id": "bunnpris-public-web",
+      "owner": "Bunnpris",
+      "runtimeState": "blocked",
+      "runtimeDefaultEnabled": false,
+      "publicRankingEligible": false,
+      "intendedUse": "Automated extraction of Bunnpris stores, publications, and offers from public web pages",
+      "dataClasses": [
+        "physical_store",
+        "publication",
+        "official_offer",
+        "offer_imagery"
+      ],
+      "rights": {
+        "access": "unknown",
+        "processing": "unknown",
+        "retention": "unknown",
+        "derivedDisplay": "unknown",
+        "redistribution": "unknown",
+        "imagery": "unknown",
+        "marks": "unknown",
+        "attribution": "unknown"
+      },
+      "rateLimit": "No authorized automated-feed limit is recorded.",
+      "terminationRisk": "Public page availability may change without notice and does not establish a data license.",
+      "killSwitchKey": "source.bunnpris-public-web.enabled",
+      "requiredActions": [
+        "Obtain written authorization or an authorized structured feed before automated ingestion.",
+        "Record national, regional, and store-specific scope plus imagery, marks, attribution, retention, and revocation rules."
+      ],
+      "knownUnknowns": [
+        "Automated access permission",
+        "Offer-data reuse and derived-display rights",
+        "Store-specific versus regional publication scope",
+        "Image, trademark, attribution, retention, and termination rules"
+      ],
+      "evidence": [
+        {
+          "url": "https://www.bunnpris.no/",
+          "kind": "official_public_page",
+          "accessedAt": "2026-07-16",
+          "finding": "Publishes customer-paper and store-finder links. This proves public presentation only, not permission for automated reuse."
+        },
+        {
+          "url": "https://www.bunnpris.no/butikker",
+          "kind": "official_store_directory",
+          "accessedAt": "2026-07-16",
+          "finding": "Publishes stores and customer-paper links. No affirmative automated-use permission was found in this review."
+        }
+      ],
+      "revocationDisposition": "No automated data should exist while blocked. If discovered, stop serving it and quarantine it for rights review."
+    },
+    {
+      "id": "rema-public-web",
+      "owner": "REMA 1000",
+      "runtimeState": "blocked",
+      "runtimeDefaultEnabled": false,
+      "publicRankingEligible": false,
+      "intendedUse": "Automated extraction of REMA 1000 stores, publications, and offers from public web pages",
+      "dataClasses": [
+        "physical_store",
+        "publication",
+        "official_offer",
+        "offer_imagery"
+      ],
+      "rights": {
+        "access": "unknown",
+        "processing": "unknown",
+        "retention": "unknown",
+        "derivedDisplay": "unknown",
+        "redistribution": "unknown",
+        "imagery": "unknown",
+        "marks": "unknown",
+        "attribution": "unknown"
+      },
+      "rateLimit": "No authorized automated-feed limit is recorded.",
+      "terminationRisk": "Public page availability may change without notice and does not establish a data license.",
+      "killSwitchKey": "source.rema-public-web.enabled",
+      "requiredActions": [
+        "Obtain written authorization or an authorized structured feed before automated ingestion.",
+        "Record regional applicability, membership conditions, imagery, marks, attribution, retention, and revocation rules."
+      ],
+      "knownUnknowns": [
+        "Automated access permission",
+        "Offer-data reuse and derived-display rights",
+        "Relationship between public campaign pages and region-specific publications",
+        "Image, trademark, attribution, retention, and termination rules"
+      ],
+      "evidence": [
+        {
+          "url": "https://www.rema.no/kampanjevarer/",
+          "kind": "official_public_page",
+          "accessedAt": "2026-07-16",
+          "finding": "Publishes campaigns and customer papers. This proves public presentation only, not permission for automated reuse."
+        },
+        {
+          "url": "https://www.rema.no/kundeaviser/oslo/",
+          "kind": "official_regional_page",
+          "accessedAt": "2026-07-16",
+          "finding": "Declares an Oslo/Gjelleråsen publication scope and validity caveats, demonstrating that geographic scope is material."
+        }
+      ],
+      "revocationDisposition": "No automated data should exist while blocked. If discovered, stop serving it and quarantine it for rights review."
+    },
+    {
+      "id": "coop-extra-public-web",
+      "owner": "Coop Norge / Extra",
+      "runtimeState": "blocked",
+      "runtimeDefaultEnabled": false,
+      "publicRankingEligible": false,
+      "intendedUse": "Automated extraction of Extra stores, publications, offers, and images from public web pages",
+      "dataClasses": [
+        "physical_store",
+        "publication",
+        "official_offer",
+        "offer_imagery",
+        "membership_condition"
+      ],
+      "rights": {
+        "access": "unknown",
+        "processing": "unknown",
+        "retention": "unknown",
+        "derivedDisplay": "unknown",
+        "redistribution": "unknown",
+        "imagery": "unknown",
+        "marks": "unknown",
+        "attribution": "unknown"
+      },
+      "rateLimit": "No authorized automated-feed limit is recorded.",
+      "terminationRisk": "Public page availability may change without notice and does not establish a data license.",
+      "killSwitchKey": "source.coop-extra-public-web.enabled",
+      "requiredActions": [
+        "Obtain written authorization or an authorized structured feed before automated ingestion.",
+        "Record cooperative/regional scope, membership conditions, imagery, marks, attribution, retention, and revocation rules."
+      ],
+      "knownUnknowns": [
+        "Automated access permission",
+        "Offer-data reuse and derived-display rights",
+        "The complete mapping from stores to cooperative publication regions",
+        "Member-only versus public price semantics",
+        "Image, trademark, attribution, retention, and termination rules"
+      ],
+      "evidence": [
+        {
+          "url": "https://www.coop.no/extra/tilbud",
+          "kind": "official_public_page",
+          "accessedAt": "2026-07-16",
+          "finding": "Publishes Extra customer-paper and member-benefit content. This proves public presentation only, not permission for automated reuse."
+        },
+        {
+          "url": "https://kundeavis.coop.no/aviser/extra/hordaland/",
+          "kind": "official_regional_publication",
+          "accessedAt": "2026-07-16",
+          "finding": "Publishes a Hordaland-labelled Extra customer paper with validity dates and error/stock caveats."
+        },
+        {
+          "url": "https://kundeavis.coop.no/aviser/extra/midt/",
+          "kind": "official_regional_publication",
+          "accessedAt": "2026-07-16",
+          "finding": "Publishes a Midt-labelled Extra customer paper with validity dates and error/stock caveats."
+        }
+      ],
+      "revocationDisposition": "No automated data should exist while blocked. If discovered, stop serving it and quarantine it for rights review."
+    },
+    {
+      "id": "kartverket-address-api",
+      "owner": "Kartverket",
+      "runtimeState": "approved",
+      "runtimeDefaultEnabled": false,
+      "publicRankingEligible": false,
+      "intendedUse": "Opt-in address lookup and conversion to a temporary geographic point",
+      "dataClasses": [
+        "address",
+        "geographic_point"
+      ],
+      "rights": {
+        "access": "permitted",
+        "processing": "permitted",
+        "retention": "permitted",
+        "derivedDisplay": "permitted",
+        "redistribution": "permitted",
+        "imagery": "not_applicable",
+        "marks": "not_applicable",
+        "attribution": "required"
+      },
+      "rateLimit": "The address guide says registration is not required. Service-specific technical limits remain to be measured and respected.",
+      "terminationRisk": "Terms and service limits may change; review before launch and monitor the official service notice channels.",
+      "killSwitchKey": "source.kartverket-address-api.enabled",
+      "requiredActions": [
+        "Display ©Kartverket with a link where practical.",
+        "Use only the address API covered by this entry; map tiles and unrelated external-source services require separate review.",
+        "Keep user origin ephemeral under Handleplan's privacy contract.",
+        "Set conservative rate controls and monitor service-specific limits."
+      ],
+      "knownUnknowns": [
+        "Current production throughput limits and service-level expectations"
+      ],
+      "evidence": [
+        {
+          "url": "https://www.kartverket.no/en/api-and-data/terms-of-use",
+          "kind": "official_terms",
+          "accessedAt": "2026-07-16",
+          "finding": "Free products are released for commercial and non-commercial use under CC BY 4.0 with ©Kartverket attribution and a link where possible."
+        },
+        {
+          "url": "https://kartverket.no/api-og-data/eiendomsdata/brukarrettleiing-adresse-api",
+          "kind": "official_api_guide",
+          "accessedAt": "2026-07-16",
+          "finding": "Documents the REST address API, says it requires no registration, and explicitly describes integration into public-facing services."
+        }
+      ],
+      "revocationDisposition": "Disable address lookup, preserve no user origin, and fall back to manual area selection until terms are reviewed."
+    },
+    {
+      "id": "openrouteservice-api",
+      "owner": "HeiGIT / openrouteservice",
+      "runtimeState": "conditional",
+      "runtimeDefaultEnabled": false,
+      "publicRankingEligible": false,
+      "intendedUse": "Opt-in calculated route estimates among up to three suggested stores",
+      "dataClasses": [
+        "route_duration",
+        "route_distance",
+        "route_geometry"
+      ],
+      "rights": {
+        "access": "conditional",
+        "processing": "permitted",
+        "retention": "conditional",
+        "derivedDisplay": "permitted",
+        "redistribution": "permitted",
+        "imagery": "not_applicable",
+        "marks": "not_applicable",
+        "attribution": "required"
+      },
+      "rateLimit": "The public API has account and endpoint limits; directions allow up to 50 waypoints, but the selected account quota is not recorded.",
+      "terminationRisk": "Accounts may be blocked for repeated excess use, and terms or service capabilities may change.",
+      "killSwitchKey": "source.openrouteservice-api.enabled",
+      "requiredActions": [
+        "Select the provider and account tier, and record the current quotas and production endpoint.",
+        "Complete a privacy/DPA review for transmitting a temporary user origin to the provider.",
+        "Display the required openrouteservice and OpenStreetMap attribution.",
+        "Prohibit persistent storage, logs, analytics, URLs, and shared caches from containing the user origin or origin-adjacent geometry."
+      ],
+      "knownUnknowns": [
+        "Whether openrouteservice is the selected v1 route provider",
+        "Production account quota and support expectations",
+        "Processor/privacy terms for user-origin coordinates",
+        "Whether any route-result retention is operationally necessary"
+      ],
+      "evidence": [
+        {
+          "url": "https://openrouteservice.org/terms-of-service/",
+          "kind": "official_terms",
+          "accessedAt": "2026-07-16",
+          "finding": "Requires openrouteservice/OpenStreetMap attribution, licenses API results under CC BY 4.0, and documents usage limits and service limitations."
+        },
+        {
+          "url": "https://openrouteservice.org/restrictions/",
+          "kind": "official_api_restrictions",
+          "accessedAt": "2026-07-16",
+          "finding": "Documents endpoint constraints, including up to 50 direction waypoints and matrix limits."
+        }
+      ],
+      "revocationDisposition": "Disable travel calculation and recompute coherent price-only plans; never serve stale route results as current."
+    },
+    {
+      "id": "valhalla-openstreetmap-self-hosted",
+      "owner": "Valhalla contributors / OpenStreetMap contributors",
+      "runtimeState": "approved",
+      "runtimeDefaultEnabled": false,
+      "publicRankingEligible": false,
+      "intendedUse": "Self-hosted opt-in directed route estimates among one temporary origin and up to nine nearby branch candidates",
+      "dataClasses": [
+        "route_duration",
+        "route_distance",
+        "routing_graph"
+      ],
+      "rights": {
+        "access": "permitted",
+        "processing": "permitted",
+        "retention": "permitted",
+        "derivedDisplay": "permitted",
+        "redistribution": "permitted",
+        "imagery": "not_applicable",
+        "marks": "not_applicable",
+        "attribution": "required"
+      },
+      "rateLimit": "Self-hosted capacity is server-owned; Handleplan still caps each request at ten points, one matrix call, four seconds, and 128 KiB.",
+      "terminationRisk": "The engine, OpenStreetMap licence, extract distribution, or source data may change; runtime must remain kill-switchable and tile freshness visible.",
+      "killSwitchKey": "source.valhalla-openstreetmap-self-hosted.enabled",
+      "requiredActions": [
+        "Display OpenStreetMap contributor attribution wherever travel estimates are shown.",
+        "Pin and review the Valhalla image and build a reproducible Norway routing graph.",
+        "Prove tile freshness, VPS capacity, monitoring, clean-host recovery, and rollback before enabling runtime.",
+        "Keep HANDLEPLAN_SOURCE_VALHALLA_OPENSTREETMAP_SELF_HOSTED_ENABLED absent until every activation gate passes.",
+        "Keep the volunteered origin and provider coordinates out of persistence, URLs, caches, logs, analytics, monitoring, and public responses."
+      ],
+      "knownUnknowns": [
+        "Exact reviewed production image digest",
+        "Measured Norway tile disk, memory, build, startup, and matrix latency on the VPS",
+        "Operational tile update and stale-data thresholds"
+      ],
+      "evidence": [
+        {
+          "url": "https://github.com/valhalla/valhalla",
+          "kind": "official_repository_and_licence",
+          "accessedAt": "2026-07-16",
+          "finding": "The official repository describes Valhalla as a self-hostable OpenStreetMap routing engine and licenses the project under MIT."
+        },
+        {
+          "url": "https://valhalla.github.io/valhalla/api/matrix/api-reference/",
+          "kind": "official_api_guide",
+          "accessedAt": "2026-07-16",
+          "finding": "Documents directed source-to-target time and distance matrices with automobile and bicycle costing models."
+        },
+        {
+          "url": "https://www.openstreetmap.org/copyright",
+          "kind": "official_data_licence",
+          "accessedAt": "2026-07-16",
+          "finding": "OpenStreetMap data is available under ODbL and requires credit to OpenStreetMap contributors."
+        }
+      ],
+      "revocationDisposition": "Disable travel, stop tile updates, and recompute a coherent price-only frontier; preserve no volunteered origin or stale route result."
+    }
+  ]
+}

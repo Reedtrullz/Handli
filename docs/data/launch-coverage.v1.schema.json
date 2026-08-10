@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://handle.reidar.tech/schemas/launch-coverage.v1.schema.json",
+  "title": "Handleplan launch coverage manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifestVersion", "reviewedAt", "launchDecision", "publicClaim", "requiredChains", "candidateRegions", "coverage", "selectionGate"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "manifestVersion": { "const": "1.0.0" },
+    "reviewedAt": { "type": "string", "format": "date" },
+    "launchDecision": { "enum": ["candidate_only", "selected", "suspended"] },
+    "publicClaim": { "type": "string", "minLength": 1 },
+    "requiredChains": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "displayName"],
+        "properties": {
+          "id": { "enum": ["bunnpris", "rema-1000", "extra"] },
+          "displayName": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "candidateRegions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/region" }
+    },
+    "coverage": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/coverage" }
+    },
+    "selectionGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requiredEvidence", "passed", "blockers"],
+      "properties": {
+        "requiredEvidence": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "passed": { "type": "boolean" },
+        "blockers": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    }
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chainId", "url", "accessedAt", "finding"],
+      "properties": {
+        "chainId": { "enum": ["bunnpris", "rema-1000", "extra"] },
+        "url": { "type": "string", "format": "uri" },
+        "accessedAt": { "type": "string", "format": "date" },
+        "finding": { "type": "string", "minLength": 1 }
+      }
+    },
+    "region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "municipalityCode", "boundaryType", "selectionStatus", "selected", "chainPresenceEvidence", "offerScopeEvidence", "knownGaps"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^no-[0-9]{4}-[a-z-]+$" },
+        "name": { "type": "string", "minLength": 1 },
+        "municipalityCode": { "type": "string", "pattern": "^[0-9]{4}$" },
+        "boundaryType": { "const": "municipality" },
+        "selectionStatus": { "enum": ["candidate_unverified", "selected", "rejected", "suspended"] },
+        "selected": { "type": "boolean" },
+        "chainPresenceEvidence": { "type": "array", "minItems": 3, "items": { "$ref": "#/$defs/evidence" } },
+        "offerScopeEvidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+        "knownGaps": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "selectionStatus": { "const": "selected" } },
+            "required": ["selectionStatus"]
+          },
+          "then": {
+            "properties": {
+              "selected": { "const": true },
+              "knownGaps": { "type": "array", "maxItems": 0 }
+            }
+          },
+          "else": {
+            "properties": {
+              "selected": { "const": false },
+              "knownGaps": { "type": "array", "minItems": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["regionId", "chainId", "priceClass", "activeSourceId", "candidateSourceIds", "coverageStatus", "evidenceLevel", "geographicScope", "refreshTargetHours", "knownGaps", "launchEligible"],
+      "properties": {
+        "regionId": { "type": "string" },
+        "chainId": { "enum": ["bunnpris", "rema-1000", "extra"] },
+        "priceClass": { "enum": ["ordinary", "official_offer"] },
+        "activeSourceId": { "type": ["string", "null"] },
+        "candidateSourceIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } },
+        "coverageStatus": { "enum": ["verified", "partial", "unknown", "blocked", "suspended"] },
+        "evidenceLevel": { "enum": ["none", "public_presence_only", "public_scope_only", "technical_sample", "measured", "rights_cleared_measured"] },
+        "geographicScope": { "type": "string", "minLength": 1 },
+        "refreshTargetHours": { "type": "integer", "minimum": 1 },
+        "knownGaps": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "launchEligible": { "type": "boolean" }
+      }
+    }
+  }
+}

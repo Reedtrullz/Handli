@@ -1,0 +1,567 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://handle.reidar.tech/schemas/benchmark-basket-protocol.v1.schema.json",
+  "title": "Handleplan executable real-basket protocol evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "protocolVersion",
+    "scenarioDigest",
+    "quantityCases",
+    "pricingCases",
+    "matchCases",
+    "negativeControls",
+    "oracleRequest",
+    "frontier",
+    "replay"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^protocol-evidence:sha256:[a-f0-9]{64}$"
+    },
+    "protocolVersion": { "const": "2.0.0" },
+    "scenarioDigest": { "$ref": "#/$defs/sha256" },
+    "quantityCases": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 12,
+      "items": { "$ref": "#/$defs/quantityCase" }
+    },
+    "pricingCases": {
+      "type": "array",
+      "maxItems": 12,
+      "items": { "$ref": "#/$defs/pricingCase" }
+    },
+    "matchCases": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 36,
+      "items": { "$ref": "#/$defs/matchCase" }
+    },
+    "negativeControls": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 7,
+      "items": { "$ref": "#/$defs/negativeControl" }
+    },
+    "oracleRequest": { "$ref": "#/$defs/oracleRequest" },
+    "frontier": { "$ref": "#/$defs/frontier" },
+    "replay": { "$ref": "#/$defs/replay" }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[a-z0-9]+(?:[._:-][a-z0-9]+)*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "regionId": {
+      "type": "string",
+      "pattern": "^no-[0-9]{4}-[a-z0-9-]+$"
+    },
+    "chainId": {
+      "enum": ["bunnpris", "extra", "rema-1000"]
+    },
+    "baseUnit": {
+      "enum": ["g", "ml", "piece", "package"]
+    },
+    "positiveSafeInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "nonNegativeSafeInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "signedSafeInteger": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "caseId": {
+      "type": "string",
+      "pattern": "^protocol-case:sha256:[a-f0-9]{64}$"
+    },
+    "priceEvidenceId": {
+      "type": "string",
+      "pattern": "^price-evidence:sha256:[a-f0-9]{64}$"
+    },
+    "matchEvidenceId": {
+      "type": "string",
+      "pattern": "^match-evidence:sha256:[a-f0-9]{64}$"
+    },
+    "storeEvidenceId": {
+      "type": "string",
+      "pattern": "^store-evidence:sha256:[a-f0-9]{64}$"
+    },
+    "availabilityEvidenceId": {
+      "type": "string",
+      "pattern": "^availability-evidence:sha256:[a-f0-9]{64}$"
+    },
+    "unitRate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numeratorOre", "denominatorBaseUnits"],
+      "properties": {
+        "numeratorOre": { "$ref": "#/$defs/positiveSafeInteger" },
+        "denominatorBaseUnits": { "$ref": "#/$defs/positiveSafeInteger" }
+      }
+    },
+    "quantityOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "priceEvidenceId",
+        "matchEvidenceId",
+        "packageCount",
+        "purchasedBaseUnits",
+        "surplusBaseUnits",
+        "merchandiseTotalOre",
+        "depositTotalOre",
+        "checkoutTotalOre",
+        "unitRate"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "priceEvidenceId": { "$ref": "#/$defs/priceEvidenceId" },
+        "matchEvidenceId": { "$ref": "#/$defs/matchEvidenceId" },
+        "packageCount": { "$ref": "#/$defs/positiveSafeInteger" },
+        "purchasedBaseUnits": { "$ref": "#/$defs/positiveSafeInteger" },
+        "surplusBaseUnits": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "merchandiseTotalOre": { "$ref": "#/$defs/positiveSafeInteger" },
+        "depositTotalOre": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "checkoutTotalOre": { "$ref": "#/$defs/positiveSafeInteger" },
+        "unitRate": { "$ref": "#/$defs/unitRate" }
+      }
+    },
+    "quantityCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "needId", "selectedOptionId", "options"],
+      "properties": {
+        "id": { "$ref": "#/$defs/caseId" },
+        "needId": { "$ref": "#/$defs/identifier" },
+        "selectedOptionId": { "$ref": "#/$defs/identifier" },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": { "$ref": "#/$defs/quantityOption" }
+        }
+      }
+    },
+    "pricingActual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "offerState",
+        "appliedPriceClass",
+        "bundleCount",
+        "remainderCount",
+        "ordinaryTotalOre",
+        "merchandiseTotalOre",
+        "depositTotalOre",
+        "checkoutTotalOre",
+        "officialSavingsOre",
+        "historicalUnitDifferenceOre"
+      ],
+      "properties": {
+        "offerState": {
+          "enum": ["absent", "ineligible", "eligible-not-cheaper", "applied"]
+        },
+        "appliedPriceClass": { "enum": ["ordinary", "official_offer"] },
+        "bundleCount": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "remainderCount": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "ordinaryTotalOre": { "$ref": "#/$defs/positiveSafeInteger" },
+        "merchandiseTotalOre": { "$ref": "#/$defs/positiveSafeInteger" },
+        "depositTotalOre": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "checkoutTotalOre": { "$ref": "#/$defs/positiveSafeInteger" },
+        "officialSavingsOre": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "historicalUnitDifferenceOre": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/signedSafeInteger" }
+          ]
+        }
+      }
+    },
+    "pricingCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "needId",
+        "ordinaryPriceEvidenceId",
+        "packageCount",
+        "enabledMembershipProgramIds",
+        "evaluatedAt",
+        "actual"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/caseId" },
+        "needId": { "$ref": "#/$defs/identifier" },
+        "ordinaryPriceEvidenceId": { "$ref": "#/$defs/priceEvidenceId" },
+        "officialOfferEvidenceId": { "$ref": "#/$defs/priceEvidenceId" },
+        "historicalPriceEvidenceId": { "$ref": "#/$defs/priceEvidenceId" },
+        "packageCount": { "$ref": "#/$defs/positiveSafeInteger" },
+        "enabledMembershipProgramIds": { "$ref": "#/$defs/membershipProgramIds" },
+        "evaluatedAt": { "$ref": "#/$defs/timestamp" },
+        "actual": { "$ref": "#/$defs/pricingActual" }
+      }
+    },
+    "selectedMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason", "explanationCode"],
+      "properties": {
+        "state": { "const": "selected" },
+        "reason": { "const": "eligible-reviewed-candidate" },
+        "explanationCode": {
+          "enum": ["reviewed-family-approved", "constraints-satisfied"]
+        }
+      }
+    },
+    "rejectedMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason"],
+      "properties": {
+        "state": { "const": "rejected" },
+        "reason": { "const": "constraint-mismatch" }
+      }
+    },
+    "reviewRequiredMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason"],
+      "properties": {
+        "state": { "const": "review-required" },
+        "reason": { "const": "user-approval-required" }
+      }
+    },
+    "matchCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "needId", "matchEvidenceId", "userDecision", "actual"],
+      "properties": {
+        "id": { "$ref": "#/$defs/caseId" },
+        "needId": { "$ref": "#/$defs/identifier" },
+        "matchEvidenceId": { "$ref": "#/$defs/matchEvidenceId" },
+        "userDecision": { "enum": ["approved", "not-reviewed"] },
+        "actual": {
+          "oneOf": [
+            { "$ref": "#/$defs/selectedMatch" },
+            { "$ref": "#/$defs/rejectedMatch" },
+            { "$ref": "#/$defs/reviewRequiredMatch" }
+          ]
+        }
+      }
+    },
+    "rejectedActual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason"],
+      "properties": {
+        "state": { "const": "rejected" },
+        "reason": {
+          "enum": [
+            "stale",
+            "wrong-region",
+            "source-ineligible",
+            "offer-expired",
+            "exact-product-mismatch"
+          ]
+        }
+      }
+    },
+    "staleControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "priceEvidenceId", "evaluatedAt", "actual"],
+      "properties": {
+        "id": { "$ref": "#/$defs/caseId" },
+        "kind": { "const": "stale-price" },
+        "priceEvidenceId": { "$ref": "#/$defs/priceEvidenceId" },
+        "evaluatedAt": { "$ref": "#/$defs/timestamp" },
+        "actual": { "$ref": "#/$defs/rejectedActual" }
+      }
+    },
+    "wrongRegionControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "priceEvidenceId", "requestedRegionId", "actual"],
+      "properties": {
+        "id": { "$ref": "#/$defs/caseId" },
+        "kind": { "const": "wrong-region" },
+        "priceEvidenceId": { "$ref": "#/$defs/priceEvidenceId" },
+        "requestedRegionId": { "$ref": "#/$defs/regionId" },
+        "actual": { "$ref": "#/$defs/rejectedActual" }
+      }
+    },
+    "ineligibleSourceControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "priceEvidenceId", "disabledSourceId", "actual"],
+      "properties": {
+        "id": { "$ref": "#/$defs/caseId" },
+        "kind": { "const": "ineligible-source" },
+        "priceEvidenceId": { "$ref": "#/$defs/priceEvidenceId" },
+        "disabledSourceId": { "$ref": "#/$defs/identifier" },
+        "actual": { "$ref": "#/$defs/rejectedActual" }
+      }
+    },
+    "knownNotCarriedControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "needId",
+        "matchEvidenceId",
+        "availabilityEvidenceId",
+        "actual"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/caseId" },
+        "kind": { "const": "known-not-carried" },
+        "needId": { "$ref": "#/$defs/identifier" },
+        "matchEvidenceId": { "$ref": "#/$defs/matchEvidenceId" },
+        "availabilityEvidenceId": { "$ref": "#/$defs/availabilityEvidenceId" },
+        "actual": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state"],
+          "properties": { "state": { "const": "known-not-carried" } }
+        }
+      }
+    },
+    "partialCoverageControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "disabledCell", "actual"],
+      "properties": {
+        "id": { "$ref": "#/$defs/caseId" },
+        "kind": { "const": "partial-coverage" },
+        "disabledCell": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["chainId", "priceClass"],
+          "properties": {
+            "chainId": { "$ref": "#/$defs/chainId" },
+            "priceClass": { "enum": ["ordinary", "official_offer"] }
+          }
+        },
+        "actual": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "qualification"],
+          "properties": {
+            "state": { "const": "partial" },
+            "qualification": { "const": "among-verified-prices" }
+          }
+        }
+      }
+    },
+    "expiredOfferControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "officialOfferEvidenceId", "evaluatedAt", "actual"],
+      "properties": {
+        "id": { "$ref": "#/$defs/caseId" },
+        "kind": { "const": "expired-offer" },
+        "officialOfferEvidenceId": { "$ref": "#/$defs/priceEvidenceId" },
+        "evaluatedAt": { "$ref": "#/$defs/timestamp" },
+        "actual": { "$ref": "#/$defs/rejectedActual" }
+      }
+    },
+    "exactProductMismatchControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "needId", "matchEvidenceId", "actual"],
+      "properties": {
+        "id": { "$ref": "#/$defs/caseId" },
+        "kind": { "const": "exact-product-mismatch" },
+        "needId": { "$ref": "#/$defs/identifier" },
+        "matchEvidenceId": { "$ref": "#/$defs/matchEvidenceId" },
+        "actual": { "$ref": "#/$defs/rejectedActual" }
+      }
+    },
+    "negativeControl": {
+      "oneOf": [
+        { "$ref": "#/$defs/staleControl" },
+        { "$ref": "#/$defs/wrongRegionControl" },
+        { "$ref": "#/$defs/ineligibleSourceControl" },
+        { "$ref": "#/$defs/knownNotCarriedControl" },
+        { "$ref": "#/$defs/partialCoverageControl" },
+        { "$ref": "#/$defs/expiredOfferControl" },
+        { "$ref": "#/$defs/exactProductMismatchControl" }
+      ]
+    },
+    "oracleRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "enabledMembershipProgramIds"],
+      "properties": {
+        "contractVersion": { "const": 2 },
+        "enabledMembershipProgramIds": { "$ref": "#/$defs/membershipProgramIds" }
+      }
+    },
+    "membershipProgramIds": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/identifier" }
+    },
+    "store": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["storeId", "chainId", "regionId", "storeEvidenceId"],
+      "properties": {
+        "storeId": { "$ref": "#/$defs/identifier" },
+        "chainId": { "$ref": "#/$defs/chainId" },
+        "regionId": { "$ref": "#/$defs/regionId" },
+        "storeEvidenceId": { "$ref": "#/$defs/storeEvidenceId" }
+      }
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "needId",
+        "canonicalProductId",
+        "storeId",
+        "chainId",
+        "packageCount",
+        "packageBaseUnits",
+        "purchasedBaseUnits",
+        "unit",
+        "ordinaryCostOre",
+        "costOre",
+        "priceEvidenceId",
+        "appliedOfferEvidenceId",
+        "matchEvidenceId"
+      ],
+      "properties": {
+        "needId": { "$ref": "#/$defs/identifier" },
+        "canonicalProductId": { "$ref": "#/$defs/identifier" },
+        "storeId": { "$ref": "#/$defs/identifier" },
+        "chainId": { "$ref": "#/$defs/chainId" },
+        "packageCount": { "$ref": "#/$defs/positiveSafeInteger" },
+        "packageBaseUnits": { "$ref": "#/$defs/positiveSafeInteger" },
+        "purchasedBaseUnits": { "$ref": "#/$defs/positiveSafeInteger" },
+        "unit": { "$ref": "#/$defs/baseUnit" },
+        "ordinaryCostOre": { "$ref": "#/$defs/positiveSafeInteger" },
+        "costOre": { "$ref": "#/$defs/positiveSafeInteger" },
+        "priceEvidenceId": { "$ref": "#/$defs/priceEvidenceId" },
+        "appliedOfferEvidenceId": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/priceEvidenceId" }
+          ]
+        },
+        "matchEvidenceId": { "$ref": "#/$defs/matchEvidenceId" }
+      }
+    },
+    "frontierPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "stores", "assignments", "totalOre"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^frontier-plan:sha256:[a-f0-9]{64}$"
+        },
+        "stores": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/store" }
+        },
+        "assignments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": { "$ref": "#/$defs/assignment" }
+        },
+        "totalOre": { "$ref": "#/$defs/positiveSafeInteger" }
+      }
+    },
+    "frontier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plans",
+        "returnedPlanIds",
+        "convenienceEndpointPlanId",
+        "savingsEndpointPlanId"
+      ],
+      "properties": {
+        "plans": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 7,
+          "items": { "$ref": "#/$defs/frontierPlan" }
+        },
+        "returnedPlanIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 7,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^frontier-plan:sha256:[a-f0-9]{64}$"
+          }
+        },
+        "convenienceEndpointPlanId": {
+          "type": "string",
+          "pattern": "^frontier-plan:sha256:[a-f0-9]{64}$"
+        },
+        "savingsEndpointPlanId": {
+          "type": "string",
+          "pattern": "^frontier-plan:sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "replaySample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startedAt", "completedAt", "requestDigest", "resultDigest"],
+      "properties": {
+        "startedAt": { "$ref": "#/$defs/timestamp" },
+        "completedAt": { "$ref": "#/$defs/timestamp" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "resultDigest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "replay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestDigest", "resultDigest", "reportedP95Ms", "samples"],
+      "properties": {
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "resultDigest": { "$ref": "#/$defs/sha256" },
+        "reportedP95Ms": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "samples": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/replaySample" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,432 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://handle.reidar.tech/schemas/benchmark-basket-runner-attestation.v2.schema.json",
+  "title": "Handleplan independent benchmark runner attestation v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "contractVersion",
+    "kind",
+    "attestationId",
+    "attestedAt",
+    "runner",
+    "candidateDocumentDigest",
+    "bindings",
+    "runs"
+  ],
+  "properties": {
+    "$schema": { "const": "./benchmark-basket-runner-attestation.v2.schema.json" },
+    "contractVersion": { "const": "2.0.0" },
+    "kind": { "const": "handleplan-benchmark-runner-attestation" },
+    "attestationId": {
+      "type": "string",
+      "pattern": "^runner-attestation:sha256:[a-f0-9]{64}$"
+    },
+    "attestedAt": { "$ref": "#/$defs/timestamp" },
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementationId", "implementationDigest", "clock"],
+      "properties": {
+        "implementationId": { "const": "handleplan-independent-basket-oracle-v2" },
+        "implementationDigest": { "$ref": "#/$defs/sha256" },
+        "clock": { "const": "monotonic-duration-ms" }
+      }
+    },
+    "candidateDocumentDigest": { "$ref": "#/$defs/sha256" },
+    "bindings": { "$ref": "#/$defs/bindings" },
+    "runs": {
+      "type": "array",
+      "minItems": 60,
+      "maxItems": 60,
+      "items": { "$ref": "#/$defs/run" }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[a-z0-9]+(?:[._:-][a-z0-9]+)*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "positiveSafeInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "nonNegativeSafeInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "baseUnit": { "enum": ["g", "ml", "piece", "package"] },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "corpusVersion",
+        "corpusDigest",
+        "sourceRegistryVersion",
+        "sourceRegistryDigest",
+        "launchCoverageVersion",
+        "launchCoverageDigest"
+      ],
+      "properties": {
+        "corpusVersion": { "const": "1.0.0" },
+        "corpusDigest": { "$ref": "#/$defs/sha256" },
+        "sourceRegistryVersion": { "const": "1.0.0" },
+        "sourceRegistryDigest": { "$ref": "#/$defs/sha256" },
+        "launchCoverageVersion": { "const": "1.0.0" },
+        "launchCoverageDigest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "identity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "canonicalProductId"],
+          "properties": {
+            "kind": { "const": "exact-product" },
+            "canonicalProductId": { "$ref": "#/$defs/identifier" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "familyId"],
+          "properties": {
+            "kind": { "const": "reviewed-family" },
+            "familyId": { "$ref": "#/$defs/identifier" }
+          }
+        }
+      ]
+    },
+    "store": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["storeId", "chainId", "storeEvidenceId"],
+      "properties": {
+        "storeId": { "$ref": "#/$defs/identifier" },
+        "chainId": { "enum": ["bunnpris", "extra", "rema-1000"] },
+        "storeEvidenceId": {
+          "type": "string",
+          "pattern": "^store-evidence:sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "offer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "priceEvidenceId",
+        "amountOre",
+        "bundleSize",
+        "minimumPackages",
+        "membershipRequirement",
+        "validFrom",
+        "validUntil"
+      ],
+      "properties": {
+        "priceEvidenceId": {
+          "type": "string",
+          "pattern": "^price-evidence:sha256:[a-f0-9]{64}$"
+        },
+        "amountOre": { "$ref": "#/$defs/positiveSafeInteger" },
+        "bundleSize": { "$ref": "#/$defs/positiveSafeInteger" },
+        "minimumPackages": { "$ref": "#/$defs/positiveSafeInteger" },
+        "membershipRequirement": { "enum": ["none", "required"] },
+        "membershipProgramId": { "$ref": "#/$defs/identifier" },
+        "validFrom": { "$ref": "#/$defs/timestamp" },
+        "validUntil": { "$ref": "#/$defs/timestamp" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "membershipRequirement": { "const": "required" } },
+            "required": ["membershipRequirement"]
+          },
+          "then": {
+            "properties": { "membershipProgramId": { "$ref": "#/$defs/identifier" } },
+            "required": ["membershipProgramId"]
+          },
+          "else": { "properties": { "membershipProgramId": false } }
+        }
+      ]
+    },
+    "option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonicalProductId",
+        "storeId",
+        "chainId",
+        "ordinaryPriceEvidenceId",
+        "matchEvidenceId",
+        "ordinaryAmountOre",
+        "packageBaseUnits",
+        "packageUnit",
+        "depositPerPackageOre",
+        "officialOffers"
+      ],
+      "properties": {
+        "canonicalProductId": { "$ref": "#/$defs/identifier" },
+        "storeId": { "$ref": "#/$defs/identifier" },
+        "chainId": { "enum": ["bunnpris", "extra", "rema-1000"] },
+        "ordinaryPriceEvidenceId": {
+          "type": "string",
+          "pattern": "^price-evidence:sha256:[a-f0-9]{64}$"
+        },
+        "matchEvidenceId": {
+          "type": "string",
+          "pattern": "^match-evidence:sha256:[a-f0-9]{64}$"
+        },
+        "ordinaryAmountOre": { "$ref": "#/$defs/positiveSafeInteger" },
+        "packageBaseUnits": { "$ref": "#/$defs/positiveSafeInteger" },
+        "packageUnit": { "$ref": "#/$defs/baseUnit" },
+        "depositPerPackageOre": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "officialOffers": {
+          "type": "array",
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/offer" }
+        }
+      }
+    },
+    "need": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["needId", "identity", "requested", "options"],
+      "properties": {
+        "needId": { "$ref": "#/$defs/identifier" },
+        "identity": { "$ref": "#/$defs/identity" },
+        "requested": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value", "unit"],
+          "properties": {
+            "value": { "$ref": "#/$defs/positiveSafeInteger" },
+            "unit": { "$ref": "#/$defs/baseUnit" }
+          }
+        },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": { "$ref": "#/$defs/option" }
+        }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "runId",
+        "regionId",
+        "scenarioDigest",
+        "evaluatedAt",
+        "maximumStores",
+        "enabledMembershipProgramIds",
+        "stores",
+        "needs"
+      ],
+      "properties": {
+        "contractVersion": { "const": 2 },
+        "runId": { "$ref": "#/$defs/identifier" },
+        "regionId": {
+          "type": "string",
+          "pattern": "^no-[0-9]{4}-[a-z0-9-]+$"
+        },
+        "scenarioDigest": { "$ref": "#/$defs/sha256" },
+        "evaluatedAt": { "$ref": "#/$defs/timestamp" },
+        "maximumStores": { "const": 3 },
+        "enabledMembershipProgramIds": { "$ref": "#/$defs/membershipProgramIds" },
+        "stores": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/store" }
+        },
+        "needs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": { "$ref": "#/$defs/need" }
+        }
+      }
+    },
+    "membershipProgramIds": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/identifier" }
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "needId",
+        "canonicalProductId",
+        "storeId",
+        "chainId",
+        "packageCount",
+        "packageBaseUnits",
+        "purchasedBaseUnits",
+        "unit",
+        "ordinaryPriceEvidenceId",
+        "matchEvidenceId",
+        "appliedOfferEvidenceId",
+        "ordinaryCostOre",
+        "costOre"
+      ],
+      "properties": {
+        "needId": { "$ref": "#/$defs/identifier" },
+        "canonicalProductId": { "$ref": "#/$defs/identifier" },
+        "storeId": { "$ref": "#/$defs/identifier" },
+        "chainId": { "enum": ["bunnpris", "extra", "rema-1000"] },
+        "packageCount": { "$ref": "#/$defs/positiveSafeInteger" },
+        "packageBaseUnits": { "$ref": "#/$defs/positiveSafeInteger" },
+        "purchasedBaseUnits": { "$ref": "#/$defs/positiveSafeInteger" },
+        "unit": { "$ref": "#/$defs/baseUnit" },
+        "ordinaryPriceEvidenceId": {
+          "type": "string",
+          "pattern": "^price-evidence:sha256:[a-f0-9]{64}$"
+        },
+        "matchEvidenceId": {
+          "type": "string",
+          "pattern": "^match-evidence:sha256:[a-f0-9]{64}$"
+        },
+        "appliedOfferEvidenceId": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^price-evidence:sha256:[a-f0-9]{64}$" }
+          ]
+        },
+        "ordinaryCostOre": { "$ref": "#/$defs/positiveSafeInteger" },
+        "costOre": { "$ref": "#/$defs/positiveSafeInteger" }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["signature", "storeIds", "assignments", "totalOre", "substitutions"],
+      "properties": {
+        "signature": { "$ref": "#/$defs/sha256" },
+        "storeIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/identifier" }
+        },
+        "assignments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": { "$ref": "#/$defs/assignment" }
+        },
+        "totalOre": { "$ref": "#/$defs/positiveSafeInteger" },
+        "substitutions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 12
+        }
+      }
+    },
+    "oracleResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "feasiblePlans",
+        "frontierPlanSignatures",
+        "discountedFeasiblePlanSignatures",
+        "discountedFrontierPlanSignatures",
+        "convenienceEndpointSignature",
+        "savingsEndpointSignature"
+      ],
+      "properties": {
+        "state": { "const": "enumerated" },
+        "feasiblePlans": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 7,
+          "items": { "$ref": "#/$defs/plan" }
+        },
+        "frontierPlanSignatures": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 7,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/sha256" }
+        },
+        "discountedFeasiblePlanSignatures": {
+          "type": "array",
+          "maxItems": 7,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/sha256" }
+        },
+        "discountedFrontierPlanSignatures": {
+          "type": "array",
+          "maxItems": 7,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/sha256" }
+        },
+        "convenienceEndpointSignature": { "$ref": "#/$defs/sha256" },
+        "savingsEndpointSignature": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestDigest", "resultDigest", "durationsMs", "reportedP95Ms", "digest"],
+      "properties": {
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "resultDigest": { "$ref": "#/$defs/sha256" },
+        "durationsMs": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/nonNegativeSafeInteger" }
+        },
+        "reportedP95Ms": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runId",
+        "snapshot",
+        "snapshotDigest",
+        "oracleResult",
+        "requestDigest",
+        "resultDigest",
+        "timing",
+        "provenanceDigest",
+        "offerAwareDigest"
+      ],
+      "properties": {
+        "runId": { "$ref": "#/$defs/identifier" },
+        "snapshot": { "$ref": "#/$defs/snapshot" },
+        "snapshotDigest": { "$ref": "#/$defs/sha256" },
+        "oracleResult": { "$ref": "#/$defs/oracleResult" },
+        "requestDigest": { "$ref": "#/$defs/sha256" },
+        "resultDigest": { "$ref": "#/$defs/sha256" },
+        "timing": { "$ref": "#/$defs/timing" },
+        "provenanceDigest": { "$ref": "#/$defs/sha256" },
+        "offerAwareDigest": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

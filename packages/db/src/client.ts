@@ -3,7 +3,9 @@ import postgres from "postgres";
 
 import * as schema from "./schema";
 
-export type HandleplanDatabase = PostgresJsDatabase<typeof schema>;
+export type HandleplanDatabase = PostgresJsDatabase<typeof schema> & {
+  $client: ReturnType<typeof postgres>;
+};
 
 export interface DatabaseConnection {
   db: HandleplanDatabase;
@@ -17,6 +19,6 @@ export function createDatabase(databaseUrl: string): DatabaseConnection {
   return {
     db: drizzle(sql, { schema }),
     sql,
-    close: () => sql.end(),
+    close: () => sql.end({ timeout: 5 }),
   };
 }

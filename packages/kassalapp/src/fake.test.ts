@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { FakeKassalappGateway } from "./fake";
 
 const product: Product = {
-  ean: "7038010000013",
+  ean: "7038010000010",
   name: "Tine Lettmelk 1 %",
 };
 const price: PriceObservation = {

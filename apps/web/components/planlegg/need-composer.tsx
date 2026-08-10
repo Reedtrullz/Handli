@@ -1,27 +1,105 @@
 "use client";
 
-import { productSchema, type Product } from "@handleplan/domain";
+import {
+  publicProductSearchResponseSchema,
+  type Product,
+  type PublicCatalogProduct,
+} from "@handleplan/domain";
 import { useEffect, useId, useRef, useState } from "react";
-import { z } from "zod";
 
-import { BASKET_QUANTITY_MAX, BASKET_QUANTITY_MIN } from "../../lib/browser-basket";
+import {
+  basketQuantityErrorCopy,
+  parseBasketQuantityInput,
+  type BasketQuantityInputUnit,
+} from "../../lib/basket-quantity";
+import { QuantityControl } from "./quantity-control";
 
-const searchResponseSchema = z.object({ products: z.array(productSchema) }).strict();
+const MAX_SEARCH_RESPONSE_BYTES = 128 * 1024;
 
 export type ProductSearch = (query: string, signal: AbortSignal) => Promise<Product[]>;
+
+async function cancelBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
+  if (body === null) return;
+  try {
+    await body.cancel();
+  } catch {
+    // Cleanup is best effort; callers receive one sanitized search failure.
+  }
+}
+
+async function readBoundedJson(response: Response): Promise<unknown> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!/^application\/json(?:\s*;.*)?$/i.test(contentType)) {
+    await cancelBody(response.body);
+    throw new Error("PRODUCT_SEARCH_FAILED");
+  }
+  const contentLength = response.headers.get("content-length");
+  if (
+    contentLength !== null
+    && /^\d+$/.test(contentLength)
+    && Number(contentLength) > MAX_SEARCH_RESPONSE_BYTES
+  ) {
+    await cancelBody(response.body);
+    throw new Error("PRODUCT_SEARCH_FAILED");
+  }
+  if (response.body === null) throw new Error("PRODUCT_SEARCH_FAILED");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const fragments: string[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_SEARCH_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new Error("PRODUCT_SEARCH_FAILED");
+      }
+      fragments.push(decoder.decode(value, { stream: true }));
+    }
+    fragments.push(decoder.decode());
+    return JSON.parse(fragments.join("")) as unknown;
+  } catch {
+    try { await reader.cancel(); } catch { /* Cleanup only. */ }
+    throw new Error("PRODUCT_SEARCH_FAILED");
+  }
+}
+
+function legacyProductFromCatalog(product: PublicCatalogProduct): Product {
+  return {
+    ean: product.gtin,
+    name: product.displayName,
+    ...(product.brand === undefined ? {} : { brand: product.brand }),
+    packageQuantity: product.packageMeasure.amount,
+    packageUnit:
+      product.packageMeasure.unit === "g" || product.packageMeasure.unit === "ml"
+        ? product.packageMeasure.unit
+        : "each",
+  };
+}
 
 export async function searchProductsFromApi(
   query: string,
   signal: AbortSignal,
 ): Promise<Product[]> {
   const response = await fetch(`/api/products/search?q=${encodeURIComponent(query)}`, { signal });
-  if (!response.ok) throw new Error("PRODUCT_SEARCH_FAILED");
-  return searchResponseSchema.parse(await response.json()).products;
+  if (!response.ok) {
+    await cancelBody(response.body);
+    throw new Error("PRODUCT_SEARCH_FAILED");
+  }
+  const parsed = publicProductSearchResponseSchema.safeParse(await readBoundedJson(response));
+  if (!parsed.success) throw new Error("PRODUCT_SEARCH_FAILED");
+  return parsed.data.products.map(legacyProductFromCatalog);
 }
 
 interface NeedComposerProps {
-  onGenericNeed: (query: string, quantity: number, candidates: Product[]) => void;
-  onProduct: (product: Product, quantity: number) => void;
+  onProduct: (
+    product: Product,
+    quantity: number,
+    quantityUnit: "piece" | "package" | "g" | "ml",
+  ) => void;
   searchProducts: ProductSearch;
   searchDelayMs?: number;
   disabled?: boolean;
@@ -36,15 +114,7 @@ function optionLabel(product: Product): string {
   return `${product.name}${amount}`;
 }
 
-export function genericCandidateFamily(query: string, products: readonly Product[]): string | undefined {
-  const normalizedQuery = query.trim().toLocaleLowerCase("nb-NO");
-  const families = [...new Set(products.flatMap(({ productFamily }) => productFamily ? [productFamily] : []))];
-  return families.find((family) => family.toLocaleLowerCase("nb-NO") === normalizedQuery)
-    ?? (families.length === 1 ? families[0] : undefined);
-}
-
 export function NeedComposer({
-  onGenericNeed,
   onProduct,
   searchProducts,
   searchDelayMs = 250,
@@ -52,7 +122,8 @@ export function NeedComposer({
 }: NeedComposerProps) {
   const listId = useId();
   const [query, setQuery] = useState("");
-  const [quantity, setQuantity] = useState(1);
+  const [quantityAmount, setQuantityAmount] = useState("1");
+  const [quantityInputUnit, setQuantityInputUnit] = useState<BasketQuantityInputUnit>("package");
   const [products, setProducts] = useState<Product[]>([]);
   const [searchState, setSearchState] = useState<SearchState>("idle");
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -128,7 +199,8 @@ export function NeedComposer({
   function reset(): void {
     cancelSearchWork();
     setQuery("");
-    setQuantity(1);
+    setQuantityAmount("1");
+    setQuantityInputUnit("package");
     setProducts([]);
     setOpen(false);
     setSearchState("idle");
@@ -136,14 +208,9 @@ export function NeedComposer({
   }
 
   function chooseProduct(product: Product): void {
-    onProduct(product, quantity);
-    reset();
-  }
-
-  function addGeneric(): void {
-    const trimmed = query.trim();
-    if (!trimmed || genericCandidateFamily(trimmed, products) === undefined || searchState !== "ready" || disabled) return;
-    onGenericNeed(trimmed, quantity, products);
+    const quantity = parseBasketQuantityInput(quantityAmount, quantityInputUnit);
+    if (quantity === undefined) return;
+    onProduct(product, quantity.quantity, quantity.quantityUnit);
     reset();
   }
 
@@ -170,10 +237,17 @@ export function NeedComposer({
   const activeOptionId = open && activeIndex >= 0
     ? `${listId}-option-${activeIndex}`
     : undefined;
-  const genericFamily = genericCandidateFamily(query, products);
-
+  const parsedQuantity = parseBasketQuantityInput(quantityAmount, quantityInputUnit);
   return (
-    <section className="need-composer-section" ref={boundary}>
+    <section
+      className="need-composer-section"
+      ref={boundary}
+      onBlur={(event) => {
+        const nextTarget = event.relatedTarget;
+        if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+        dismissSearch();
+      }}
+    >
       <h1>Hva skal du handle?</h1>
       <div className="need-composer">
         <div className="need-search-wrap">
@@ -199,45 +273,31 @@ export function NeedComposer({
               scheduleSearch(nextQuery);
             }}
             onKeyDown={onKeyDown}
-            onBlur={(event) => {
-              const nextTarget = event.relatedTarget;
-              if (nextTarget instanceof Node && boundary.current?.contains(nextTarget)) return;
-              dismissSearch();
-            }}
           />
-          <div className="quantity-stepper" aria-label="Antall">
-            <button
-              type="button"
-              aria-label="Reduser antall"
-              disabled={quantity <= BASKET_QUANTITY_MIN}
-              onClick={() => setQuantity((value) => Math.max(BASKET_QUANTITY_MIN, value - 1))}
-            >−</button>
-            <output aria-live="polite">{quantity}</output>
-            <button
-              type="button"
-              aria-label="Øk antall"
-              disabled={quantity >= BASKET_QUANTITY_MAX}
-              onClick={() => setQuantity((value) => Math.min(BASKET_QUANTITY_MAX, value + 1))}
-            >+</button>
-          </div>
         </div>
-        <button
-          className="primary-button composer-add"
-          type="button"
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={addGeneric}
-          onBlur={(event) => {
-            const nextTarget = event.relatedTarget;
-            if (nextTarget instanceof Node && boundary.current?.contains(nextTarget)) return;
-            dismissSearch();
+        <QuantityControl
+          amount={quantityAmount}
+          disabled={disabled}
+          inputUnit={quantityInputUnit}
+          label="eksakt produkt"
+          onAmountChange={setQuantityAmount}
+          onInputUnitChange={(inputUnit, amount) => {
+            setQuantityInputUnit(inputUnit);
+            setQuantityAmount(amount);
           }}
-          disabled={disabled || !query.trim() || searchState !== "ready" || genericFamily === undefined}
-        >
-          Legg til
-        </button>
+        />
       </div>
+      {parsedQuantity === undefined ? (
+        <p className="quantity-error" role="alert">
+          {basketQuantityErrorCopy(quantityInputUnit)}
+        </p>
+      ) : (
+        <p className="quantity-guidance">
+          Velg pakker, stykk eller en nøyaktig vekt eller mengde. Enheten er et krav; kg og l lagres uten avrunding som g og ml.
+        </p>
+      )}
       {disabled ? <p role="status">Handlekurven kan inneholde maksimalt 50 varebehov.</p> : null}
-      {!disabled && searchState === "ready" && genericFamily === undefined ? <p role="status">Velg et eksakt produkt; forslagene tilhører flere eller ukjente varetyper.</p> : null}
+      {!disabled && searchState === "ready" ? <p role="status">Velg et eksakt produkt fra forslagene. Bruk «Varetype» nedenfor hvis Handleplan skal velge blant gjennomgåtte alternativer.</p> : null}
       <div ref={popup} className="search-popover" hidden={!open}>
         {open ? (
           <>
