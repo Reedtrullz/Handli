@@ -1080,7 +1080,7 @@ test("an externally rejected candidate is guardedly rolled back and cannot race 
   assert.match(deployWorkflow, /PREVIOUS_IMAGE_ID=%s/u);
   assert.match(
     deployWorkflow,
-    /always\(\) && steps\.rollback_guard\.outcome == 'success' && steps\.transfer_deploy\.outcome != 'skipped' && steps\.finalize_deployment\.outcome != 'success'/u,
+    /always\(\) && steps\.rollback_guard\.outcome == 'success' && steps\.transfer_deploy\.outcome == 'success' && steps\.finalize_deployment\.outcome != 'success'/u,
   );
   assert.match(deployWorkflow, /PENDING_DEPLOYMENT_TOKEN/u);
   assert.match(deployWorkflow, /pending-deployment-deadline=/u);

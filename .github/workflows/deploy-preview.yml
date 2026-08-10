@@ -595,7 +595,7 @@ jobs:
             "set -eu; /opt/apps/handleplan/operations/current/deploy/resolve-pending-deployment-on-vps.sh accept '$DEPLOY_SHA' '$EXPECTED_IMAGE_ID' '$PENDING_DEPLOYMENT_TOKEN' '$PREVIOUS_REVISION' '$PREVIOUS_IMAGE_ID' '$PENDING_DEPLOYMENT_DEADLINE'; test \"\$(cat /opt/apps/handleplan/state/current-deployment)\" = 'v1 $DEPLOY_SHA current'; test \"\$(cat /opt/apps/handleplan/state/current-image-id)\" = '$EXPECTED_IMAGE_ID'; test ! -e /opt/apps/handleplan/state/pending-deployment; test ! -L /opt/apps/handleplan/state/pending-deployment"
 
       - name: Roll back a candidate rejected by external promotion proof
-        if: ${{ always() && steps.rollback_guard.outcome == 'success' && steps.transfer_deploy.outcome != 'skipped' && steps.finalize_deployment.outcome != 'success' }}
+        if: ${{ always() && steps.rollback_guard.outcome == 'success' && steps.transfer_deploy.outcome == 'success' && steps.finalize_deployment.outcome != 'success' }}
         shell: bash
         env:
           REMOTE_BUNDLE_ROOT: /opt/apps/handleplan/deploy-bundles
