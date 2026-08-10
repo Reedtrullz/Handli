@@ -691,21 +691,35 @@ reject_pending_deployment() (
     exit 1
   }
   verify_image_binding "$candidate_revision" "$candidate_image_id" \
-    && verify_image_binding "$expected_previous_revision" \
+    || {
+      echo "Pending rollback image binding is no longer exact" >&2
+      exit 1
+    }
+  if ! is_first_deployment_sentinel \
+    "$expected_previous_revision" "$expected_previous_image_id"; then
+    verify_image_binding "$expected_previous_revision" \
       "$expected_previous_image_id" || {
-    echo "Pending rollback image binding is no longer exact" >&2
-    exit 1
-  }
-  compose_for "$expected_previous_revision" "$expected_previous_image_id" \
-    config >/dev/null
+      echo "Pending rollback image binding is no longer exact" >&2
+      exit 1
+    }
+    compose_for "$expected_previous_revision" "$expected_previous_image_id" \
+      config >/dev/null
+  fi
 
   close_application_runtimes
-  compose_for "$expected_previous_revision" "$expected_previous_image_id" \
-    up -d --wait --remove-orphans --no-deps app review operations worker
-  verify_predecessor_runtimes || {
-    echo "Pending predecessor failed exact runtime readback" >&2
-    exit 1
-  }
+  if is_first_deployment_sentinel \
+    "$expected_previous_revision" "$expected_previous_image_id"; then
+    # First-deployment rejection returns the VPS to the empty baseline: there
+    # is no predecessor image to restart or verify.
+    :
+  else
+    compose_for "$expected_previous_revision" "$expected_previous_image_id" \
+      up -d --wait --remove-orphans --no-deps app review operations worker
+    verify_predecessor_runtimes || {
+      echo "Pending predecessor failed exact runtime readback" >&2
+      exit 1
+    }
+  fi
 
   # Commit predecessor state and consume the exact pending capability as one
   # signal-free critical section. A hard kill between the two leaves a pending

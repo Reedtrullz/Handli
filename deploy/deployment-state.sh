@@ -37,6 +37,19 @@ valid_pending_deployment_deadline() (
   [ "${#pending_deadline_candidate}" -le 12 ]
 )
 
+# The first deployment has no immutable predecessor. Its rollback baseline is
+# an explicit zero sentinel that satisfies every state validator. Deploy and
+# resolver scripts treat the sentinel as "no prior deployment" and never load,
+# inspect, or start a sentinel image. Seeding is create-only on provably empty
+# state and is gated by the HANDLEPLAN_ALLOW_FIRST_DEPLOY repository variable.
+first_deployment_sentinel_revision=0000000000000000000000000000000000000000
+first_deployment_sentinel_image_id=sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+is_first_deployment_sentinel() {
+  [ "$1" = "$first_deployment_sentinel_revision" ] \
+    && [ "$2" = "$first_deployment_sentinel_image_id" ]
+}
+
 # The deployment lock serializes admission, and each detached watchdog retains
 # one exact lease until that same watchdog exits. A crashed watchdog leaves its
 # lease behind and therefore consumes capacity rather than allowing an

@@ -387,12 +387,21 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 load_deployment_state "$state_dir"
-test -n "$previous_revision" \
-  && test "$previous_compatibility_mode" = "current" \
-  && test -n "$previous_image_id" || {
-  echo "Automated deployment requires one verified immutable predecessor; first deployment fails closed" >&2
-  exit 1
-}
+if is_first_deployment_sentinel "$expected_previous_revision" "$expected_previous_image_id"; then
+  test "$previous_revision" = "$first_deployment_sentinel_revision" \
+    && test "$previous_compatibility_mode" = "current" \
+    && test "$previous_image_id" = "$first_deployment_sentinel_image_id" || {
+    echo "First deployment requires the exact empty verified baseline" >&2
+    exit 1
+  }
+else
+  test -n "$previous_revision" \
+    && test "$previous_compatibility_mode" = "current" \
+    && test -n "$previous_image_id" || {
+    echo "Automated deployment requires one verified immutable predecessor; first deployment fails closed" >&2
+    exit 1
+  }
+fi
 test "$previous_revision" = "$expected_previous_revision" \
   && test "$previous_image_id" = "$expected_previous_image_id" || {
   echo "Committed deployment changed after the runner captured its rollback guard" >&2
@@ -802,7 +811,8 @@ test "$(sha256sum "$verified_source_archive" | awk '{print $1}')" = \
   echo "CI source archive is not the exact fetched origin/main commit" >&2
   exit 1
 }
-if [ -n "$previous_revision" ]; then
+if [ -n "$previous_revision" ] \
+  && ! is_first_deployment_sentinel "$previous_revision" "$previous_image_id"; then
   resolved_previous_revision=$(git -C "$source_dir" rev-parse --verify \
     "$previous_revision^{commit}")
   test "$resolved_previous_revision" = "$previous_revision" || {
@@ -869,14 +879,16 @@ test "$loaded_image_platform" = 'linux/amd64' || {
   echo "Loaded image platform is not the supported linux/amd64 target" >&2
   exit 1
 }
-test "$(docker image inspect --format '{{.Id}}' "$previous_image_id")" = \
-  "$previous_image_id" \
-  && test "$(docker image inspect \
-    --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
-    "$previous_image_id")" = "$previous_revision" || {
-  echo "Verified predecessor image is missing or differs from immutable deployment state" >&2
-  exit 1
-}
+if ! is_first_deployment_sentinel "$previous_revision" "$previous_image_id"; then
+  test "$(docker image inspect --format '{{.Id}}' "$previous_image_id")" = \
+    "$previous_image_id" \
+    && test "$(docker image inspect \
+      --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+      "$previous_image_id")" = "$previous_revision" || {
+    echo "Verified predecessor image is missing or differs from immutable deployment state" >&2
+    exit 1
+  }
+fi
 
 private_migration_gate_failed=0
 private_runtimes_absent=0

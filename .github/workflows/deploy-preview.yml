@@ -195,25 +195,79 @@ jobs:
       - name: Capture the exact immutable rollback guard
         id: rollback_guard
         shell: bash
+        env:
+          ALLOW_FIRST_DEPLOY: ${{ vars.HANDLEPLAN_ALLOW_FIRST_DEPLOY }}
         run: |
           set -euo pipefail
+          first_deployment_sentinel_revision=0000000000000000000000000000000000000000
+          first_deployment_sentinel_image_id=sha256:0000000000000000000000000000000000000000000000000000000000000000
+          case "$ALLOW_FIRST_DEPLOY" in
+            true|false) ;;
+            *) echo "HANDLEPLAN_ALLOW_FIRST_DEPLOY must be true or false" >&2; exit 1 ;;
+          esac
           rollback_guard=$(ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
             deploy@198.23.137.16 \
             'set -eu
-            manifest=$(cat /opt/apps/handleplan/state/current-deployment)
-            test ! -e /opt/apps/handleplan/state/pending-deployment
-            test ! -L /opt/apps/handleplan/state/pending-deployment
-            set -- $manifest
-            test "$#" -eq 3
-            test "$1" = v1
-            test "$3" = current
-            previous_revision=$2
-            previous_image_id=$(cat /opt/apps/handleplan/state/current-image-id)
-            test "$(cat /opt/apps/handleplan/state/current-revision)" = "$previous_revision"
-            test "$(cat /opt/apps/handleplan/state/verified-images/$previous_revision)" = "v1 $previous_revision $previous_image_id"
-            test "$(docker image inspect --format "{{.Id}}" "$previous_image_id")" = "$previous_image_id"
-            test "$(docker image inspect --format "{{index .Config.Labels \"org.opencontainers.image.revision\"}}" "$previous_image_id")" = "$previous_revision"
-            printf "%s %s\n" "$previous_revision" "$previous_image_id"')
+            state_dir=/opt/apps/handleplan/state
+            if test -f "$state_dir/current-deployment"; then
+              manifest=$(cat "$state_dir/current-deployment")
+              test ! -e "$state_dir/pending-deployment"
+              test ! -L "$state_dir/pending-deployment"
+              set -- $manifest
+              test "$#" -eq 3
+              test "$1" = v1
+              test "$3" = current
+              previous_revision=$2
+              previous_image_id=$(cat "$state_dir/current-image-id")
+              test "$(cat "$state_dir/current-revision")" = "$previous_revision"
+              test "$(cat "$state_dir/verified-images/$previous_revision")" = "v1 $previous_revision $previous_image_id"
+              test "$(docker image inspect --format "{{.Id}}" "$previous_image_id")" = "$previous_image_id"
+              test "$(docker image inspect --format "{{index .Config.Labels \"org.opencontainers.image.revision\"}}" "$previous_image_id")" = "$previous_revision"
+              printf "%s %s\n" "$previous_revision" "$previous_image_id"
+            elif test -e "$state_dir/current-deployment"; then
+              echo "current-deployment is not a regular file" >&2
+              exit 1
+            elif test "'"$ALLOW_FIRST_DEPLOY"'" = "true"; then
+              # First deployment: seed the explicit empty baseline. Create-only
+              # and provably-empty gated; any pre-existing state fails closed.
+              install -d -m 700 "$state_dir"
+              for artifact in current-revision current-image-id deployment-high-water pending-deployment accepted-deployment; do
+                test ! -e "$state_dir/$artifact" && test ! -L "$state_dir/$artifact" || {
+                  echo "First-deploy baseline requires provably empty deployment state" >&2
+                  exit 1
+                }
+              done
+              verified_images="$state_dir/verified-images"
+              if test -e "$verified_images"; then
+                test -d "$verified_images" && test ! -L "$verified_images" || {
+                  echo "verified-images is not a regular directory" >&2
+                  exit 1
+                }
+                test -z "$(find "$verified_images" -mindepth 1 -maxdepth 1 -printf x -quit 2>/dev/null)" || {
+                  echo "First-deploy baseline requires an empty verified-images directory" >&2
+                  exit 1
+                }
+              else
+                install -d -m 700 "$verified_images"
+              fi
+              umask 077
+              printf "v1 %s current\n" "'"$first_deployment_sentinel_revision"'" > "$state_dir/.current-deployment.tmp"
+              printf "%s\n" "'"$first_deployment_sentinel_revision"'" > "$state_dir/.current-revision.tmp"
+              printf "%s\n" "'"$first_deployment_sentinel_image_id"'" > "$state_dir/.current-image-id.tmp"
+              printf "%s\n" "'"$first_deployment_sentinel_revision"'" > "$state_dir/.deployment-high-water.tmp"
+              printf "v1 %s %s\n" "'"$first_deployment_sentinel_revision"'" "'"$first_deployment_sentinel_image_id"'" > "$verified_images/.verified-image.tmp"
+              chmod 600 "$state_dir"/.current-deployment.tmp "$state_dir"/.current-revision.tmp "$state_dir"/.current-image-id.tmp "$state_dir"/.deployment-high-water.tmp "$verified_images/.verified-image.tmp"
+              mv -f "$state_dir/.current-deployment.tmp" "$state_dir/current-deployment"
+              mv -f "$state_dir/.current-revision.tmp" "$state_dir/current-revision"
+              mv -f "$state_dir/.current-image-id.tmp" "$state_dir/current-image-id"
+              mv -f "$state_dir/.deployment-high-water.tmp" "$state_dir/deployment-high-water"
+              ln "$verified_images/.verified-image.tmp" "$verified_images/'"$first_deployment_sentinel_revision"'"
+              rm -f "$verified_images/.verified-image.tmp"
+              printf "%s %s\n" "'"$first_deployment_sentinel_revision"'" "'"$first_deployment_sentinel_image_id"'"
+            else
+              echo "First deployment requires the HANDLEPLAN_ALLOW_FIRST_DEPLOY repository variable and provably empty deployment state" >&2
+              exit 1
+            fi')
           read -r previous_revision previous_image_id extra <<< "$rollback_guard"
           [[ "$previous_revision" =~ ^[0-9a-f]{40}$ ]]
           [[ "$previous_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
