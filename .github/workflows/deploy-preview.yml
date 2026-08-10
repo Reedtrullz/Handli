@@ -314,7 +314,8 @@ jobs:
           HANDLEPLAN_GUARD_SCRIPT
           rollback_guard=$(ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
             deploy@198.23.137.16 \
-            "ALLOW_FIRST_DEPLOY='$ALLOW_FIRST_DEPLOY' $(cat /tmp/handleplan-guard-script.sh)")
+            "ALLOW_FIRST_DEPLOY='$ALLOW_FIRST_DEPLOY'
+            $(cat /tmp/handleplan-guard-script.sh)")
           read -r previous_revision previous_image_id extra <<< "$rollback_guard"
           [[ "$previous_revision" =~ ^[0-9a-f]{40}$ ]]
           [[ "$previous_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
