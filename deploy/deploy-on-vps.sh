@@ -1030,7 +1030,7 @@ cleanup_failed_candidate_runtime() {
       echo "===== $private_runtime healthcheck result =====" >&2
       docker exec "$private_container" node -e \
         "fetch('http://127.0.0.1:3000/api/internal/health/$private_runtime',{headers:{'user-agent':'handleplan-$private_runtime-health-v1','x-handleplan-internal-health':'handleplan-$private_runtime-health-v1'}}).then(async r=>{const t=await r.text();console.log('status='+r.status+' body='+t.slice(0,400))}).catch(e=>{console.log('fetch-error='+e.message);process.exit(1)})" \
-        2>&1 >&2 || echo "  (exec failed)" >&2
+        >&2 2>&1 || echo "  (exec failed)" >&2
     fi
   done
   postgres_container=$(docker ps -aq --filter label=com.docker.compose.service=postgres 2>/dev/null | head -1 || true)
@@ -1038,10 +1038,10 @@ cleanup_failed_candidate_runtime() {
     echo "===== postgres roles and migration state =====" >&2
     docker exec "$postgres_container" sh -c \
       'PGPASSWORD=$POSTGRES_PASSWORD psql -U handleplan -d handleplan -tAc "select rolname from pg_roles where rolname like '\''handleplan%'\'' order by 1"' \
-      2>&1 >&2 || echo "  (roles query failed)" >&2
+      >&2 2>&1 || echo "  (roles query failed)" >&2
     docker exec "$postgres_container" sh -c \
       'PGPASSWORD=$POSTGRES_PASSWORD psql -U handleplan -d handleplan -tAc "select count(*) from public.handleplan_schema_migrations"' \
-      2>&1 >&2 || echo "  (migration count failed)" >&2
+      >&2 2>&1 || echo "  (migration count failed)" >&2
   fi
   remove_runtime_services "$revision" "$revision" \
     "Failed deployment could not prove private runtimes, worker, and app absent; fallback refused" \
