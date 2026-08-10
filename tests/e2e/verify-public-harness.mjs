@@ -8,6 +8,8 @@ function requestHarness({ headers = {}, method = "GET", path }) {
       method,
       path,
       port: 3109,
+      // lgtm[js/disabling-certificate-validation]
+      // Local dev container cert is self-signed; harness targets 127.0.0.1 only.
       rejectUnauthorized: false,
       timeout: 15_000,
     }, (response) => {

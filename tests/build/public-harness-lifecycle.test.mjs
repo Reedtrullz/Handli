@@ -70,6 +70,8 @@ function probeAuthenticatedStatus(sentinel) {
       method: "GET",
       path: "/__handleplan-e2e/scan-status-v1",
       port: publicPort,
+      // lgtm[js/disabling-certificate-validation]
+      // Local test container cert is self-signed; request targets 127.0.0.1 only.
       rejectUnauthorized: false,
       timeout: 1_000,
     }, (response) => {

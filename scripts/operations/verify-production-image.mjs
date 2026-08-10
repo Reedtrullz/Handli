@@ -111,6 +111,9 @@ function exactKeys(value, expected) {
 }
 
 function run(command, arguments_, options = {}) {
+  // lgtm[js/shell-command-injection-from-environment]
+  // Safe by construction: callers pass dynamic paths as positional args
+  // to "-c" scripts ($1..$n), never interpolated into the script text.
   const result = spawnSync(command, arguments_, {
     encoding: "utf8",
     maxBuffer: maximumCommandOutputBytes,

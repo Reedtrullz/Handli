@@ -1230,6 +1230,8 @@ test("bounded restore output waits for stubborn children to be force-killed befo
     const age = values.executable("overflow-age.mjs", [
       `#!${process.execPath}`,
       'import { appendFileSync, writeFileSync } from "node:fs";',
+      // lgtm[js/bad-code-sanitization]
+      // Fixture path is escaped via JSON.stringify (valid JS literal); value is a test-owned temp path.
       `writeFileSync(${JSON.stringify(agePid)}, String(process.pid));`,
       `process.on("SIGTERM", () => appendFileSync(${JSON.stringify(ageTerm)}, "term\\n"));`,
       'process.stdout.on("error", () => {});',
@@ -1240,6 +1242,8 @@ test("bounded restore output waits for stubborn children to be force-killed befo
     const pgRestore = values.executable("overflow-restore.mjs", [
       `#!${process.execPath}`,
       'import { appendFileSync, existsSync, writeFileSync } from "node:fs";',
+      // lgtm[js/bad-code-sanitization]
+      // Fixture path is escaped via JSON.stringify (valid JS literal); value is a test-owned temp path.
       `writeFileSync(${JSON.stringify(restorePid)}, String(process.pid));`,
       `process.on("SIGTERM", () => appendFileSync(${JSON.stringify(restoreTerm)}, "term\\n"));`,
       `while (!existsSync(${JSON.stringify(agePid)})) await new Promise((resolve) => setTimeout(resolve, 10));`,
@@ -1281,6 +1285,8 @@ test("restore timeout escalates and waits for every stubborn child to close", as
     const age = values.executable("timeout-age.mjs", [
       `#!${process.execPath}`,
       'import { appendFileSync, writeFileSync } from "node:fs";',
+      // lgtm[js/bad-code-sanitization]
+      // Fixture path is escaped via JSON.stringify (valid JS literal); value is a test-owned temp path.
       `writeFileSync(${JSON.stringify(agePid)}, String(process.pid));`,
       `process.on("SIGTERM", () => appendFileSync(${JSON.stringify(ageTerm)}, "term\\n"));`,
       "setInterval(() => {}, 1000);",
@@ -1289,6 +1295,8 @@ test("restore timeout escalates and waits for every stubborn child to close", as
     const pgRestore = values.executable("timeout-restore.mjs", [
       `#!${process.execPath}`,
       'import { appendFileSync, writeFileSync } from "node:fs";',
+      // lgtm[js/bad-code-sanitization]
+      // Fixture path is escaped via JSON.stringify (valid JS literal); value is a test-owned temp path.
       `writeFileSync(${JSON.stringify(restorePid)}, String(process.pid));`,
       `process.on("SIGTERM", () => appendFileSync(${JSON.stringify(restoreTerm)}, "term\\n"));`,
       "setInterval(() => {}, 1000);",
@@ -1326,6 +1334,8 @@ test("ordinary command timeout force-kills a stubborn process group before rejec
   try {
     const descendantCode = [
       'const { appendFileSync, writeFileSync } = require("node:fs");',
+      // lgtm[js/bad-code-sanitization]
+      // Fixture path is escaped via JSON.stringify (valid JS literal); value is a test-owned temp path.
       `writeFileSync(${JSON.stringify(childPid)}, String(process.pid));`,
       `writeFileSync(${JSON.stringify(childReady)}, "ready\\n");`,
       `process.on("SIGTERM", () => appendFileSync(${JSON.stringify(childTerm)}, "term\\n"));`,
@@ -1335,6 +1345,8 @@ test("ordinary command timeout force-kills a stubborn process group before rejec
       `#!${process.execPath}`,
       'import { spawn } from "node:child_process";',
       'import { appendFileSync, existsSync, writeFileSync } from "node:fs";',
+      // lgtm[js/bad-code-sanitization]
+      // Fixture path is escaped via JSON.stringify (valid JS literal); value is a test-owned temp path.
       `writeFileSync(${JSON.stringify(parentPid)}, String(process.pid));`,
       `process.on("SIGTERM", () => appendFileSync(${JSON.stringify(parentTerm)}, "term\\n"));`,
       `spawn(process.execPath, ["-e", ${JSON.stringify(descendantCode)}], { detached: false, stdio: "ignore" }).unref();`,
@@ -1375,6 +1387,8 @@ test("ordinary command success is rejected after reaping a stubborn descendant",
       `#!${process.execPath}`,
       'import { spawn } from "node:child_process";',
       'import { existsSync } from "node:fs";',
+      // lgtm[js/bad-code-sanitization]
+      // Embedded program is escaped via JSON.stringify (valid JS literal); built from test-owned temp paths.
       `spawn(process.execPath, ["-e", ${JSON.stringify(descendantCode)}], { detached: false, stdio: "ignore" }).unref();`,
       `while (!existsSync(${JSON.stringify(childReady)})) await new Promise((resolve) => setTimeout(resolve, 10));`,
       "",

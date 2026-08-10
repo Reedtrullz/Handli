@@ -1237,6 +1237,8 @@ test("pending cleanup requires the exact image and deadline fields", (t) => {
   const fixture = makePendingResolverFixture();
   t.after(() => rmSync(fixture.temp, { force: true, recursive: true }));
   const stateScript = join(root, "deploy/deployment-state.sh");
+  // lgtm[js/shell-command-injection-from-environment]
+  // Safe by construction: dynamic values pass as positional args ($1..$8), never into the script text.
   const clearPending = (candidateImageId, candidateDeadline) => spawnSync(
     "sh",
     [
@@ -1683,6 +1685,8 @@ test("pending-watchdog leases enforce hard admission and exact cleanup", (t) => 
   const state = join(temp, "state");
   mkdirSync(state);
   const stateScript = join(root, "deploy/deployment-state.sh");
+  // lgtm[js/shell-command-injection-from-environment]
+  // Safe by construction: dynamic values pass as positional args ($1..$n), never into the script text.
   const invokeLedger = (action, candidateToken, candidateDeadline) => spawnSync(
     "sh",
     [
