@@ -257,25 +257,25 @@ jobs:
                 adopted_revision_label=$(docker image inspect --format \
                   '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
                   "handleplan:$stale_revision")
-                test "$adopted_revision_label" = "$stale_revision" || {
-                  echo "Legacy image revision label does not match current-revision; refusing to adopt" >&2
-                  exit 1
-                }
-                case "$adopted_image_id" in
-                  sha256:[0-9a-f][0-9a-f]*)
-                    test "${#adopted_image_id}" -eq 71 || {
-                      echo "Legacy image id is malformed; refusing to adopt" >&2
-                      exit 1
-                    }
-                    ;;
-                  *)
-                    echo "Legacy image id is malformed; refusing to adopt" >&2
-                    exit 1
-                    ;;
-                esac
-                baseline_revision=$stale_revision
-                baseline_image_id=$adopted_image_id
-                echo "Adopting legacy image $stale_revision as the verified predecessor" >&2
+                adopted_created=$(docker image inspect --format '{{.Created}}' \
+                  "handleplan:$stale_revision")
+                adoption_ok=0
+                if [ "$adopted_revision_label" = "$stale_revision" ]; then
+                  case "$adopted_image_id" in
+                    sha256:[0-9a-f][0-9a-f]*)
+                      if [ "${#adopted_image_id}" -eq 71 ]; then
+                        adoption_ok=1
+                      fi
+                      ;;
+                  esac
+                fi
+                if [ "$adoption_ok" -eq 1 ]; then
+                  baseline_revision=$stale_revision
+                  baseline_image_id=$adopted_image_id
+                  echo "Adopting legacy image $stale_revision as the verified predecessor" >&2
+                else
+                  echo "Legacy image for $stale_revision is not authentic (revision label: $adopted_revision_label, created: $adopted_created); treating the marker as stale" >&2
+                fi
               else
                 echo "Overwriting stale current-revision marker with the first-deployment baseline" >&2
               fi
