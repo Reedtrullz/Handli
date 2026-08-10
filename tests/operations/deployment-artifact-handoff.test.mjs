@@ -1786,18 +1786,22 @@ test("explicit rollback refuses regular and symlink-shaped pending state under t
   }
 });
 
-test("deploy refuses first cutover without a verified immutable predecessor", () => {
+test("deploy refuses first cutover without an approved verified baseline", () => {
   const capture = deployWorkflow.indexOf("name: Capture the exact immutable rollback guard");
   const transfer = deployWorkflow.indexOf("name: Transfer and deploy the exact CI image on the VPS");
   assert.ok(capture > 0);
   assert.ok(transfer > capture);
   const guardStep = deployWorkflow.slice(capture, transfer);
   assert.match(guardStep, /current-deployment/u);
-  assert.match(guardStep, /test ! -e \/opt\/apps\/handleplan\/state\/pending-deployment/u);
+  assert.match(guardStep, /test ! -e "\$state_dir\/pending-deployment"/u);
   assert.match(guardStep, /test "\$3" = current/u);
   assert.match(guardStep, /current-image-id/u);
   assert.match(guardStep, /verified-images\/\$previous_revision/u);
   assert.match(guardStep, /docker image inspect/u);
+  assert.match(guardStep, /first_deployment_sentinel_revision=0000000000000000000000000000000000000000/u);
+  assert.match(guardStep, /ALLOW_FIRST_DEPLOY/u);
+  assert.match(guardStep, /HANDLEPLAN_ALLOW_FIRST_DEPLOY repository variable/u);
+  assert.match(guardStep, /First-deploy baseline requires provably empty deployment state/u);
   assert.doesNotMatch(guardStep, /\|\| true/u);
 
   const fixture = makeFixture();
@@ -1807,6 +1811,65 @@ test("deploy refuses first cutover without a verified immutable predecessor", ()
   rmSync(fixture.temp, { force: true, recursive: true });
   assert.notEqual(firstCutover.status, 0);
   assert.match(firstCutover.stderr, /first deployment fails closed/u);
+});
+
+test("deploy accepts the approved sentinel baseline for the first cutover", () => {
+  const fixture = makeFixture();
+  const stateDir = join(fixture.appRoot, "state");
+  rmSync(stateDir, { force: true, recursive: true });
+  mkdirSync(join(stateDir, "verified-images"), { recursive: true });
+  const sentinelRevision = "0".repeat(40);
+  const sentinelImageId = `sha256:${"0".repeat(64)}`;
+  writeFileSync(
+    join(stateDir, "current-deployment"),
+    `v1 ${sentinelRevision} current\n`,
+  );
+  writeFileSync(join(stateDir, "current-revision"), `${sentinelRevision}\n`);
+  writeFileSync(join(stateDir, "current-image-id"), `${sentinelImageId}\n`);
+  writeFileSync(join(stateDir, "deployment-high-water"), `${sentinelRevision}\n`);
+  writeFileSync(
+    join(stateDir, "verified-images", sentinelRevision),
+    `v1 ${sentinelRevision} ${sentinelImageId}\n`,
+  );
+  const manifestSha256 = sha256(
+    join(fixture.artifactDir, "handleplan-image-bundle.v1"),
+  );
+  const firstCutover = spawnSync(
+    join(fixture.scriptDir, "deploy-on-vps.sh"),
+    [
+      revision,
+      "12345",
+      "2",
+      manifestSha256,
+      pendingDeploymentToken,
+      sentinelRevision,
+      sentinelImageId,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HANDLEPLAN_APP_ROOT: fixture.appRoot,
+        MOCK_LOG: fixture.log,
+        MOCK_SOURCE_ARCHIVE: join(fixture.artifactDir, "handleplan-source.tar"),
+        PATH: `${fixture.bin}:${process.env.PATH}`,
+        PREVIOUS_REVISION: previousRevision,
+        REVISION: revision,
+      },
+    },
+  );
+  const debugLog = readFileSync(fixture.log, "utf8");
+  rmSync(fixture.temp, { force: true, recursive: true });
+  assert.notEqual(firstCutover.status, 0);
+  assert.doesNotMatch(
+    firstCutover.stderr,
+    /first deployment fails closed|empty verified baseline/u,
+  );
+  assert.match(
+    `${firstCutover.stderr}\n${debugLog}`,
+    /image load|Loaded CI image/u,
+    `stderr: ${firstCutover.stderr}\nlog: ${debugLog}`,
+  );
 });
 
 test("protected deploy leases transfer staging and cleans only its exact finished leaf", () => {
