@@ -233,7 +233,8 @@ jobs:
               install -d -m 700 "$state_dir"
               for artifact in current-revision current-image-id deployment-high-water pending-deployment accepted-deployment; do
                 test ! -e "$state_dir/$artifact" && test ! -L "$state_dir/$artifact" || {
-                  echo "First-deploy baseline requires provably empty deployment state" >&2
+                  echo "First-deploy baseline requires provably empty deployment state; existing state entries:" >&2
+                  find "$state_dir" -mindepth 1 -maxdepth 2 -printf "%y %p\n" >&2
                   exit 1
                 }
               done
