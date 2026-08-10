@@ -267,6 +267,44 @@ jobs:
           printf '%s' "$HANDLEPLAN_PRODUCTION_ENV" | ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
             deploy@198.23.137.16 "$(cat /tmp/handleplan-provision-script.sh)"
 
+      - name: Reset the stale pre-deployment postgres volume
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/handleplan-db-reset-script.sh <<'HANDLEPLAN_DB_RESET_SCRIPT'
+          set -eu
+          # A stale postgres volume from pre-deployment provisioning holds credentials
+          # that no longer match the protected production env. Reset is safe only while
+          # no real deployment has ever committed state.
+          if [ -f /opt/apps/handleplan/state/current-deployment ]; then
+          current=$(cat /opt/apps/handleplan/state/current-deployment)
+          case "$current" in
+          "v1 0000000000000000000000000000000000000000 current") : ;;
+          *)
+          echo "refusing to reset postgres: a real deployment is committed" >&2
+          exit 1
+          ;;
+          esac
+          fi
+          volumes=$(docker volume ls -q 2>/dev/null | grep 'postgres-data' || true)
+          if [ -z "$volumes" ]; then
+          echo "no stale postgres volume found" >&2
+          exit 0
+          fi
+          for container in $(docker ps -aq --filter name=postgres 2>/dev/null || true); do
+          docker rm -f "$container" >/dev/null 2>&1 || true
+          done
+          for volume in $volumes; do
+          docker volume rm "$volume" >/dev/null || {
+          echo "could not remove postgres volume $volume" >&2
+          exit 1
+          }
+          done
+          echo "stale postgres volume reset" >&2
+          HANDLEPLAN_DB_RESET_SCRIPT
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy@198.23.137.16 "$(cat /tmp/handleplan-db-reset-script.sh)"
+
       - name: Capture the exact immutable rollback guard
         id: rollback_guard
         shell: bash
