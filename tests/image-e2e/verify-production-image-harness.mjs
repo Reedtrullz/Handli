@@ -25,6 +25,8 @@ function requestBounded({
       method,
       path,
       port,
+      // lgtm[js/disabling-certificate-validation]
+      // Local container serves a self-signed cert; harness runs on 127.0.0.1 only.
       ...(secure ? { rejectUnauthorized: false } : {}),
     }, (response) => {
       const chunks = [];
