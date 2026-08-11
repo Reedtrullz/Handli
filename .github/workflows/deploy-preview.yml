@@ -267,7 +267,7 @@ jobs:
           printf '%s' "$HANDLEPLAN_PRODUCTION_ENV" | ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
             deploy@198.23.137.16 "$(cat /tmp/handleplan-provision-script.sh)"
 
-      - name: Provision the public origin routing (Caddy)
+      - name: Provision the Handleplan origin routing additively (Caddy)
         shell: bash
         run: |
           set -euo pipefail
@@ -289,6 +289,8 @@ jobs:
           echo "sudo is unavailable for Caddy provisioning" >&2
           exit 1
           }
+          begin_marker='# BEGIN ANSIBLE MANAGED - Handleplan'
+          end_marker='# END ANSIBLE MANAGED - Handleplan'
           backup=/etc/caddy/Caddyfile.bak.$$
           backup_made=0
           if [ -f /etc/caddy/Caddyfile ]; then
@@ -303,7 +305,42 @@ jobs:
           fi
           sudo -n systemctl reload caddy 2>/dev/null || sudo -n systemctl restart caddy || true
           }
-          sudo -n install -m 644 /tmp/handleplan-Caddyfile /etc/caddy/Caddyfile
+          merged=/tmp/handleplan-Caddyfile.merged
+          # Replace only the Handleplan-managed block; every other site block in
+          # the shared /etc/caddy/Caddyfile is preserved verbatim.
+          awk -v fragment=/tmp/handleplan-Caddyfile -v begin="$begin_marker" -v end="$end_marker" '
+          $0 == begin {
+          in_block = 1
+          print
+          while ((getline line < fragment) > 0) print line
+          close(fragment)
+          next
+          }
+          $0 == end {
+          in_block = 0
+          print
+          next
+          }
+          !in_block { print }
+          ' /etc/caddy/Caddyfile > "$merged"
+          if ! grep -qF "$begin_marker" "$merged"; then
+          printf '%s\n' "$begin_marker" >> "$merged"
+          cat /tmp/handleplan-Caddyfile >> "$merged"
+          printf '%s\n' "$end_marker" >> "$merged"
+          fi
+          grep -q '^# BEGIN ANSIBLE MANAGED - ' "$merged" || {
+          echo "merged Caddyfile contains no other managed blocks; refusing to install a Handleplan-only config" >&2
+          restore_caddy
+          exit 1
+          }
+          test "$(grep -c '^handle\.reidar\.tech {' "$merged")" -eq 1 || {
+          echo "merged Caddyfile must contain exactly one handle.reidar.tech block" >&2
+          restore_caddy
+          exit 1
+          }
+          if ! cmp -s "$merged" /etc/caddy/Caddyfile; then
+          sudo -n install -m 644 "$merged" /etc/caddy/Caddyfile
+          fi
           if command -v caddy >/dev/null 2>&1; then
           sudo -n caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null || {
           echo "invalid Caddyfile on the VPS; restoring the previous config" >&2
@@ -318,7 +355,7 @@ jobs:
           exit 1
           fi
           fi
-          echo "public origin routing provisioned" >&2
+          echo "handle.reidar.tech block merged additively into the shared Caddyfile" >&2
           HANDLEPLAN_CADDY_SCRIPT
           sed -i "s/@CADDY_SHA@/$caddy_sha256/" /tmp/handleplan-caddy-script.sh
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
