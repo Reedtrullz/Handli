@@ -1080,7 +1080,7 @@ worker_health=""
 
 verify_review_runtime() {
   target_revision=$1
-  target_image=$loaded_image_id
+  target_image="handleplan:$target_revision"
   review_container=$(APP_COMMIT_SHA="$target_revision" HANDLEPLAN_IMAGE="$target_image" \
     HANDLEPLAN_MIGRATION_IMAGE="$target_image" \
     docker compose --env-file "$env_file" \
@@ -1108,7 +1108,7 @@ verify_review_runtime() {
 
 verify_operations_runtime() {
   target_revision=$1
-  target_image=$loaded_image_id
+  target_image="handleplan:$target_revision"
   operations_container=$(APP_COMMIT_SHA="$target_revision" HANDLEPLAN_IMAGE="$target_image" \
     HANDLEPLAN_MIGRATION_IMAGE="$target_image" \
     docker compose --env-file "$env_file" \
@@ -1150,7 +1150,7 @@ read_worker_health() {
 
 verify_current_deployment() {
   target_revision=$1
-  target_image=$loaded_image_id
+  target_image="handleplan:$target_revision"
   health=$(curl --fail --silent --show-error http://127.0.0.1:3004/api/health) || {
     echo "readback check failed: app health curl" >&2
     return 1
