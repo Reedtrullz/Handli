@@ -25,22 +25,14 @@ jobs:
           printf '%s\n' "$VPS_SSH_HOST_KEY" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes deploy@198.23.137.16 true
-      - name: Inspect remaining space consumers
+      - name: Prune unused docker images and verify
         run: |
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
             deploy@198.23.137.16 '
           set -u
-          echo "--- df ---"
+          docker image prune -a -f 2>&1 | tail -3 || true
+          echo "--- remaining images ---"
+          docker images --format "{{.Repository}}:{{.Tag}} {{.Size}}" 2>&1 | head -20 || true
+          echo "--- free space ---"
           df -h / 2>&1 || true
-          echo "--- docker system df ---"
-          docker system df 2>&1 || true
-          echo "--- volumes ---"
-          docker volume ls 2>&1 || true
-          docker system df -v 2>&1 | grep -E "VOLUME|LOCAL|postgres|private|capture" | head -10 || true
-          echo "--- /opt/apps ---"
-          sudo -n du -sh /opt/apps/* 2>/dev/null | sort -rh | head -10 || true
-          echo "--- /tmp ---"
-          sudo -n du -sh /tmp/* 2>/dev/null | sort -rh | head -10 || true
-          echo "--- journal ---"
-          sudo -n journalctl --disk-usage 2>&1 || true
           '
