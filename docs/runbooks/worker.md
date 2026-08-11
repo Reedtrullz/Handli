@@ -450,3 +450,5 @@ future hardening. It does not prove a credentialed production Kassalapp run,
 contractual permission, current regional coverage, a public source-health
 dashboard, external alert delivery, off-host encrypted backup, monthly restore
 drills, or clean-host recovery.
+
+- OPERATIONS_SOURCE_ROSTER_JSON is the full roster object (entries with requiredEvidenceSignals/requiredWorkerJobKinds, version, and the canonical contentSha256), not a bare source-id array. Generate it with canonicalizeOperationsSourceRosterV1; the bare array form passes compose config but fails the operations readiness probe at runtime.
