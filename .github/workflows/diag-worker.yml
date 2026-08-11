@@ -1,0 +1,41 @@
+name: Diag worker (temporary)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      VPS_SSH_HOST_KEY: ${{ secrets.VPS_SSH_HOST_KEY }}
+      VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Configure pinned VPS access
+        run: |
+          set -euo pipefail
+          test -n "$VPS_SSH_HOST_KEY"
+          test -n "$VPS_SSH_PRIVATE_KEY"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/handleplan_deploy
+          chmod 600 ~/.ssh/handleplan_deploy
+          printf '%s\n' "$VPS_SSH_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes deploy@198.23.137.16 true
+      - name: Read worker diagnostics
+        run: |
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy@198.23.137.16 '
+          set -eu
+          echo "--- docker ps ---"
+          docker ps --format "{{.Names}} | {{.Status}}" | grep handleplan || true
+          echo "--- worker env access ---"
+          docker exec handleplan-worker-1 sh -c "printf \"KASSAL_SOURCE_ACCESS=%s\n\" \"\${KASSAL_SOURCE_ACCESS:-<unset>}\"; printf \"APP_COMMIT_SHA=%s\n\" \"\${APP_COMMIT_SHA:-<unset>}\"" 2>&1 || true
+          echo "--- worker logs tail ---"
+          docker logs --tail 150 handleplan-worker-1 2>&1 || true
+          echo "--- worker state files ---"
+          ls -la /opt/apps/handleplan/state 2>&1 | head -20 || true
+          '
