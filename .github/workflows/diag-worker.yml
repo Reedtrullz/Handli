@@ -36,6 +36,17 @@ jobs:
           docker exec handleplan-worker-1 sh -c "printf \"KASSAL_SOURCE_ACCESS=%s\n\" \"\${KASSAL_SOURCE_ACCESS:-<unset>}\"; printf \"APP_COMMIT_SHA=%s\n\" \"\${APP_COMMIT_SHA:-<unset>}\"" 2>&1 || true
           echo "--- worker logs tail ---"
           docker logs --tail 150 handleplan-worker-1 2>&1 || true
-          echo "--- worker state files ---"
-          ls -la /opt/apps/handleplan/state 2>&1 | head -20 || true
+          echo "--- worker health ---"
+          curl -s -m 10 http://127.0.0.1:3005/health || true
+          echo
+          echo "--- worker process state ---"
+          docker top handleplan-worker-1 2>&1 || true
+          echo "--- database recent worker state ---"
+          docker exec handleplan-postgres-1 sh -c '
+          set -eu
+          PGPASSWORD="$POSTGRES_PASSWORD" psql -X --no-password -U postgres -d handleplan -c "select schedule_key, last_scheduled_at from worker_state order by schedule_key" 2>&1 || true
+          PGPASSWORD="$POSTGRES_PASSWORD" psql -X --no-password -U postgres -d handleplan -c "select job_id, status, created_at from worker_job_results order by created_at desc limit 12" 2>&1 || true
+          PGPASSWORD="$POSTGRES_PASSWORD" psql -X --no-password -U postgres -d handleplan -c "select source_id, status, recorded_at, last_discovery_success_at, last_capture_success_at from source_health_snapshots order by recorded_at desc limit 6" 2>&1 || true
+          PGPASSWORD="$POSTGRES_PASSWORD" psql -X --no-password -U postgres -d handleplan -c "select source_id, status, started_at, completed_at from ingestion_runs order by started_at desc limit 8" 2>&1 || true
+          ' 2>&1 || true
           '
