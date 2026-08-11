@@ -320,7 +320,7 @@ jobs:
           fi
           echo "public origin routing provisioned" >&2
           HANDLEPLAN_CADDY_SCRIPT
-          sed -i '' "s/@CADDY_SHA@/$caddy_sha256/" /tmp/handleplan-caddy-script.sh
+          sed -i "s/@CADDY_SHA@/$caddy_sha256/" /tmp/handleplan-caddy-script.sh
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
             deploy@198.23.137.16 "$(cat /tmp/handleplan-caddy-script.sh)"
 
