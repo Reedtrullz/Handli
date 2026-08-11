@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
-      VPS_SSH_HOST_KEY: ${{ secrets.VPS_SSH_HOST_KEY }}
+      VPS_SSH_HOST_KEY: ${{ vars.VPS_SSH_HOST_KEY }}
       VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
     steps:
       - name: Configure pinned VPS access
