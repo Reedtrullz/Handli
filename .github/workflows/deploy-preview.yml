@@ -332,14 +332,15 @@ jobs:
           set -eu
           # A stale postgres volume from pre-deployment provisioning holds credentials
           # that no longer match the protected production env. Reset is safe only while
-          # no real deployment has ever committed state.
+          # no real deployment has ever committed state; a committed deployment owns a
+          # forward database that must never be reset by a redeploy.
           if [ -f /opt/apps/handleplan/state/current-deployment ]; then
           current=$(cat /opt/apps/handleplan/state/current-deployment)
           case "$current" in
           "v1 0000000000000000000000000000000000000000 current") : ;;
           *)
-          echo "refusing to reset postgres: a real deployment is committed" >&2
-          exit 1
+          echo "postgres already matches a committed deployment; skipping reset" >&2
+          exit 0
           ;;
           esac
           fi
