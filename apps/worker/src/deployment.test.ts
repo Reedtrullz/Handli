@@ -1242,7 +1242,10 @@ describe("production runtime deployment", () => {
       "@review_paths path /review /review/* /api/review /api/review/*",
     );
     expect(proxy).not.toContain("@review_paths path /review*");
-    expect(proxy).toContain("@missing_access not header Cf-Access-Jwt-Assertion *");
+    expect(proxy).toContain("@missing_private_access {");
+    expect(proxy).toContain("not header Cf-Access-Jwt-Assertion *");
+    expect(proxy).toContain('respond @missing_private_access "Forbidden" 403');
+    expect(proxy).not.toContain("@missing_access not header Cf-Access-Jwt-Assertion *");
     expect(proxy).toMatch(/@not_cloudflare not remote_ip [^\n]+/u);
     const reviewHandle = proxy.match(/handle @review_paths \{([\s\S]*?)\n\t\t\}/u)?.[1];
     const operationsHandle = proxy.match(
@@ -1326,7 +1329,7 @@ describe("production runtime deployment", () => {
     expect(privateHealthDenyIndex).toBeLessThan(publicHandleIndex);
     for (const globalGate of [
       'respond @not_cloudflare "Forbidden" 403',
-      'respond @missing_access "Forbidden" 403',
+      'respond @missing_private_access "Forbidden" 403',
     ]) {
       expect(proxy.indexOf(globalGate)).toBeGreaterThanOrEqual(0);
       expect(proxy.indexOf(globalGate)).toBeLessThan(reviewHandleIndex);
