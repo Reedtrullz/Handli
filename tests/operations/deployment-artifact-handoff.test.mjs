@@ -1005,33 +1005,33 @@ test("external promotion proof accepts the exact shell and rejects root or API f
 
   const root404 = runExternalDeploymentProbe({ rootStatus: 404 });
   assert.equal(root404.status, 1);
-  assert.equal(root404.stderr, "external-deployment-readback=failed\n");
+  assert.match(root404.stderr, /^external-deployment-readback=failed: /u);
 
   const permanentRootRedirect = runExternalDeploymentProbe({ rootStatus: 308 });
   assert.equal(permanentRootRedirect.status, 1);
-  assert.equal(
+  assert.match(
     permanentRootRedirect.stderr,
-    "external-deployment-readback=failed\n",
+    /^external-deployment-readback=failed: /u,
   );
 
   const wrongRootTarget = runExternalDeploymentProbe({ rootLocation: "/oppdag" });
   assert.equal(wrongRootTarget.status, 1);
-  assert.equal(wrongRootTarget.stderr, "external-deployment-readback=failed\n");
+  assert.match(wrongRootTarget.stderr, /^external-deployment-readback=failed: /u);
 
   const noncanonicalRootTarget = runExternalDeploymentProbe({
     rootLocation: "https://handle.reidar.tech/planlegg",
   });
   assert.equal(noncanonicalRootTarget.status, 1);
-  assert.equal(
+  assert.match(
     noncanonicalRootTarget.stderr,
-    "external-deployment-readback=failed\n",
+    /^external-deployment-readback=failed: /u,
   );
 
   const wrongBuild = runExternalDeploymentProbe({
     shellBuildId: `hpv2-${"0".repeat(64)}`,
   });
   assert.equal(wrongBuild.status, 1);
-  assert.equal(wrongBuild.stderr, "external-deployment-readback=failed\n");
+  assert.match(wrongBuild.stderr, /^external-deployment-readback=failed: /u);
 
   const utf8Alias = runExternalDeploymentProbe({
     shellContentType: "text/html; charset=UTF8",
@@ -1042,20 +1042,20 @@ test("external promotion proof accepts the exact shell and rejects root or API f
     shellContentType: "text/html; charset=iso-8859-1",
   });
   assert.equal(wrongCharset.status, 1);
-  assert.equal(wrongCharset.stderr, "external-deployment-readback=failed\n");
+  assert.match(wrongCharset.stderr, /^external-deployment-readback=failed: /u);
 
   const missingCharset = runExternalDeploymentProbe({
     shellContentType: "text/html",
   });
   assert.equal(missingCharset.status, 1);
-  assert.equal(missingCharset.stderr, "external-deployment-readback=failed\n");
+  assert.match(missingCharset.stderr, /^external-deployment-readback=failed: /u);
 
   for (const shellMarkerPlacement of ["comment", "script", "body", "duplicate"]) {
     const decoyMarker = runExternalDeploymentProbe({ shellMarkerPlacement });
     assert.equal(decoyMarker.status, 1);
-    assert.equal(
+    assert.match(
       decoyMarker.stderr,
-      "external-deployment-readback=failed\n",
+      /^external-deployment-readback=failed: /u,
     );
   }
 
@@ -1063,15 +1063,15 @@ test("external promotion proof accepts the exact shell and rejects root or API f
     healthRevision: "0".repeat(40),
   });
   assert.equal(wrongHealthRevision.status, 1);
-  assert.equal(wrongHealthRevision.stderr, "external-deployment-readback=failed\n");
+  assert.match(wrongHealthRevision.stderr, /^external-deployment-readback=failed: /u);
 
   const oversizedShell = runExternalDeploymentProbe({ oversizedShell: true });
   assert.equal(oversizedShell.status, 1);
-  assert.equal(oversizedShell.stderr, "external-deployment-readback=failed\n");
+  assert.match(oversizedShell.stderr, /^external-deployment-readback=failed: /u);
 
   const readinessFailure = runExternalDeploymentProbe({ readinessStatus: 503 });
   assert.equal(readinessFailure.status, 1);
-  assert.equal(readinessFailure.stderr, "external-deployment-readback=failed\n");
+  assert.match(readinessFailure.stderr, /^external-deployment-readback=failed: /u);
 });
 
 test("an externally rejected candidate is guardedly rolled back and cannot race newer state", () => {
