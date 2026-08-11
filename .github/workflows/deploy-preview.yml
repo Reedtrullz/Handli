@@ -695,7 +695,9 @@ jobs:
           async function verifyPublicShell() {
             const root = await readBounded("/", maximumJsonBytes, "text/html");
             if (root.response.status !== 307) {
-              throw new Error("external root redirect unavailable");
+              throw new Error(
+                `external root redirect unavailable: status ${root.response.status} location ${String(root.response.headers.get("location"))}`,
+              );
             }
             const location = root.response.headers.get("location");
             if (location !== "/planlegg") {
