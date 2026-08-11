@@ -1,0 +1,46 @@
+name: Diag worker (temporary)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      VPS_SSH_HOST_KEY: ${{ vars.VPS_SSH_HOST_KEY }}
+      VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Configure pinned VPS access
+        run: |
+          set -euo pipefail
+          test -n "$VPS_SSH_HOST_KEY"
+          test -n "$VPS_SSH_PRIVATE_KEY"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/handleplan_deploy
+          chmod 600 ~/.ssh/handleplan_deploy
+          printf '%s\n' "$VPS_SSH_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes deploy@198.23.137.16 true
+      - name: Inspect remaining space consumers
+        run: |
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy@198.23.137.16 '
+          set -u
+          echo "--- df ---"
+          df -h / 2>&1 || true
+          echo "--- docker system df ---"
+          docker system df 2>&1 || true
+          echo "--- volumes ---"
+          docker volume ls 2>&1 || true
+          docker system df -v 2>&1 | grep -E "VOLUME|LOCAL|postgres|private|capture" | head -10 || true
+          echo "--- /opt/apps ---"
+          sudo -n du -sh /opt/apps/* 2>/dev/null | sort -rh | head -10 || true
+          echo "--- /tmp ---"
+          sudo -n du -sh /tmp/* 2>/dev/null | sort -rh | head -10 || true
+          echo "--- journal ---"
+          sudo -n journalctl --disk-usage 2>&1 || true
+          '
