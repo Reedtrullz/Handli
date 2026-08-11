@@ -1151,20 +1151,26 @@ read_worker_health() {
 verify_current_deployment() {
   target_revision=$1
   target_image=$loaded_image_id
-  health=$(curl --fail --silent --show-error http://127.0.0.1:3004/api/health) || return 1
+  health=$(curl --fail --silent --show-error http://127.0.0.1:3004/api/health) || {
+    echo "readback check failed: app health curl" >&2
+    return 1
+  }
   printf '%s' "$health" | grep -F "\"commit\":\"$target_revision\"" >/dev/null \
-    || return 1
+    || { echo "readback check failed: app health commit label" >&2; return 1; }
   app_container=$(APP_COMMIT_SHA="$target_revision" HANDLEPLAN_IMAGE="$target_image" \
     HANDLEPLAN_MIGRATION_IMAGE="$target_image" \
     docker compose --env-file "$env_file" \
-      -f "$deployment_source_dir/deploy/compose.production.yml" ps -q app) || return 1
-  test -n "$app_container" || return 1
+      -f "$deployment_source_dir/deploy/compose.production.yml" ps -q app) || {
+    echo "readback check failed: app container lookup" >&2
+    return 1
+  }
+  test -n "$app_container" || { echo "readback check failed: app container absent" >&2; return 1; }
   app_image=$(docker inspect --format '{{.Config.Image}}' "$app_container") || return 1
   app_image_id=$(docker inspect --format '{{.Image}}' "$app_container") || return 1
-  test "$app_image" = "$target_image" || return 1
-  test "$app_image_id" = "$loaded_image_id" || return 1
-  verify_review_runtime "$target_revision" || return 1
-  verify_operations_runtime "$target_revision" || return 1
+  test "$app_image" = "$target_image" || { echo "readback check failed: app image tag ($app_image != $target_image)" >&2; return 1; }
+  test "$app_image_id" = "$loaded_image_id" || { echo "readback check failed: app image id ($app_image_id != $loaded_image_id)" >&2; return 1; }
+  verify_review_runtime "$target_revision" || { echo "readback check failed: review runtime" >&2; return 1; }
+  verify_operations_runtime "$target_revision" || { echo "readback check failed: operations runtime" >&2; return 1; }
 
   attempts=0
   while [ "$attempts" -lt 660 ]; do
