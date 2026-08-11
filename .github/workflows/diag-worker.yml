@@ -25,21 +25,16 @@ jobs:
           printf '%s\n' "$VPS_SSH_HOST_KEY" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes deploy@198.23.137.16 true
-      - name: Inspect VPS disk usage
+      - name: Free VPS disk and verify
         run: |
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
             deploy@198.23.137.16 '
           set -u
-          echo "--- df ---"
+          keep="42936fc1184c13c2688927fec7ebca2728def67c|2791bf942529fae6d7bb89c0043e10f8021d2341"
+          docker images --format "{{.Repository}}:{{.Tag}}" | grep "^handleplan:" | grep -vE "$keep" | xargs -r docker image rm 2>&1 || true
+          docker image prune -f 2>&1 || true
+          echo "--- remaining images ---"
+          docker images --format "{{.Repository}}:{{.Tag}} {{.Size}}" 2>&1 || true
+          echo "--- free space ---"
           df -h / 2>&1 || true
-          echo "--- docker system df ---"
-          docker system df 2>&1 || true
-          echo "--- images ---"
-          docker images --format "{{.Repository}}:{{.Tag}} {{.ID}} {{.Size}}" 2>&1 || true
-          echo "--- bundles ---"
-          find /opt/apps/handleplan/deploy-bundles -maxdepth 4 -mindepth 1 -type d 2>/dev/null | sort || true
-          du -sh /opt/apps/handleplan/deploy-bundles 2>/dev/null || true
-          echo "--- state ---"
-          cat /opt/apps/handleplan/state/current-revision /opt/apps/handleplan/state/current-image-id 2>&1 || true
-          ls /opt/apps/handleplan/state/verified-images 2>&1 || true
           '
