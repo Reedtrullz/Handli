@@ -74,7 +74,7 @@ Configure these environment variables (not repository variables):
   revision currently deployed.
 - `HANDLEPLAN_MONITOR_EXPECTED_MIGRATION`: the migration filename the deployed
   readiness contract must report, for example
-  `028_private_review_image_evidence_only.sql`. Update this environment variable
+  `029_kassalapp_source_approval.sql`. Update this environment variable
   in deployment lockstep with the application/readiness promotion; a stale
   value must alert rather than teaching the monitor to accept either version.
 

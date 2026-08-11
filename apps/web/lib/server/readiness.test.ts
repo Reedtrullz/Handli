@@ -6,21 +6,22 @@ import {
   BoundedDatabaseReadinessProbe,
   ReadinessUnavailableError,
 } from "./readiness";
+import { REQUIRED_DATABASE_MIGRATION } from "./readiness";
 
 describe("database readiness", () => {
   it("reports the exact required migration only after the database confirms it", async () => {
     const checkMigration = vi.fn(async () => true);
     const probe = new BoundedDatabaseReadinessProbe({
       checkMigration,
-      requiredMigration: "028_private_review_image_evidence_only.sql",
+      requiredMigration: REQUIRED_DATABASE_MIGRATION,
       timeoutMs: 100,
     });
 
     await expect(probe.check()).resolves.toEqual({
-      requiredMigration: "028_private_review_image_evidence_only.sql",
+      requiredMigration: REQUIRED_DATABASE_MIGRATION,
     });
     expect(checkMigration).toHaveBeenCalledWith(
-      "028_private_review_image_evidence_only.sql",
+      REQUIRED_DATABASE_MIGRATION,
       expect.any(AbortSignal),
     );
   });
@@ -28,7 +29,7 @@ describe("database readiness", () => {
   it("fails closed when the required migration is absent", async () => {
     const probe = new BoundedDatabaseReadinessProbe({
       checkMigration: async () => false,
-      requiredMigration: "028_private_review_image_evidence_only.sql",
+      requiredMigration: REQUIRED_DATABASE_MIGRATION,
       timeoutMs: 100,
     });
 
@@ -43,7 +44,7 @@ describe("database readiness", () => {
         dependencySignal = signal;
         return await new Promise<boolean>(() => undefined);
       },
-      requiredMigration: "028_private_review_image_evidence_only.sql",
+      requiredMigration: REQUIRED_DATABASE_MIGRATION,
       timeoutMs: 25,
     });
 

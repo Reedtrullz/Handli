@@ -8,6 +8,7 @@ import {
   type PrivateRuntimeKind,
   type PrivateRuntimeReadinessProbe,
 } from "../../../../lib/server/private-runtime-readiness";
+import { REQUIRED_DATABASE_MIGRATION } from "../../../../lib/server/readiness";
 
 function request(runtime: PrivateRuntimeKind, overrides: RequestInit = {}): Request {
   return new Request(`http://127.0.0.1:3000/api/internal/health/${runtime}`, {
@@ -24,7 +25,7 @@ function probe(runtime: PrivateRuntimeKind): PrivateRuntimeReadinessProbe {
   return {
     check: async () => ({
       databaseRole: runtime === "review" ? "handleplan_review" : "handleplan_operations",
-      requiredMigration: "028_private_review_image_evidence_only.sql",
+      requiredMigration: REQUIRED_DATABASE_MIGRATION,
       runtime,
     }),
   };
@@ -44,7 +45,7 @@ describe("loopback-only private runtime health routes", () => {
       expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
       await expect(response.json()).resolves.toEqual({
         database: {
-          requiredMigration: "028_private_review_image_evidence_only.sql",
+          requiredMigration: REQUIRED_DATABASE_MIGRATION,
           role: runtime === "review" ? "handleplan_review" : "handleplan_operations",
           status: "ok",
         },
@@ -134,7 +135,7 @@ describe("loopback-only private runtime health routes", () => {
     const wrongRole = createPrivateRuntimeReadyHandler("operations", async () => ({
       check: async () => ({
         databaseRole: "handleplan_review",
-        requiredMigration: "028_private_review_image_evidence_only.sql",
+        requiredMigration: REQUIRED_DATABASE_MIGRATION,
         runtime: "operations",
       }),
     }));
