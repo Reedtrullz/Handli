@@ -191,3 +191,5 @@ Therefore external monitoring and alert delivery are explicitly **not active
 or proven**. A public-v1 claim requires links or immutable references to the
 successful external probe and completed notification drill, plus the separate
 operational evidence listed above.
+
+- Public shell paths: the Cloudflare Access "Handleplan protected preview" app uses a bypass policy for the public-monitor service token (decision bypass, include service_token by internal UUID) so the monitor can reach /, /planlegg, /api/health, and /api/ready without an interactive login; /review and /internal/operations remain behind their path-scoped apps with the owner email policy.
