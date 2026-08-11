@@ -193,3 +193,5 @@ successful external probe and completed notification drill, plus the separate
 operational evidence listed above.
 
 - Public shell paths: the Cloudflare Access "Handleplan protected preview" app uses a bypass policy for the public-monitor service token (decision bypass, include service_token by internal UUID) so the monitor can reach /, /planlegg, /api/health, and /api/ready without an interactive login; /review and /internal/operations remain behind their path-scoped apps with the owner email policy.
+
+- The HANDLEPLAN_MONITOR_CF_ACCESS_CLIENT_ID repository secret is the bare Access service-token client id (e.g. "eac6dd…access") with no prefix.
