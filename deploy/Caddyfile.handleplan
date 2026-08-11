@@ -1,6 +1,7 @@
 # Cloudflare's published proxy ranges are pinned here so direct-origin traffic
-# cannot reach an upstream with a forged Host header. The owner-only preview
-# keeps its hostname-wide Access gate; exact private paths also get app JWT proof.
+# cannot reach an upstream with a forged Host header. The public app is public;
+# only the exact private paths require a signed Access assertion (the origin
+# trusts Cloudflare Access, which the application verifies cryptographically).
 handle.reidar.tech {
 	encode zstd gzip
 
@@ -8,14 +9,17 @@ handle.reidar.tech {
 	@private_health_paths path /api/internal/health/review /api/internal/health/review/ /api/internal/health/operations /api/internal/health/operations/
 	@operations_paths path /internal/operations /internal/operations/ /api/internal/operations/snapshot /api/internal/operations/snapshot/
 	@review_paths path /review /review/* /api/review /api/review/*
-	@missing_access not header Cf-Access-Jwt-Assertion *
+	@missing_private_access {
+		path /review /review/* /api/review /api/review/* /internal/operations /internal/operations/* /api/internal/operations/snapshot /api/internal/operations/snapshot/*
+		not header Cf-Access-Jwt-Assertion *
+	}
 
 	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 	route {
 		respond @not_cloudflare "Forbidden" 403
 		# Container health routes are loopback probes, never origin endpoints.
 		respond @private_health_paths "Not Found" 404
-		respond @missing_access "Forbidden" 403
+		respond @missing_private_access "Forbidden" 403
 
 		handle @operations_paths {
 			reverse_proxy 127.0.0.1:3007 {
