@@ -754,8 +754,12 @@ jobs:
             validateHealthContract(await readJsonContract("/api/health"), expectedRevision);
             validateReadinessContract(await readJsonContract("/api/ready"), expectedMigration);
             process.stdout.write("external-deployment-readback=ok\n");
-          } catch {
-            process.stderr.write("external-deployment-readback=failed\n");
+          } catch (error) {
+            process.stderr.write(
+              "external-deployment-readback=failed: "
+              + (error instanceof Error ? error.message : String(error))
+              + "\n",
+            );
             process.exitCode = 1;
           }
           NODE
