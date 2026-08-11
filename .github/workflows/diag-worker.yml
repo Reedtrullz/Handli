@@ -29,7 +29,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
             deploy@198.23.137.16 '
-          set -eu
+          set -u
           echo "--- docker ps ---"
           docker ps --format "{{.Names}} | {{.Status}}" | grep handleplan || true
           echo "--- worker env access ---"
@@ -37,8 +37,10 @@ jobs:
           echo "--- worker logs tail ---"
           docker logs --tail 150 handleplan-worker-1 2>&1 || true
           echo "--- worker health ---"
-          curl -s -m 10 http://127.0.0.1:3005/health || true
+          docker exec handleplan-worker-1 wget -qO- http://127.0.0.1:3005/health 2>&1 || true
           echo
+          echo "--- worker restart details ---"
+          docker inspect handleplan-worker-1 --format 'RestartCount={{.RestartCount}} ExitCode={{.State.ExitCode}} OOM={{.State.OOMKilled}} Status={{.State.Status}} StartedAt={{.State.StartedAt}} FinishedAt={{.State.FinishedAt}}' 2>&1 || true
           echo "--- worker process state ---"
           docker top handleplan-worker-1 2>&1 || true
           echo "--- database recent worker state ---"
