@@ -1,0 +1,45 @@
+name: Diag worker (temporary)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      VPS_SSH_HOST_KEY: ${{ vars.VPS_SSH_HOST_KEY }}
+      VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Configure pinned VPS access
+        run: |
+          set -euo pipefail
+          test -n "$VPS_SSH_HOST_KEY"
+          test -n "$VPS_SSH_PRIVATE_KEY"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/handleplan_deploy
+          chmod 600 ~/.ssh/handleplan_deploy
+          printf '%s\n' "$VPS_SSH_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes deploy@198.23.137.16 true
+      - name: Inspect VPS disk usage
+        run: |
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy@198.23.137.16 '
+          set -u
+          echo "--- df ---"
+          df -h / 2>&1 || true
+          echo "--- docker system df ---"
+          docker system df 2>&1 || true
+          echo "--- images ---"
+          docker images --format "{{.Repository}}:{{.Tag}} {{.ID}} {{.Size}}" 2>&1 || true
+          echo "--- bundles ---"
+          find /opt/apps/handleplan/deploy-bundles -maxdepth 4 -mindepth 1 -type d 2>/dev/null | sort || true
+          du -sh /opt/apps/handleplan/deploy-bundles 2>/dev/null || true
+          echo "--- state ---"
+          cat /opt/apps/handleplan/state/current-revision /opt/apps/handleplan/state/current-image-id 2>&1 || true
+          ls /opt/apps/handleplan/state/verified-images 2>&1 || true
+          '
