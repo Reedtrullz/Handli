@@ -77,17 +77,7 @@ jobs:
             curl -s -o /tmp/kassal-products.json -w "http_status=%{http_code} time=%{time_total}s size=%{size_download}\n" -m 20 \
               -H "Authorization: Bearer ${KASSAL_API_KEY:-missing}" \
               "https://kassal.app/api/v1/products?page=1&size=100&sort=date_desc&unique=1&exclude_without_ean=1"
-            python3 -c "
-import json
-with open('/tmp/kassal-products.json') as f:
-    d = json.load(f)
-print('top-level keys:', sorted(d.keys()))
-data = d.get('data')
-print('data type:', type(data).__name__, 'len:', len(data) if isinstance(data, list) else '-')
-if isinstance(data, list) and data:
-    print('first item keys:', sorted(data[0].keys()))
-    print('first item sample:', json.dumps(data[0], ensure_ascii=False)[:600])
-"
+            head -c 1200 /tmp/kassal-products.json
             echo
             rm -f /tmp/kassal-products.json
             echo "== product counts =="
