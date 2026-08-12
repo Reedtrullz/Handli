@@ -57,7 +57,10 @@ jobs:
               "select run_type, status, started_at, completed_at, counts from ingestion_runs order by started_at desc limit 8;"
             echo "== recent worker job results =="
             docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
-              "select job_kind, status, scheduled_at, started_at, completed_at, counters from worker_job_results order by started_at desc limit 8;"
+              "select job_kind, status, scheduled_at, started_at, completed_at, counts from worker_job_results order by started_at desc limit 8;"
+            echo "== catalog run error details =="
+            docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
+              "select run_type, status, counts, summary from ingestion_runs where run_type = 'catalog' order by started_at desc limit 3;"
             echo "== product counts =="
             docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
               "select (select count(*) from source_products) as source_products, (select count(*) from canonical_products) as canonical_products, (select count(*) from catalog_observations) as catalog_observations;"
