@@ -66,7 +66,10 @@ jobs:
               "select id, runtime_state from data_sources;"
             echo "== source_permissions =="
             docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
-              "select source_id, decision, permissions, notes from source_permissions where source_id = 'kassalapp' order by id desc limit 3;"
+              "select source_id, decision, reviewed_at, valid_until, permissions, notes from source_permissions where source_id = 'kassalapp' order by id desc limit 3;"
+            echo "== data_sources permission fields =="
+            docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
+              "select id, runtime_state, permission_reviewed_at, permission_expires_at, kill_switch_reason from data_sources where id = 'kassalapp';"
             echo "== probe kassal.app products endpoint =="
             . /opt/apps/handleplan/shared/production.env 2>/dev/null || true
             curl -s -o /tmp/kassal-products.json -w "http_status=%{http_code} time=%{time_total}s\n" -m 15 \
