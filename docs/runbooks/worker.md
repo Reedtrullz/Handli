@@ -60,7 +60,7 @@ The UTC schedule is deterministic:
 
 | Job | Anchor | Interval | Timeout |
 | --- | --- | --- | --- |
-| Catalog refresh | 15:00 | 24 h | 15 min |
+| Catalog refresh | 16:00 | 24 h | 15 min |
 | Benchmark prices | 00:30 | 6 h | 5 min |
 | Physical stores | 03:15 | 24 h | 5 min |
 | Historical observations | 04:15 | 24 h | 15 min |
