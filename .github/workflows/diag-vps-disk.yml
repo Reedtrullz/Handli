@@ -44,6 +44,10 @@ jobs:
             done
             rm -f "$used"
             echo "removed $freed unused image ids"
+            echo "== handleplan containers =="
+            docker ps -a --filter "name=handleplan" --format "{{.Names}} {{.Image}} {{.Status}}"
+            echo "== recent worker logs =="
+            docker logs --tail 120 "$(docker ps -aq --filter name=handleplan-worker | head -1)" 2>&1 || true
             echo "== df -h =="
             df -h /
             echo "== df /opt/apps/handleplan =="
