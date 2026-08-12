@@ -60,7 +60,21 @@ jobs:
               "select job_kind, status, scheduled_at, started_at, completed_at, counts from worker_job_results order by started_at desc limit 8;"
             echo "== catalog run error details =="
             docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
-              "select run_type, status, counts, summary from ingestion_runs where run_type = 'catalog' order by started_at desc limit 3;"
+              "select run_type, status, counts, error_class from ingestion_runs where run_type = 'catalog' order by started_at desc limit 3;"
+            echo "== data_sources =="
+            docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
+              "select id, runtime_state from data_sources;"
+            echo "== source_permissions =="
+            docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
+              "select source_id, decision, permissions, notes from source_permissions where source_id = 'kassalapp' order by id desc limit 3;"
+            echo "== probe kassal.app products endpoint =="
+            . /opt/apps/handleplan/shared/production.env 2>/dev/null || true
+            curl -s -o /tmp/kassal-products.json -w "http_status=%{http_code} time=%{time_total}s\n" -m 15 \
+              -H "Authorization: Bearer ${KASSAL_API_KEY:-missing}" \
+              "https://kassal.app/api/v1/products?page=1&size=5&sort=date_desc&unique=1&exclude_without_ean=1"
+            head -c 500 /tmp/kassal-products.json
+            echo
+            rm -f /tmp/kassal-products.json
             echo "== product counts =="
             docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
               "select (select count(*) from source_products) as source_products, (select count(*) from canonical_products) as canonical_products, (select count(*) from catalog_observations) as catalog_observations;"
