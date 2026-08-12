@@ -83,6 +83,32 @@ jobs:
             echo "== product counts =="
             docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
               "select (select count(*) from source_products) as source_products, (select count(*) from canonical_products) as canonical_products, (select count(*) from catalog_observations) as catalog_observations;"
+            echo "== reproduce product normalization =="
+            curl -s -o /tmp/kassal-products.json -m 20 \
+              -H "Authorization: Bearer ${KASSAL_API_KEY:-missing}" \
+              "https://kassal.app/api/v1/products?page=1&size=5&sort=date_desc&unique=1&exclude_without_ean=1"
+            mkdir -p /tmp/handleplan-repro
+            mv /tmp/kassal-products.json /tmp/handleplan-repro/products.json
+            rm -f /tmp/kassal-products.json
+            sudo -n chmod -R a+r /tmp/handleplan-repro 2>/dev/null || chmod -R a+r /tmp/handleplan-repro
+            echo "== reproduce product normalization =="
+            worker_container=$(docker ps -aq --filter name=handleplan-worker | head -1)
+            docker cp /tmp/handleplan-repro/products.json "$worker_container":/tmp/products.json
+            docker exec "$worker_container" node --input-type=module -e '
+              import { normalizeProductPageSourceResponse } from "/app/packages/kassalapp/src/source-contracts.ts";
+              const fs = await import("node:fs");
+              const raw = fs.readFileSync("/tmp/products.json", "utf8");
+              const parsed = JSON.parse(raw);
+              const now = new Date();
+              try {
+                const outcomes = normalizeProductPageSourceResponse(parsed, { limit: 5, now, retrievedAt: now.toISOString() });
+                console.log("normalized", outcomes.length, "outcomes");
+                for (const o of outcomes) console.log(o.state, o.reason ?? "", o.record ? Object.keys(o.record).join(",") : "");
+              } catch (e) {
+                console.log("THREW:", e && e.message ? e.message : String(e));
+                console.log("NAME:", e && e.name ? e.name : "");
+              }
+            '
             echo "== df -h =="
             df -h /
             echo "== df /opt/apps/handleplan =="
