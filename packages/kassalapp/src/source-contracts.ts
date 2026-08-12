@@ -285,7 +285,7 @@ const comparisonCategorySchema = z.object({
 
 const comparisonPriceSchema = z.object({
   price: z.number().finite(),
-  unit_price: z.number().finite(),
+  unit_price: z.number().finite().nullable(),
   date: sourceTimestampSchema,
 });
 
@@ -297,17 +297,23 @@ const comparisonHistorySchema = z.object({
 const upstreamComparisonProductSchema = z.object({
   id: sourceIdentifierSchema,
   name: sourceStringSchema,
-  vendor: z.string().max(500),
-  brand: z.string().max(500),
-  description: z.string().max(20_000),
-  ingredients: z.string().max(20_000),
+  vendor: z.string().max(500).nullable(),
+  brand: z.string().max(500).nullable(),
+  description: z.string().max(20_000).nullable(),
+  ingredients: z.string().max(20_000).nullable(),
   url: sourceStringSchema,
   image: sourceStringSchema,
   category: z.array(comparisonCategorySchema).max(100).nullable(),
-  store: z.array(comparisonStoreSchema).max(100).nullable(),
-  current_price: z.array(comparisonPriceSchema).max(1_000).nullable(),
-  weight: z.number().finite(),
-  weight_unit: z.string().trim().min(1).max(32),
+  store: z.union([
+    comparisonStoreSchema,
+    z.array(comparisonStoreSchema).max(100),
+  ]).nullable(),
+  current_price: z.union([
+    comparisonPriceSchema,
+    z.array(comparisonPriceSchema).max(1_000),
+  ]).nullable(),
+  weight: z.number().finite().nullable(),
+  weight_unit: z.string().trim().max(32).nullable(),
   price_history: z.array(comparisonHistorySchema).max(10_000),
   kassalapp: z.object({ url: sourceStringSchema, opengraph: sourceStringSchema }),
   created_at: sourceTimestampSchema,
@@ -337,15 +343,18 @@ const upstreamProductResourceSchema = z.object({
   ingredients: z.string().max(20_000).nullable(),
   current_price: z.number().finite().nullable(),
   current_unit_price: z.number().finite().nullable(),
-  weight: z.number().finite(),
-  weight_unit: z.string().trim().min(1).max(32),
-  store: z.array(comparisonStoreSchema).max(100),
+  weight: z.number().finite().nullable(),
+  weight_unit: z.string().trim().max(32).nullable(),
+  store: z.union([
+    comparisonStoreSchema,
+    z.array(comparisonStoreSchema).max(100),
+  ]).nullable(),
   price_history: z.array(comparisonHistorySchema).max(10_000),
   allergens: z.array(z.unknown()).max(MAX_LIST_RECORDS),
   nutrition: z.array(z.unknown()).max(MAX_LIST_RECORDS),
   labels: z.array(z.unknown()).max(MAX_LIST_RECORDS),
-  created_at: z.union([z.object({}).passthrough(), z.null()]),
-  updated_at: z.union([z.object({}).passthrough(), z.null()]),
+  created_at: z.union([sourceTimestampSchema, z.object({}).passthrough(), z.null()]),
+  updated_at: z.union([sourceTimestampSchema, z.object({}).passthrough(), z.null()]),
 });
 
 const productResourceEnvelopeSchema = z.object({ data: z.unknown().nullable() });
@@ -403,7 +412,8 @@ function normalizedProductRecord(
   const sourceRecordId = String(parsed.id);
   const packageResult = normalizePackageMeasure(parsed.weight, parsed.weight_unit);
   if (packageResult.state === "quarantined") throw new Error("invalid package measure");
-  const chainCodes = [...new Set(parsed.store?.map(({ code }) => code) ?? [])].sort();
+  const stores = Array.isArray(parsed.store) ? parsed.store : parsed.store === null ? [] : [parsed.store];
+  const chainCodes = [...new Set(stores.map(({ code }) => code))].sort();
   return {
     ...sourceBase(sourceRecordId, retrievedAt),
     kind: "product",

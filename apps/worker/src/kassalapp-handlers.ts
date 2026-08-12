@@ -481,7 +481,7 @@ function mapCatalogOutcome(
       recordKind: "product",
       sourceRecordId: outcome.sourceRecordId,
       subjectChain: subjectChain(outcome),
-      subjectEan: outcome.ean ?? targetEan,
+      subjectEan: outcome.ean,
     };
   }
 

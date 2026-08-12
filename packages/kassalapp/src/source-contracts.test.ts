@@ -213,7 +213,112 @@ describe("Kassalapp v1 source contracts", () => {
     })).toThrow();
   });
 
-  it("keeps accepted, unknown-price, and unknown-chain price states explicit", () => {
+  it("normalizes live Kassalapp page records with a single store object and nullable weight", () => {
+    const live = {
+      id: 245059,
+      name: "SUNRISE BASMATI NATUR OG VILLRIS 550G",
+      brand: null,
+      vendor: "SUNRISE",
+      ean: "7056120509100",
+      url: "https://www.fudi.no/products/sunrise-basmatiris-550g",
+      image: "https://cdn.shopify.com/s/files/1/0703/7983/1472/files/example.png",
+      category: null,
+      description: "Aromatisk blanding",
+      ingredients: null,
+      current_price: 59.9,
+      current_unit_price: null,
+      weight: null,
+      weight_unit: null,
+      store: {
+        name: "FUDI",
+        code: "FUDI",
+        url: "https://www.fudi.no/",
+        logo: "https://kassal.app/logos/FUDI.svg",
+      },
+      price_history: [{ price: 59.9, date: "2026-07-15T08:30:00.000000Z" }],
+      allergens: [],
+      nutrition: [],
+      labels: [],
+      created_at: "2026-07-15T08:30:00.000000Z",
+      updated_at: "2026-07-15T08:30:00.000000Z",
+    };
+
+    expect(normalizeProductPageSourceResponse({ data: [live] }, {
+      limit: 1,
+      now: NOW,
+      retrievedAt: RETRIEVED_AT,
+    })).toEqual([
+      expect.objectContaining({
+        state: "accepted",
+        record: expect.objectContaining({
+          chainCodes: ["FUDI"],
+          ean: "7056120509100",
+          packageMeasureState: "missing",
+          sourceRecordId: "245059",
+        }),
+      }),
+    ]);
+  });
+
+  it("accepts a live comparison record with a single store, object current_price, and nullable weight", () => {
+    const live = {
+      data: {
+        ean: "7056120509100",
+        products: [{
+          id: 245059,
+          name: "SUNRISE BASMATI NATUR OG VILLRIS 550G",
+          vendor: "SUNRISE",
+          brand: null,
+          description: "Aromatisk blanding",
+          ingredients: null,
+          url: "https://www.fudi.no/products/sunrise-basmatiris-550g",
+          image: "https://cdn.shopify.com/s/files/1/0703/7983/1472/files/example.png",
+          category: null,
+          store: {
+            name: "FUDI",
+            code: "FUDI",
+            url: "https://www.fudi.no/",
+            logo: "https://kassal.app/logos/FUDI.svg",
+          },
+          current_price: {
+            price: 59.9,
+            unit_price: null,
+            date: "2026-07-15T08:30:00.000000Z",
+          },
+          weight: null,
+          weight_unit: null,
+          price_history: [{ price: 59.9, date: "2026-07-15T08:30:00.000000Z" }],
+          kassalapp: {
+            url: "https://kassal.app/vare/245059-sunrise-basmati",
+            opengraph: "https://kassal.app/opengraph/products/245059.jpg",
+          },
+          created_at: "2026-07-15T08:30:00.000000Z",
+          updated_at: "2026-07-15T08:30:00.000000Z",
+        }],
+        allergens: [],
+        nutrition: [],
+        labels: [],
+      },
+    };
+
+    expect(normalizeProductComparisonSourceResponse(live, {
+      expectedEan: "7056120509100",
+      now: NOW,
+      retrievedAt: RETRIEVED_AT,
+    })).toEqual([
+      expect.objectContaining({
+        state: "accepted",
+        record: expect.objectContaining({
+          chainCodes: ["FUDI"],
+          ean: "7056120509100",
+          packageMeasureState: "missing",
+          sourceRecordId: "245059",
+        }),
+      }),
+    ]);
+  });
+
+it("keeps accepted, unknown-price, and unknown-chain price states explicit", () => {
     expect(normalizePriceSourceResponse(pricesFixture, { now: NOW, retrievedAt: RETRIEVED_AT }))
       .toEqual(expect.arrayContaining([
         expect.objectContaining({
