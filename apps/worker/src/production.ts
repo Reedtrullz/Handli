@@ -43,7 +43,7 @@ const MAX_TARGETS = 500;
 
 export const KASSALAPP_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition[] = Object.freeze([
   Object.freeze({
-    anchorAt: "2026-01-01T02:15:00.000Z",
+    anchorAt: "2026-08-12T15:00:00.000Z",
     intervalMs: 24 * 60 * 60 * 1_000,
     kind: "catalog-refresh",
     sourceId: KASSALAPP_SOURCE_ID,
