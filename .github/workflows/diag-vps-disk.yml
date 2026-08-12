@@ -1,0 +1,49 @@
+name: Diag VPS disk (temporary)
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Configure pinned VPS access
+        shell: bash
+        env:
+          VPS_SSH_HOST_KEY: ${{ vars.VPS_SSH_HOST_KEY }}
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/handleplan_deploy
+          chmod 600 ~/.ssh/handleplan_deploy
+          printf '%s\n' "$VPS_SSH_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes deploy@198.23.137.16 true
+
+      - name: Report VPS disk and docker state
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy@198.23.137.16 '
+            echo "== df -h =="
+            df -h /
+            echo "== df /opt/apps/handleplan =="
+            df -h /opt/apps/handleplan
+            echo "== docker system df =="
+            docker system df
+            echo "== docker images =="
+            docker images --format "{{.Repository}}:{{.Tag}} {{.ID}} {{.Size}}"
+            echo "== /opt/apps/handleplan du =="
+            du -sh /opt/apps/handleplan/* 2>/dev/null || true
+            echo "== docker data dir du =="
+            sudo -n du -sh /var/lib/docker 2>/dev/null || du -sh /var/lib/docker 2>/dev/null || true
+            echo "== journald =="
+            sudo -n journalctl --disk-usage 2>/dev/null || journalctl --disk-usage 2>/dev/null || true
+          '
