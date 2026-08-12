@@ -801,8 +801,10 @@ export function createKassalappHandlers<RunHandle>(
     signal,
     recheckAccess,
   ) => {
-    const targets = canonicalCatalogTargets(await targetProvider.getCatalogTargets(signal));
-    if (targets === undefined) return undefined;
+    // A fresh database has no local targets yet; the discovery page is the
+    // cold-start path that creates the first catalog products, which then
+    // become targets for later catalog and price runs.
+    const targets = canonicalCatalogTargets(await targetProvider.getCatalogTargets(signal)) ?? [];
     const discoveryPage = await targetProvider.getCatalogDiscoveryPage(signal);
     if (!Number.isSafeInteger(discoveryPage) || discoveryPage < 1 || discoveryPage > 100) {
       return undefined;

@@ -305,6 +305,46 @@ describe("Kassalapp worker handlers", () => {
     } });
   });
 
+  it("bootstraps from an empty database by persisting the discovery page only", async () => {
+    const gateway = createGateway();
+    vi.mocked(gateway.getSourceCatalogProducts).mockResolvedValue([
+      { state: "accepted", record: productRecord() },
+    ]);
+    const targets = createTargets();
+    vi.mocked(targets.getCatalogTargets).mockResolvedValue([]);
+    const repository = createRepository({
+      accepted: 1,
+      failed: 0,
+      fetched: 1,
+      persisted: 1,
+      quarantined: 0,
+      unknown: 0,
+    });
+    const handlers = createKassalappHandlers(createDependencies({ gateway, repository, targetProvider: targets }));
+
+    const result = await handlers["catalog-refresh"](context);
+
+    expect(targets.getCatalogDiscoveryPage).toHaveBeenCalledOnce();
+    expect(gateway.getSourceCatalogProducts).toHaveBeenCalledExactlyOnceWith(1, 100, SIGNAL);
+    expect(gateway.getSourceProductByEan).not.toHaveBeenCalled();
+    expect(repository.persistCatalogOutcomes).toHaveBeenCalledWith(RUN_HANDLE, [
+      expect.objectContaining({
+        outcomeState: "accepted",
+        recordKind: "product",
+        sourceRecordId: "product-117",
+        subjectEan: EAN,
+      }),
+    ], SIGNAL);
+    expect(result).toEqual({ counters: {
+      accepted: 1,
+      failed: 0,
+      fetched: 1,
+      persisted: 1,
+      quarantined: 0,
+      unknown: 0,
+    } });
+  });
+
   it("downgrades a provider-accepted product without a package measure to audited unknown", async () => {
     const gateway = createGateway();
     vi.mocked(gateway.getSourceProductByEan).mockResolvedValue([{
