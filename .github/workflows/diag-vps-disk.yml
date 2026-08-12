@@ -26,12 +26,24 @@ jobs:
           chmod 600 ~/.ssh/known_hosts
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes deploy@198.23.137.16 true
 
-      - name: Report VPS disk and docker state
+      - name: Prune unused images and report VPS disk state
         shell: bash
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
             deploy@198.23.137.16 '
+            echo "== prune unused docker images (protecting handleplan, rollback tags, container images) =="
+            used=/tmp/handleplan-used-images.$$
+            docker ps -aq | xargs -r docker inspect -f "{{.Image}}" | sort -u > "$used"
+            docker images --format "{{.ID}} {{.Repository}}:{{.Tag}}" |
+              awk "\$2 ~ /^handleplan:/ || \$2 ~ /:rollback\$/ {print \$1}" | sort -u >> "$used"
+            freed=0
+            for id in $(docker images -q | sort -u); do
+              grep -qx "$id" "$used" && continue
+              docker rmi "$id" >/dev/null 2>&1 && freed=$((freed + 1)) || true
+            done
+            rm -f "$used"
+            echo "removed $freed unused image ids"
             echo "== df -h =="
             df -h /
             echo "== df /opt/apps/handleplan =="
