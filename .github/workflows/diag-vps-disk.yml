@@ -47,7 +47,20 @@ jobs:
             echo "== handleplan containers =="
             docker ps -a --filter "name=handleplan" --format "{{.Names}} {{.Image}} {{.Status}}"
             echo "== recent worker logs =="
-            docker logs --tail 120 "$(docker ps -aq --filter name=handleplan-worker | head -1)" 2>&1 || true
+            worker_container=$(docker ps -aq --filter name=handleplan-worker | head -1)
+            echo "worker container: $worker_container"
+            docker logs --tail 200 --timestamps "$worker_container" 2>&1 || true
+            echo "== worker internal health =="
+            curl -s -m 5 http://localhost:8787/health 2>&1 || curl -s -m 5 http://localhost:9090/health 2>&1 || true
+            echo "== recent ingestion runs =="
+            docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
+              "select run_type, status, started_at, completed_at, counts from ingestion_runs order by started_at desc limit 8;"
+            echo "== recent worker job results =="
+            docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
+              "select job_kind, status, scheduled_at, started_at, completed_at, counters from worker_job_results order by started_at desc limit 8;"
+            echo "== product counts =="
+            docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
+              "select (select count(*) from source_products) as source_products, (select count(*) from canonical_products) as canonical_products, (select count(*) from catalog_observations) as catalog_observations;"
             echo "== df -h =="
             df -h /
             echo "== df /opt/apps/handleplan =="
