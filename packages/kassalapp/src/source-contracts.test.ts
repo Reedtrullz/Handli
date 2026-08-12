@@ -462,6 +462,28 @@ describe("Kassalapp v1 source contracts", () => {
       ]);
   });
 
+  it("accepts string coordinate pairs exactly as the live API serves them", () => {
+    const stringCoordinates = {
+      data: [{
+        ...physicalStoresFixture.data[0]!,
+        position: { lat: "59.89728999", lng: "10.81286082" },
+      }],
+    };
+
+    expect(normalizePhysicalStoreSourceResponse(stringCoordinates, { now: NOW, retrievedAt: RETRIEVED_AT }))
+      .toEqual([
+        expect.objectContaining({
+          state: "accepted",
+          record: expect.objectContaining({
+            chainId: "bunnpris",
+            latitude: 59.89728999,
+            longitude: 10.81286082,
+            sourceRecordId: "501",
+          }),
+        }),
+      ]);
+  });
+
   it("keeps required-chain coverage unknown when a filtered store page returns only another chain", () => {
     const wrongChain = {
       data: [{ ...physicalStoresFixture.data[0]!, group: "COOP_EXTRA" }],

@@ -995,6 +995,20 @@ const openingHoursSchema = z.object({
   sunday: z.string().max(100).nullable(),
 });
 
+// The upstream API serves store coordinates both as JSON numbers and as
+// numeric strings (for example "59.89728999"); accept either so a string
+// coordinate is not quarantined as a malformed record.
+function upstreamCoordinateSchema(maximum: number) {
+  return z.union([
+    z.number().finite().min(-maximum).max(maximum),
+    z.string()
+      .regex(/^-?\d+(?:\.\d+)?$/u)
+      .transform(Number)
+      .pipe(z.number().finite().min(-maximum).max(maximum)),
+    z.null(),
+  ]);
+}
+
 const upstreamPhysicalStoreSchema = z.object({
   id: z.number().int().safe().positive().transform(String),
   group: z.string().trim().min(1).max(100).nullable(),
@@ -1007,8 +1021,8 @@ const upstreamPhysicalStoreSchema = z.object({
   website: z.string().max(5_000).nullable(),
   detailUrl: z.string().max(5_000),
   position: z.object({
-    lat: z.number().finite().min(-90).max(90).nullable(),
-    lng: z.number().finite().min(-180).max(180).nullable(),
+    lat: upstreamCoordinateSchema(90),
+    lng: upstreamCoordinateSchema(180),
   }),
   openingHours: openingHoursSchema,
 }).superRefine(({ position }, issue) => {
