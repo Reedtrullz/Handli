@@ -1,0 +1,44 @@
+name: Diag VPS (temporary)
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Configure pinned VPS access
+        shell: bash
+        env:
+          VPS_SSH_HOST_KEY: ${{ vars.VPS_SSH_HOST_KEY }}
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/handleplan_deploy
+          chmod 600 ~/.ssh/handleplan_deploy
+          printf '%s\n' "$VPS_SSH_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes deploy@198.23.137.16 true
+
+      - name: Report ingestion counts
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy@198.23.137.16 '
+            echo "== ingestion runs =="
+            docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
+              "select run_type, status, counts, error_class from ingestion_runs order by started_at desc limit 5;"
+            echo "== product counts =="
+            docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
+              "select (select count(*) from source_products) as source_products, (select count(*) from canonical_products) as canonical_products, (select count(*) from catalog_observations) as catalog_observations, (select count(*) from source_record_outcomes) as outcomes;"
+            echo "== outcome states =="
+            docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
+              "select outcome_state, reason, count(*) from source_record_outcomes where record_kind = \$\$product\$\$ group by 1,2 order by 3 desc limit 10;"
+          '
