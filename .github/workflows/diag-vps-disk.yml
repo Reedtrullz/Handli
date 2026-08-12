@@ -61,6 +61,8 @@ jobs:
             echo "== catalog run error details =="
             docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
               "select run_type, status, counts, error_class from ingestion_runs where run_type = 'catalog' order by started_at desc limit 3;"
+            echo "== latest postgres errors =="
+            docker logs --tail 400 handleplan-postgres-1 2>&1 | grep -i -A3 "error\|constraint\|violat" | tail -40 || true
             echo "== data_sources =="
             docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
               "select id, runtime_state from data_sources;"
