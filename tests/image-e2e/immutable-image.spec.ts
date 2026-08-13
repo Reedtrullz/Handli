@@ -749,7 +749,9 @@ test("the exact production image searches and plans from governed PostgreSQL evi
   );
   await expect(page.getByText("1 nødvendig vare er med", { exact: true })).toBeVisible();
   const priceProvenance = page.locator(".price-provenance");
-  await expect(priceProvenance).toContainText("Uavklart dekning: Bunnpris, REMA 1000.");
+  await expect(priceProvenance).toContainText(
+    "Uavklart dekning: Bunnpris, REMA 1000, FUDI, Holdbart, MENY, Havaristen, Joker, SPAR, FastCandy, Europris, Engrosnett, Oda.",
+  );
   await expect(page.getByText(/Kilder: CI verifisert varekatalog, CI verifisert offisielt tilbud, CI verifisert ordinærpris\./u))
     .toBeVisible();
   await expect(priceProvenance).toContainText("1 offisielt tilbud er brukt i valgt plan.");
