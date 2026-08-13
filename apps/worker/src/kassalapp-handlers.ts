@@ -797,6 +797,10 @@ function createExecutor<RunHandle>(
       if (error instanceof WorkerCancelledError) throw error;
       if (signal.aborted) throw new WorkerCancelledError();
       if (error instanceof KassalappHandlerError) throw error;
+      console.error(
+        `[kassalapp:${kind}] handler failed before evidence:`,
+        error instanceof Error ? error.name + ": " + error.message : String(error),
+      );
       return failedWithoutEvidence();
     }
   };
