@@ -36,6 +36,27 @@ export type SupportedChain =
   | "europris"
   | "engrossnett"
   | "oda";
+
+const SUPPORTED_CHAINS: readonly SupportedChain[] = Object.freeze([
+  "bunnpris",
+  "extra",
+  "rema-1000",
+  "fudi",
+  "holdbart",
+  "meny",
+  "havaristen",
+  "joker",
+  "spar",
+  "fastcandy",
+  "europris",
+  "engrossnett",
+  "oda",
+]);
+
+function isSupportedChain(value: unknown): value is SupportedChain {
+  return typeof value === "string"
+    && (SUPPORTED_CHAINS as readonly string[]).includes(value);
+}
 export type SourceRecordOutcomeState = "accepted" | "quarantined" | "unknown";
 
 type SourceRecordOutcomeBase = {
@@ -492,9 +513,7 @@ export function validateSourceRecordOutcome(
   }
   if (
     outcome.subjectChain !== undefined
-    && outcome.subjectChain !== "bunnpris"
-    && outcome.subjectChain !== "extra"
-    && outcome.subjectChain !== "rema-1000"
+    && !isSupportedChain(outcome.subjectChain)
   ) {
     throw new TypeError("subjectChain must be a supported canonical chain");
   }

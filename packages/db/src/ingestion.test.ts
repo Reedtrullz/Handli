@@ -187,6 +187,26 @@ describe("ingestion persistence primitives", () => {
     ).toThrow(/outcomeState/i);
   });
 
+  it("accepts every expanded supported chain in outcome validation", () => {
+    for (const chain of [
+      "bunnpris", "extra", "rema-1000", "fudi", "holdbart", "meny",
+      "havaristen", "joker", "spar", "fastcandy", "europris",
+      "engrossnett", "oda",
+    ] as const) {
+      expect(() =>
+        validateSourceRecordOutcome({
+          outcomeState: "unknown",
+          reason: "MISSING_SUPPORTED_CHAIN",
+          recordKind: "price",
+          recordedAt,
+          sourceRecordId: `chain-${chain}`,
+          subjectChain: chain,
+          subjectEan: "7038010000010",
+        }),
+      ).not.toThrow();
+    }
+  });
+
   it("hashes semantic outcome content independently of object key order", () => {
     const left: SourceRecordOutcomeInput = {
       normalizedRecord: { name: "Melk", package: { amount: 1_000, unit: "ml" } },

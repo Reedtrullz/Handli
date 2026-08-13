@@ -611,7 +611,12 @@ const priceEnvelopeSchema = z.object({
     found_products: z.number().int().nonnegative(),
     days_included: z.number().int().nonnegative(),
     is_premium: z.boolean(),
-  }),
+  })
+    // The live bulk contract has drifted on these informational fields
+    // (some responses omit or rename them). They never affect pricing, so
+    // treat any deviation as absent instead of failing the whole batch.
+    .partial()
+    .catch({}),
 });
 
 export interface PriceNormalizationContext {
