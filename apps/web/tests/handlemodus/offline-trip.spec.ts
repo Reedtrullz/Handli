@@ -118,7 +118,22 @@ function strictResponse(now: number) {
     sourceClass: "ordinary-price",
     state: "approved",
   };
-  const ordinaryPrices = ["bunnpris", "extra", "rema-1000"].map((chainId) => ({
+  const pricedChains = [
+    "bunnpris",
+    "extra",
+    "rema-1000",
+    "fudi",
+    "holdbart",
+    "meny",
+    "havaristen",
+    "joker",
+    "spar",
+    "fastcandy",
+    "europris",
+    "engrossnett",
+    "oda",
+  ] as const;
+  const ordinaryPrices = pricedChains.map((chainId) => ({
     amountOre: chainId === "extra" ? 2_490 : 2_990,
     chainId,
     contractVersion: 1,
@@ -182,7 +197,7 @@ function strictResponse(now: number) {
             status: { evidenceId: id, kind: "priced" },
           })),
           evaluatedAt: generatedAt,
-          expectedChainIds: ["bunnpris", "extra", "rema-1000"],
+          expectedChainIds: [...pricedChains],
         },
         excludedPriceEvidence: [],
         historicalComparisons: [],
