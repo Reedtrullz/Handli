@@ -63,6 +63,7 @@ const expectedMigrations = [
   "028_private_review_image_evidence_only.sql",
   "029_kassalapp_source_approval.sql",
   "030_catalog_measure_optional.sql",
+  "031_supported_chain_expansion.sql",
 ];
 
 assert.equal(process.env.CI, "true", "database proof requires CI=true");
