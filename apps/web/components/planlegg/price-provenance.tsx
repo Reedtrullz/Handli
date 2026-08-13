@@ -73,7 +73,9 @@ export function PriceProvenance({
       <p><span aria-hidden="true">◷</span> {priceDataSource === "cache" && "Kun kontrollert, lagret prisgrunnlag ble brukt."} Beregnet {formatTimestamp(generatedAt)}.</p>
       <p><span aria-hidden="true">{coverageComplete ? "✓" : "△"}</span> Prisdekning: {coverageComplete ? "alle støttede kjeder er kontrollert for alle varene." : "sammenligningen er delvis."}</p>
       {unresolvedChains.length > 0 && (
-        <p><span aria-hidden="true">?</span> Uavklart dekning: {unresolvedChains.map((chain) => CHAIN_NAMES[chain] ?? chain).join(", ")}.</p>
+        <p><span aria-hidden="true">?</span> Uavklart dekning: {unresolvedChains.length <= 3
+          ? unresolvedChains.map((chain) => CHAIN_NAMES[chain] ?? chain).join(", ")
+          : `${unresolvedChains.slice(0, 3).map((chain) => CHAIN_NAMES[chain] ?? chain).join(", ")} og ${unresolvedChains.length - 3} andre`}.</p>
       )}
       <p><span aria-hidden="true">⌁</span> Kilder: {evidence.sources.map(({ displayName }) => displayName).join(", ")}.</p>
       {appliedOffers > 0 && <p><span aria-hidden="true">%</span> {appliedOffers} {appliedOffers === 1 ? "offisielt tilbud er" : "offisielle tilbud er"} brukt i valgt plan.</p>}

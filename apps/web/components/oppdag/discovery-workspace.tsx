@@ -289,7 +289,9 @@ function coverageText(entry: PublicDiscoveryProduct): string {
   const unresolved = unresolvedCoverage(entry).map((chainId) => chainLabels[chainId]);
   return unresolved.length === 0
     ? "Dekning: avklart, men ikke merket komplett av datagrunnlaget."
-    : `Delvis dekning. Uavklart: ${unresolved.join(", ")}.`;
+    : unresolved.length <= 3
+      ? `Delvis dekning. Uavklart: ${unresolved.join(", ")}.`
+      : `Delvis dekning. Uavklart: ${unresolved.slice(0, 3).join(", ")} og ${unresolved.length - 3} andre.`;
 }
 
 function categoryPathText(entry: PublicDiscoveryProduct): string {
