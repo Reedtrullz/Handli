@@ -335,8 +335,8 @@ const upstreamComparisonProductSchema = z.object({
     comparisonPriceSchema,
     z.array(comparisonPriceSchema).max(1_000),
   ]).nullable(),
-  weight: z.number().finite().nullable(),
-  weight_unit: z.string().trim().max(32).nullable(),
+  weight: z.number().finite().nullable().optional(),
+  weight_unit: z.string().trim().max(32).nullable().optional(),
   price_history: z.array(comparisonHistorySchema).max(10_000),
   kassalapp: z.object({ url: sourceStringSchema, opengraph: sourceStringSchema }),
   created_at: sourceTimestampSchema,
@@ -366,8 +366,8 @@ const upstreamProductResourceSchema = z.object({
   ingredients: z.string().max(20_000).nullable(),
   current_price: z.number().finite().nullable(),
   current_unit_price: z.number().finite().nullable(),
-  weight: z.number().finite().nullable(),
-  weight_unit: z.string().trim().max(32).nullable(),
+  weight: z.number().finite().nullable().optional(),
+  weight_unit: z.string().trim().max(32).nullable().optional(),
   store: z.union([
     comparisonStoreSchema,
     z.array(comparisonStoreSchema).max(100),
@@ -586,16 +586,16 @@ const upstreamPriceStoreSchema = z.object({
   store: z.string().trim().min(1).max(100),
   name: sourceStringSchema,
   current_price: upstreamPriceAmountSchema.nullable(),
-  current_unit_price: z.number().finite().nullable(),
-  current_unit_price_unit: z.string().trim().max(100).nullable(),
+  current_unit_price: z.number().finite().nullable().optional(),
+  current_unit_price_unit: z.string().trim().max(100).nullable().optional(),
   last_checked: sourceTimestampSchema.nullable(),
 });
 
 const upstreamPriceProductSchema = z.object({
   ean: z.string().trim().min(1).max(64),
   name: sourceStringSchema,
-  weight: z.number().finite().nullable(),
-  weight_unit: z.string().trim().max(32).nullable(),
+  weight: z.number().finite().nullable().optional(),
+  weight_unit: z.string().trim().max(32).nullable().optional(),
   stores: z.array(z.unknown()).max(MAX_STORES_PER_PRODUCT),
   price_history: z.array(z.object({
     price: z.number().finite(),

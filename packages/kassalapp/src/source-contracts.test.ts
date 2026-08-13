@@ -415,6 +415,19 @@ it("keeps accepted, unknown-price, and unknown-chain price states explicit", () 
       .toContainEqual(expect.objectContaining({ state: "quarantined", reason: "FUTURE_TIMESTAMP" }));
   });
 
+  it("accepts live bulk stores that omit the optional unit-price fields", () => {
+    const live = structuredClone(pricesFixture);
+    for (const product of live.data) {
+      for (const store of product.stores) {
+        store.current_unit_price = undefined as unknown as number | null;
+        store.current_unit_price_unit = undefined as unknown as string | null;
+      }
+    }
+    const outcomes = normalizePriceSourceResponse(live, { now: NOW, retrievedAt: RETRIEVED_AT });
+    expect(outcomes.some((outcome) => outcome.state === "accepted")).toBe(true);
+    expect(outcomes).not.toContainEqual(expect.objectContaining({ reason: "MALFORMED_RECORD" }));
+  });
+
   it("reports missing requested EANs and missing supported chains as explicit unknown coverage", () => {
     const outcomes = normalizePriceSourceResponse(pricesFixture, {
       expectedEans: ["7038010000010", "96385074"],
