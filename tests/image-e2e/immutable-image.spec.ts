@@ -550,7 +550,7 @@ test("the exact production image searches and plans from governed PostgreSQL evi
   ]);
   expect(discoveryProduct.comparisonScope).toMatchObject({
     completeness: "partial",
-    expectedChainIds: ["bunnpris", "extra", "rema-1000"],
+    expectedChainIds: ["bunnpris", "extra", "rema-1000", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"],
     entries: [
       {
         chainId: "bunnpris",
@@ -561,6 +561,16 @@ test("the exact production image searches and plans from governed PostgreSQL evi
         chainId: "rema-1000",
         status: expect.objectContaining({ kind: "unknown", reason: "source-unavailable" }),
       },
+      { chainId: "fudi", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "holdbart", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "meny", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "havaristen", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "joker", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "spar", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "fastcandy", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "europris", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "engrossnett", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "oda", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
     ],
   });
 
@@ -702,7 +712,7 @@ test("the exact production image searches and plans from governed PostgreSQL evi
   });
   expect(planResult.evidence.needs[0]?.comparisonScope).toMatchObject({
     completeness: "partial",
-    expectedChainIds: ["bunnpris", "extra", "rema-1000"],
+    expectedChainIds: ["bunnpris", "extra", "rema-1000", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"],
     entries: [
       {
         chainId: "bunnpris",
@@ -713,6 +723,16 @@ test("the exact production image searches and plans from governed PostgreSQL evi
         chainId: "rema-1000",
         status: expect.objectContaining({ kind: "unknown", reason: "source-unavailable" }),
       },
+      { chainId: "fudi", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "holdbart", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "meny", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "havaristen", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "joker", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "spar", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "fastcandy", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "europris", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "engrossnett", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
+      { chainId: "oda", status: expect.objectContaining({ kind: "unknown", reason: "not-checked" }) },
     ],
   });
 
