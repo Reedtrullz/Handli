@@ -275,7 +275,7 @@ describe("production worker adapters", () => {
       recordResult: vi.fn(async () => undefined),
     };
     const runtime = createProductionWorkerRuntime({
-      clock: () => new Date("2026-08-12T16:00:00.000Z"),
+      clock: () => new Date("2026-08-13T11:00:00.000Z"),
       gateway,
       ingestionRepository,
       leaseProvider: {
