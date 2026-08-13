@@ -86,7 +86,7 @@ a { color: inherit; }
 .brand-mark span { width: 12px; height: 2px; background: white; }
 
 .site-header nav { height: 100%; display: flex; gap: 32px; align-items: center; }
-.site-header nav a { height: 100%; display: flex; align-items: center; color: var(--muted); font-weight: 600; text-decoration: none; }
+.site-header nav a { height: 100%; min-height: 24px; display: flex; align-items: center; color: var(--muted); font-weight: 600; text-decoration: none; }
 .site-header nav a.active { color: var(--forest-950); border-bottom: 2px solid var(--forest-950); }
 
 .planlegg-main { flex: 1; width: min(1180px, calc(100% - 64px)); margin: 0 auto; padding: 40px 0; }
