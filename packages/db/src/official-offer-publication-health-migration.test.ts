@@ -102,7 +102,7 @@ describe("official-offer publication-health migration", () => {
       ), "utf8"),
       readFile(path.join(repositoryRoot, "packages", "db", "src", "source-status-reader.ts"), "utf8"),
     ]);
-    expect(readiness).toContain('"029_kassalapp_source_approval.sql"');
+    expect(readiness).toContain('"030_catalog_measure_optional.sql"');
     expect(runner).toContain("webOfficialOfferPublicationHealthColumns");
     expect(runner).not.toMatch(
       /webOfficialOfferPublicationHealthColumns[\s\S]*?lifecycle_job_id/iu,
