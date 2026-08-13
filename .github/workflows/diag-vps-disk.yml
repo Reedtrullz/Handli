@@ -26,22 +26,16 @@ jobs:
           chmod 600 ~/.ssh/known_hosts
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes deploy@198.23.137.16 true
 
-      - name: Inspect deploy state
+      - name: Report ingestion counts
         shell: bash
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/handleplan_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
             deploy@198.23.137.16 '
-            echo "== state dir =="
-            ls -la /opt/apps/handleplan/state/ 2>&1 || true
-            echo "== current-deployment =="
-            cat /opt/apps/handleplan/state/current-deployment 2>&1 || true
-            echo "== current-revision =="
-            cat /opt/apps/handleplan/state/current-revision 2>&1 || true
-            echo "== pending-deployment =="
-            ls -la /opt/apps/handleplan/state/pending-deployment 2>&1 || true
-            echo "== deploy bundles =="
-            ls -la /opt/apps/handleplan/deploy-bundles/ 2>&1 | head -20
-            echo "== deploy-control-staging =="
-            ls -la /opt/apps/handleplan/deploy-control-staging/ 2>&1 | head -10
+            echo "== ingestion runs =="
+            docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
+              "select run_type, status, counts from ingestion_runs order by started_at desc limit 3;"
+            echo "== product counts =="
+            docker exec handleplan-postgres-1 psql -U handleplan -d handleplan -c \
+              "select (select count(*) from canonical_products) as products, (select count(*) from catalog_observations) as observations, (select count(*) from canonical_products where package_amount is null) as measureless;"
           '
