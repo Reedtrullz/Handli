@@ -17,7 +17,7 @@ describe("official-offer publication-health migration", () => {
       readdir(migrationsDirectory),
       readFile(migrationPath, "utf8"),
     ]);
-    expect(files.filter((file) => /^\d{3}_[a-z0-9_]+\.sql$/u.test(file)).sort().at(-4))
+    expect(files.filter((file) => /^\d{3}_[a-z0-9_]+\.sql$/u.test(file)).sort().at(-5))
       .toBe("027_official_offer_publication_health.sql");
     expect(migration).toContain(
       "create table public.official_offer_publication_health_facts",

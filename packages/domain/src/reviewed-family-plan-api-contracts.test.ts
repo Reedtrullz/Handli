@@ -199,9 +199,19 @@ function coverage(evidenceId: string) {
       { chainId: "bunnpris", status: { kind: "unknown" as const, reason: "not-checked" as const } },
       { chainId: "extra", status: { evidenceId, kind: "priced" as const } },
       { chainId: "rema-1000", status: { kind: "unknown" as const, reason: "not-checked" as const } },
+      { chainId: "fudi", status: { kind: "unknown" as const, reason: "not-checked" as const } },
+      { chainId: "holdbart", status: { kind: "unknown" as const, reason: "not-checked" as const } },
+      { chainId: "meny", status: { kind: "unknown" as const, reason: "not-checked" as const } },
+      { chainId: "havaristen", status: { kind: "unknown" as const, reason: "not-checked" as const } },
+      { chainId: "joker", status: { kind: "unknown" as const, reason: "not-checked" as const } },
+      { chainId: "spar", status: { kind: "unknown" as const, reason: "not-checked" as const } },
+      { chainId: "fastcandy", status: { kind: "unknown" as const, reason: "not-checked" as const } },
+      { chainId: "europris", status: { kind: "unknown" as const, reason: "not-checked" as const } },
+      { chainId: "engrossnett", status: { kind: "unknown" as const, reason: "not-checked" as const } },
+      { chainId: "oda", status: { kind: "unknown" as const, reason: "not-checked" as const } },
     ],
     evaluatedAt: GENERATED_AT,
-    expectedChainIds: ["bunnpris", "extra", "rema-1000"],
+    expectedChainIds: ["bunnpris", "extra", "rema-1000", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"],
   };
 }
 

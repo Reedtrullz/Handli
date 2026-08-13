@@ -63,7 +63,7 @@ export const officialOfferAnomalyCodeSchema = z.enum([
 export type OfficialOfferAnomalyCode = z.infer<typeof officialOfferAnomalyCodeSchema>;
 
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/u);
-const chainSchema = z.enum(["bunnpris", "rema-1000", "extra"]);
+const chainSchema = z.enum(["bunnpris", "rema-1000", "extra", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"]);
 const databaseMoneySchema = z.number().int().nonnegative().max(MAX_PERSISTED_MONEY_ORE);
 const boundedMimeTypeSchema = z
   .string()

@@ -169,7 +169,7 @@ export type DiscoveryImpactRequestV1 = z.infer<
   typeof discoveryImpactRequestV1Schema
 >;
 
-const chainSchema = z.enum(["bunnpris", "extra", "rema-1000"]);
+const chainSchema = z.enum(["bunnpris", "extra", "rema-1000", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"]);
 const storeCountSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
 
 export const discoveryImpactPlanSummaryV1Schema = z

@@ -8,6 +8,16 @@ export const V1_EXPECTED_PRICE_CHAINS = [
   "bunnpris",
   "extra",
   "rema-1000",
+  "fudi",
+  "holdbart",
+  "meny",
+  "havaristen",
+  "joker",
+  "spar",
+  "fastcandy",
+  "europris",
+  "engrossnett",
+  "oda",
 ] as const;
 
 export class CoverageUnavailableError extends Error {

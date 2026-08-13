@@ -216,7 +216,7 @@ function oraclePlans(request: PlanRequest): OraclePlan[] {
       if (rule === undefined) { complete = false; break; }
       const matchingEans = new Set(request.products.filter((product) => oracleMatches(product, rule)).map(({ ean }) => ean));
       const candidates = request.prices
-        .filter((row) => subset.includes(row.chain) && matchingEans.has(row.ean) && isEligible(row.observedAt))
+        .filter((row) => subset.includes(row.chain as Chain) && matchingEans.has(row.ean) && isEligible(row.observedAt))
         .map((row) => ({
           needId: need.id,
           ean: row.ean,
@@ -229,7 +229,7 @@ function oraclePlans(request: PlanRequest): OraclePlan[] {
         .sort((left, right) =>
           left.costOre - right.costOre ||
           (left.ean < right.ean ? -1 : left.ean > right.ean ? 1 : 0) ||
-          CHAINS.indexOf(left.chain) - CHAINS.indexOf(right.chain) ||
+          CHAINS.indexOf(left.chain as Chain) - CHAINS.indexOf(right.chain as Chain) ||
           (left.observedAt > right.observedAt ? -1 : left.observedAt < right.observedAt ? 1 : 0));
       const selected = candidates[0];
       if (selected === undefined) { complete = false; break; }

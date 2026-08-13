@@ -38,6 +38,16 @@ const CHAIN_ORDER: Record<PriceObservation["chain"], number> = {
   bunnpris: 0,
   "rema-1000": 1,
   extra: 2,
+  fudi: 3,
+  holdbart: 4,
+  meny: 5,
+  havaristen: 6,
+  joker: 7,
+  spar: 8,
+  fastcandy: 9,
+  europris: 10,
+  engrossnett: 11,
+  oda: 12,
 };
 const BROWSE_STORE_CODES = ["BUNNPRIS", "REMA_1000", "COOP_EXTRA"] as const;
 const CHAIN_ID_BY_SOURCE_CODE = {

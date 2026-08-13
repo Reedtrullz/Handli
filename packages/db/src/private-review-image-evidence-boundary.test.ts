@@ -24,7 +24,7 @@ describe("private review image-only evidence boundary", () => {
     ]);
 
     expect(files.filter((file) => /^\d{3}_[a-z0-9_]+\.sql$/u.test(file)).sort().at(-1))
-      .toBe("030_catalog_measure_optional.sql");
+      .toBe("031_supported_chain_expansion.sql");
     expect(historicalRenderer).toContain(
       "mime_type in ('application/pdf', 'image/jpeg', 'image/png', 'image/webp')",
     );

@@ -393,6 +393,16 @@ describe("PriceService", () => {
         { chainId: "bunnpris", status: { kind: "known-not-carried" } },
         { chainId: "extra", status: { kind: "priced", evidenceId: "price:current" } },
         { chainId: "rema-1000", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "fudi", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "holdbart", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "meny", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "havaristen", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "joker", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "spar", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "fastcandy", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "europris", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "engrossnett", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "oda", status: { kind: "unknown", reason: "not-checked" } },
       ],
     });
   });

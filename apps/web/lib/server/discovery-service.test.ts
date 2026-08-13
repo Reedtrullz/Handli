@@ -28,6 +28,29 @@ const MARKET_CONTEXT = {
   countryCode: "NO",
   kind: "national",
 } as const;
+
+const ALL_CHAINS = [
+  "bunnpris",
+  "extra",
+  "rema-1000",
+  "fudi",
+  "holdbart",
+  "meny",
+  "havaristen",
+  "joker",
+  "spar",
+  "fastcandy",
+  "europris",
+  "engrossnett",
+  "oda",
+] as const;
+
+function scopeEntries(pricedChainId: string, evidenceId: string) {
+  return ALL_CHAINS.map((chainId) =>
+    chainId === pricedChainId
+      ? { chainId, status: { evidenceId, kind: "priced" as const } }
+      : { chainId, status: { kind: "unknown" as const, reason: "not-checked" as const } });
+}
 const money = (value: number) => value as MoneyOre;
 const source = {
   contractVersion: 1 as const,
@@ -83,13 +106,9 @@ function priceResultFor(catalog: readonly ExactProductPlanApiProductSummary[]): 
       comparisonScope: {
         completeness: "partial" as const,
         contractVersion: 1 as const,
-        entries: [
-          { chainId: "bunnpris", status: { kind: "unknown" as const, reason: "not-checked" as const } },
-          { chainId: "extra", status: { evidenceId: price.id, kind: "priced" as const } },
-          { chainId: "rema-1000", status: { kind: "unknown" as const, reason: "not-checked" as const } },
-        ],
+        entries: scopeEntries("extra", price.id),
         evaluatedAt: NOW.toISOString(),
-        expectedChainIds: ["bunnpris", "extra", "rema-1000"],
+        expectedChainIds: [...ALL_CHAINS],
       },
       excludedPriceEvidence: [],
       historicalComparisons: [],

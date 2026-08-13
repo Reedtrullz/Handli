@@ -17,7 +17,20 @@ const sourceIdentifierSchema = z
 const sourceTimestampSchema = z.iso.datetime({ offset: true });
 const canonicalTimestampSchema = z.iso.datetime({ offset: false, precision: 3 });
 
-export type KassalappChainId = "bunnpris" | "rema-1000" | "extra";
+export type KassalappChainId =
+  | "bunnpris"
+  | "rema-1000"
+  | "extra"
+  | "fudi"
+  | "holdbart"
+  | "meny"
+  | "havaristen"
+  | "joker"
+  | "spar"
+  | "fastcandy"
+  | "europris"
+  | "engrossnett"
+  | "oda";
 export type NormalizedPackageUnit = "g" | "ml" | "piece" | "package";
 
 export interface NormalizedPackageMeasure {
@@ -140,6 +153,16 @@ const CHAIN_BY_CODE: Readonly<Record<string, KassalappChainId>> = {
   BUNNPRIS: "bunnpris",
   COOP_EXTRA: "extra",
   REMA_1000: "rema-1000",
+  FUDI: "fudi",
+  HOLDBART: "holdbart",
+  MENY_NO: "meny",
+  HAVARISTEN: "havaristen",
+  JOKER_NO: "joker",
+  SPAR_NO: "spar",
+  FASTCANDY: "fastcandy",
+  EUROPRIS_NO: "europris",
+  ENGROSSNETT_NO: "engrossnett",
+  ODA_NO: "oda",
 };
 
 function safeSourceRecordId(value: unknown, fallback: string): string {
@@ -548,7 +571,11 @@ export function normalizeProductPageSourceResponse(
 }
 
 const upstreamPriceAmountSchema = z
-  .number().finite().nonnegative()
+  .union([z.number(), z.string().trim().min(1)])
+  .transform((value) => (typeof value === "number" ? value : Number(value)))
+  .pipe(
+    z.number().finite().nonnegative()
+  )
   .refine((amount) => Number.isSafeInteger(Math.round(amount * 100)) &&
     Math.abs(amount * 100 - Math.round(amount * 100)) < 1e-6 &&
     Math.round(amount * 100) <= MAX_PERSISTED_PRICE_ORE, {

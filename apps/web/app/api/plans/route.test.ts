@@ -166,12 +166,25 @@ const exactEvidence = exactProductPlanApiEvidenceEnvelopeSchema.parse({
       completeness: "partial" as const,
       contractVersion: 1 as const,
       entries: [
-        { chainId: "bunnpris", status: { kind: "unknown" as const, reason: "not-checked" as const } },
-        { chainId: "extra", status: { evidenceId: "price:1", kind: "priced" as const } },
-        { chainId: "rema-1000", status: { kind: "unknown" as const, reason: "not-checked" as const } },
-      ],
+        "bunnpris",
+        "extra",
+        "rema-1000",
+        "fudi",
+        "holdbart",
+        "meny",
+        "havaristen",
+        "joker",
+        "spar",
+        "fastcandy",
+        "europris",
+        "engrossnett",
+        "oda",
+      ].map((chainId) =>
+        chainId === "extra"
+          ? { chainId, status: { evidenceId: "price:1", kind: "priced" as const } }
+          : { chainId, status: { kind: "unknown" as const, reason: "not-checked" as const } }),
       evaluatedAt: "2026-07-15T12:00:00.000Z",
-      expectedChainIds: ["bunnpris", "extra", "rema-1000"],
+      expectedChainIds: ["bunnpris", "extra", "rema-1000", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"],
     },
     excludedPriceEvidence: [],
     historicalComparisons: [],
@@ -490,10 +503,23 @@ describe("POST /api/plans", () => {
         comparisonScope: {
           ...exactEvidence.needs[0]!.comparisonScope,
           entries: [
-            { chainId: "bunnpris", status: { kind: "unknown", reason: "not-checked" } },
-            { chainId: "extra", status: { evidenceId: "price:1", kind: "priced" } },
-            { chainId: "rema-1000", status: { kind: "unknown", reason: "not-checked" } },
-          ],
+            "bunnpris",
+            "extra",
+            "rema-1000",
+            "fudi",
+            "holdbart",
+            "meny",
+            "havaristen",
+            "joker",
+            "spar",
+            "fastcandy",
+            "europris",
+            "engrossnett",
+            "oda",
+          ].map((chainId) =>
+            chainId === "extra"
+              ? { chainId, status: { evidenceId: "price:1", kind: "priced" } }
+              : { chainId, status: { kind: "unknown", reason: "not-checked" } }),
         },
         officialOffers: offers,
         ordinaryPrices: exactEvidence.needs[0]!.ordinaryPrices.map((price) => ({

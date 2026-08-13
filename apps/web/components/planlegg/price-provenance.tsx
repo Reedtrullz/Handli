@@ -61,7 +61,7 @@ export function PriceProvenance({
       <h2 className="sr-only" id="price-provenance-title">Prisgrunnlag og forbehold</h2>
       <p><span aria-hidden="true">ⓘ</span> Valgte priser observert {observed}.</p>
       <p><span aria-hidden="true">◷</span> {priceDataSource === "cache" && "Kun kontrollert, lagret prisgrunnlag ble brukt."} Beregnet {formatTimestamp(generatedAt)}.</p>
-      <p><span aria-hidden="true">{coverageComplete ? "✓" : "△"}</span> Prisdekning: {coverageComplete ? "alle tre kjeder er kontrollert for alle varene." : "sammenligningen er delvis."}</p>
+      <p><span aria-hidden="true">{coverageComplete ? "✓" : "△"}</span> Prisdekning: {coverageComplete ? "alle støttede kjeder er kontrollert for alle varene." : "sammenligningen er delvis."}</p>
       {unresolvedChains.length > 0 && (
         <p><span aria-hidden="true">?</span> Uavklart dekning: {unresolvedChains.map((chain) => CHAIN_NAMES[chain] ?? chain).join(", ")}.</p>
       )}

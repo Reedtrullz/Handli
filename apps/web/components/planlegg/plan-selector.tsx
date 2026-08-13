@@ -57,6 +57,16 @@ const CHAIN_NAMES: Record<PlanResultV2["chains"][number], string> = {
   bunnpris: "Bunnpris",
   extra: "Extra",
   "rema-1000": "REMA 1000",
+  fudi: "FUDI",
+  holdbart: "Holdbart",
+  meny: "MENY",
+  havaristen: "Havaristen",
+  joker: "Joker",
+  spar: "SPAR",
+  fastcandy: "FastCandy",
+  europris: "Europris",
+  engrossnett: "Engrosnett",
+  oda: "Oda",
 };
 
 function membershipCopyForPlan(

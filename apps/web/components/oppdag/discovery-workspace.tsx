@@ -30,7 +30,21 @@ import { DiscoveryImpactBatch } from "./discovery-impact-batch";
 
 const MAX_DISCOVERY_RESPONSE_BYTES = 128 * 1024;
 const DISCOVERY_PAGE_SIZE = DISCOVERY_IMPACT_ACTION_MAX;
-const chains = ["bunnpris", "rema-1000", "extra"] as const;
+const chains = [
+  "bunnpris",
+  "rema-1000",
+  "extra",
+  "fudi",
+  "holdbart",
+  "meny",
+  "havaristen",
+  "joker",
+  "spar",
+  "fastcandy",
+  "europris",
+  "engrossnett",
+  "oda",
+] as const;
 type Chain = (typeof chains)[number];
 type ChainFilter = PublicDiscoveryRequestV1["chain"];
 type DiscoveryTypeFilter = PublicDiscoveryRequestV1["resultType"];
@@ -49,6 +63,16 @@ const chainLabels: Record<Chain, string> = {
   bunnpris: "Bunnpris",
   extra: "Extra",
   "rema-1000": "REMA 1000",
+  fudi: "FUDI",
+  holdbart: "Holdbart",
+  meny: "MENY",
+  havaristen: "Havaristen",
+  joker: "Joker",
+  spar: "SPAR",
+  fastcandy: "FastCandy",
+  europris: "Europris",
+  engrossnett: "Engrosnett",
+  oda: "Oda",
 };
 const suggestions = ["melk", "kaffe", "brød", "ost"];
 const subscribeToClient = () => () => {};
@@ -260,7 +284,7 @@ function unresolvedCoverage(entry: PublicDiscoveryProduct): Chain[] {
 
 function coverageText(entry: PublicDiscoveryProduct): string {
   if (entry.comparisonScope.completeness === "complete") {
-    return "Dekning: alle tre kjeder er avklart for varen.";
+    return "Dekning: alle støttede kjeder er avklart for varen.";
   }
   const unresolved = unresolvedCoverage(entry).map((chainId) => chainLabels[chainId]);
   return unresolved.length === 0
@@ -455,7 +479,7 @@ function DiscoveryWorkspaceClient({
 
       <section className="coverage-notice" aria-label="Dekningsstatus">
         <p>{hasCompleteCoverage
-          ? `For ${marketLabel} er alle tre kjeder avklart for akkurat varene som vises. Dette er ikke en lanserings- eller totaldekningspåstand.`
+          ? `For ${marketLabel} er alle støttede kjeder avklart for akkurat varene som vises. Dette er ikke en lanserings- eller totaldekningspåstand.`
           : `For ${marketLabel} varierer dekningen per vare. Manglende kjeder vises som uavklart og regnes aldri som dyrere, billigere eller uten varen.`}</p>
       </section>
 

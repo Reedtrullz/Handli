@@ -69,7 +69,7 @@ const reviewedFamilyTaxonomyVersionIdSchema = z
   .max(120)
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*@(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/);
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
-const EXPECTED_CHAIN_IDS = ["bunnpris", "extra", "rema-1000"] as const;
+const EXPECTED_CHAIN_IDS = ["bunnpris", "extra", "rema-1000", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"] as const;
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;

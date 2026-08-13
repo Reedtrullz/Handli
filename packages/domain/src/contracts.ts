@@ -43,7 +43,7 @@ export interface Product {
 
 export interface PriceObservation<SourceId extends string = "kassalapp"> {
   ean: string;
-  chain: "bunnpris" | "rema-1000" | "extra";
+  chain: z.infer<typeof chainSchema>;
   amountOre: MoneyOre;
   observedAt: string;
   source: SourceId;
@@ -84,7 +84,7 @@ export const moneyOreSchema = z
   .nonnegative()
   .max(MAX_PERSISTED_MONEY_ORE)
   .transform((amount) => amount as MoneyOre);
-const chainSchema = z.enum(["bunnpris", "rema-1000", "extra"]);
+const chainSchema = z.enum(["bunnpris", "rema-1000", "extra", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"]);
 const sizeRangeSchema = z
   .object({
     min: z.number().positive(),

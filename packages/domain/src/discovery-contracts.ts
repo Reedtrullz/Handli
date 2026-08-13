@@ -33,7 +33,7 @@ import {
 } from "./plan-api-contracts";
 
 const PUBLIC_DISCOVERY_CURRENT_PRICE_MAX_AGE_MS = 72 * 60 * 60 * 1_000;
-const EXPECTED_CHAINS = ["bunnpris", "extra", "rema-1000"] as const;
+const EXPECTED_CHAINS = ["bunnpris", "extra", "rema-1000", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"] as const;
 
 /** One Oppdag page is also the maximum bounded plan-impact action batch. */
 export const PUBLIC_DISCOVERY_PAGE_SIZE_MAX = 8;

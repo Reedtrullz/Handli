@@ -22,7 +22,20 @@ import {
 } from "./schema";
 import { SOURCE_GOVERNANCE_ADVISORY_LOCK_SEED } from "./source-governance-lock";
 
-export type SupportedChain = "bunnpris" | "extra" | "rema-1000";
+export type SupportedChain =
+  | "bunnpris"
+  | "extra"
+  | "rema-1000"
+  | "fudi"
+  | "holdbart"
+  | "meny"
+  | "havaristen"
+  | "joker"
+  | "spar"
+  | "fastcandy"
+  | "europris"
+  | "engrossnett"
+  | "oda";
 export type SourceRecordOutcomeState = "accepted" | "quarantined" | "unknown";
 
 type SourceRecordOutcomeBase = {

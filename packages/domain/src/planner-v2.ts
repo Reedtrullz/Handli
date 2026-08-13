@@ -33,7 +33,7 @@ interface Candidate {
 
 type OffersByProductChain = ReadonlyMap<string, readonly OfficialOffer[]>;
 
-const CHAIN_ORDER: readonly Chain[] = ["bunnpris", "extra", "rema-1000"];
+const CHAIN_ORDER: readonly Chain[] = ["bunnpris", "extra", "rema-1000", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"];
 const chainRank = new Map(CHAIN_ORDER.map((chain, index) => [chain, index]));
 
 function compareText(left: string, right: string): number {

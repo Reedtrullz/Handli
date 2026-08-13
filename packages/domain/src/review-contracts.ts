@@ -21,7 +21,7 @@ import { membershipProgramIdSchema } from "./offers";
 export const REVIEW_QUEUE_LIMIT_MAX = 50;
 export const REVIEW_REASON_MAX_LENGTH = 1_000;
 
-const chainSchema = z.enum(["bunnpris", "extra", "rema-1000"]);
+const chainSchema = z.enum(["bunnpris", "extra", "rema-1000", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"]);
 const scopeKindSchema = z.enum(["national", "region", "postal_set", "store_set"]);
 const moneySchema = z.number().int().nonnegative().max(MAX_PERSISTED_MONEY_ORE);
 

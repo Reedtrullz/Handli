@@ -4,9 +4,33 @@ const CHAIN_LABELS = {
   bunnpris: "Bunnpris",
   extra: "Extra",
   "rema-1000": "REMA 1000",
+  fudi: "FUDI",
+  holdbart: "Holdbart",
+  meny: "MENY",
+  havaristen: "Havaristen",
+  joker: "Joker",
+  spar: "SPAR",
+  fastcandy: "FastCandy",
+  europris: "Europris",
+  engrossnett: "Engrosnett",
+  oda: "Oda",
 } as const satisfies Readonly<Record<string, string>>;
 
-const CHAIN_ORDER = ["bunnpris", "extra", "rema-1000"] as const;
+const CHAIN_ORDER = [
+  "bunnpris",
+  "extra",
+  "rema-1000",
+  "fudi",
+  "holdbart",
+  "meny",
+  "havaristen",
+  "joker",
+  "spar",
+  "fastcandy",
+  "europris",
+  "engrossnett",
+  "oda",
+] as const;
 
 /**
  * Membership program IDs are opaque eligibility keys. This module is the only

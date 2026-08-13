@@ -515,7 +515,7 @@ export const physicalStores = pgTable(
     unique("physical_stores_source_external_unique").on(table.sourceId, table.externalId),
     check(
       "physical_stores_chain_supported",
-      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra')`,
+      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra', 'fudi', 'holdbart', 'meny', 'havaristen', 'joker', 'spar', 'fastcandy', 'europris', 'engrossnett', 'oda')`,
     ),
     check(
       "physical_stores_latitude_range",
@@ -619,7 +619,7 @@ export const physicalStoreObservations = pgTable(
     ),
     check(
       "physical_store_observations_chain_supported",
-      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra')`,
+      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra', 'fudi', 'holdbart', 'meny', 'havaristen', 'joker', 'spar', 'fastcandy', 'europris', 'engrossnett', 'oda')`,
     ),
     check(
       "physical_store_observations_name_nonempty",
@@ -678,7 +678,7 @@ export const physicalStoreCoverageChecks = pgTable(
     ),
     check(
       "physical_store_coverage_checks_chain_supported",
-      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra')`,
+      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra', 'fudi', 'holdbart', 'meny', 'havaristen', 'joker', 'spar', 'fastcandy', 'europris', 'engrossnett', 'oda')`,
     ),
     check(
       "physical_store_coverage_checks_state",
@@ -738,7 +738,7 @@ export const sourceRecordOutcomes = pgTable(
     ),
     check(
       "source_record_outcomes_chain_supported",
-      sql`${table.subjectChain} is null or ${table.subjectChain} in ('bunnpris', 'rema-1000', 'extra')`,
+      sql`${table.subjectChain} is null or ${table.subjectChain} in ('bunnpris', 'rema-1000', 'extra', 'fudi', 'holdbart', 'meny', 'havaristen', 'joker', 'spar', 'fastcandy', 'europris', 'engrossnett', 'oda')`,
     ),
     check(
       "source_record_outcomes_hash_shape",
@@ -866,7 +866,7 @@ export const priceObservations = pgTable(
     index("price_observations_source_run_idx").on(table.sourceId, table.ingestionRunId),
     check(
       "price_observations_chain_supported",
-      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra')`,
+      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra', 'fudi', 'holdbart', 'meny', 'havaristen', 'joker', 'spar', 'fastcandy', 'europris', 'engrossnett', 'oda')`,
     ),
     check(
       "price_observations_amount_ore_nonnegative",
@@ -913,7 +913,7 @@ export const priceCoverageChecks = pgTable(
   (table) => [
     check(
       "price_coverage_checks_chain_supported",
-      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra')`,
+      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra', 'fudi', 'holdbart', 'meny', 'havaristen', 'joker', 'spar', 'fastcandy', 'europris', 'engrossnett', 'oda')`,
     ),
     check(
       "price_coverage_checks_state",
@@ -946,7 +946,7 @@ export const publications = pgTable(
     unique("publications_source_external_unique").on(table.sourceId, table.externalId),
     check(
       "publications_chain_supported",
-      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra')`,
+      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra', 'fudi', 'holdbart', 'meny', 'havaristen', 'joker', 'spar', 'fastcandy', 'europris', 'engrossnett', 'oda')`,
     ),
     check(
       "publications_valid_range",
@@ -1094,7 +1094,7 @@ export const approvedOffers = pgTable(
       .where(sql`${table.candidateId} is not null`),
     check(
       "approved_offers_chain_supported",
-      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra')`,
+      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra', 'fudi', 'holdbart', 'meny', 'havaristen', 'joker', 'spar', 'fastcandy', 'europris', 'engrossnett', 'oda')`,
     ),
     check("approved_offers_amount_ore_nonnegative", sql`${table.amountOre} >= 0`),
     check(
@@ -1394,7 +1394,7 @@ export const historicalPriceStatistics = pgTable(
   (table) => [
     check(
       "historical_price_statistics_chain_supported",
-      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra')`,
+      sql`${table.chain} in ('bunnpris', 'rema-1000', 'extra', 'fudi', 'holdbart', 'meny', 'havaristen', 'joker', 'spar', 'fastcandy', 'europris', 'engrossnett', 'oda')`,
     ),
     check(
       "historical_price_statistics_window_range",

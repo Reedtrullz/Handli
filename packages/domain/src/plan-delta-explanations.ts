@@ -20,7 +20,7 @@ import { travelRouteEvidenceSchema, type TravelRouteEvidence } from "./travel-co
 
 export const PLAN_DELTA_EXPLANATION_CONTRACT_VERSION = 1 as const;
 
-const chainSchema = z.enum(["bunnpris", "extra", "rema-1000"]);
+const chainSchema = z.enum(["bunnpris", "extra", "rema-1000", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"]);
 type Chain = z.infer<typeof chainSchema>;
 
 const nonNegativeMeasureSchema = packageMeasureSchema.extend({

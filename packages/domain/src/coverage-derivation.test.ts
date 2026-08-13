@@ -87,18 +87,19 @@ describe("deriveComparisonScope", () => {
       check("check:rema", "rema-1000", "known-not-carried"),
     ];
 
-    const forward = derive(rows, checks, ["rema-1000", "extra", "bunnpris"]);
-    const reverse = derive([...rows].reverse(), [...checks].reverse());
+    const orderedChains = ["rema-1000", "extra", "bunnpris"];
+    const forward = derive(rows, checks, orderedChains);
+    const reverse = derive([...rows].reverse(), [...checks].reverse(), orderedChains);
 
     expect(forward).toEqual(reverse);
     expect(forward).toEqual({
       contractVersion: 1,
       completeness: "complete",
       evaluatedAt: NOW.toISOString(),
-      expectedChainIds: ["bunnpris", "extra", "rema-1000"],
+      expectedChainIds: ["rema-1000", "extra", "bunnpris"],
       entries: [
         {
-          chainId: "bunnpris",
+          chainId: "rema-1000",
           status: {
             kind: "known-not-carried",
             sourceId: "licensed-feed",
@@ -107,7 +108,7 @@ describe("deriveComparisonScope", () => {
         },
         { chainId: "extra", status: { kind: "priced", evidenceId: "price:newer-cheap-a" } },
         {
-          chainId: "rema-1000",
+          chainId: "bunnpris",
           status: {
             kind: "known-not-carried",
             sourceId: "licensed-feed",
@@ -354,7 +355,7 @@ describe("deriveComparisonScope", () => {
     expect(derive([first, { ...first, amountOre: 901 }])).toBeNull();
     expect(derive([], [], [])).toBeNull();
     expect(derive([], [], ["extra", "extra"])).toBeNull();
-    expect(derive([], [], ["a", "b", "c", "d"])).toBeNull();
+    expect(derive([], [], Array.from({ length: 14 }, (_, index) => `chain-${index}`))).toBeNull();
     expect(deriveComparisonScope({
       canonicalProductId: "product:milk",
       expectedChainIds: ["extra"],

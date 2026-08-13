@@ -22,7 +22,21 @@ describe("CoverageService", () => {
       },
     });
 
-    expect(V1_EXPECTED_PRICE_CHAINS).toEqual(["bunnpris", "extra", "rema-1000"]);
+    expect(V1_EXPECTED_PRICE_CHAINS).toEqual([
+      "bunnpris",
+      "extra",
+      "rema-1000",
+      "fudi",
+      "holdbart",
+      "meny",
+      "havaristen",
+      "joker",
+      "spar",
+      "fastcandy",
+      "europris",
+      "engrossnett",
+      "oda",
+    ]);
     expect(result).toMatchObject({
       completeness: "partial",
       expectedChainIds: V1_EXPECTED_PRICE_CHAINS,
@@ -30,6 +44,16 @@ describe("CoverageService", () => {
         { chainId: "bunnpris", status: { kind: "unknown", reason: "not-checked" } },
         { chainId: "extra", status: { kind: "unknown", reason: "not-checked" } },
         { chainId: "rema-1000", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "fudi", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "holdbart", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "meny", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "havaristen", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "joker", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "spar", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "fastcandy", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "europris", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "engrossnett", status: { kind: "unknown", reason: "not-checked" } },
+        { chainId: "oda", status: { kind: "unknown", reason: "not-checked" } },
       ],
     });
   });

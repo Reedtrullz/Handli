@@ -14,7 +14,7 @@ import {
 export const travelModeSchema = z.enum(["car", "bike"]);
 export type TravelMode = z.infer<typeof travelModeSchema>;
 
-export const travelChainIdSchema = z.enum(["bunnpris", "extra", "rema-1000"]);
+export const travelChainIdSchema = z.enum(["bunnpris", "extra", "rema-1000", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"]);
 export type TravelChainId = z.infer<typeof travelChainIdSchema>;
 
 export const travelCoordinateSchema = z

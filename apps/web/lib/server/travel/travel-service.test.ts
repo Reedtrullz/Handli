@@ -270,6 +270,16 @@ describe("TravelService", () => {
       bunnpris: 20_000,
       extra: 0,
       "rema-1000": 10_000,
+      fudi: 0,
+      holdbart: 0,
+      meny: 0,
+      havaristen: 0,
+      joker: 0,
+      spar: 0,
+      fastcandy: 0,
+      europris: 0,
+      engrossnett: 0,
+      oda: 0,
     };
     const nearBranches = CHAINS.flatMap((chainId) => [1, 2, 3, 4].map((index) =>
       branch(

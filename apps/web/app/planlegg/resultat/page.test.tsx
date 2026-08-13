@@ -30,7 +30,21 @@ const OBSERVED_AT = "2026-07-16T11:00:00.000Z";
 const CANDIDATE_SET_ID = `candidate-set:${"a".repeat(64)}`;
 const LOCATION_TOKEN = `location-choice:${"z".repeat(43)}`;
 const ALTERNATE_LOCATION_TOKEN = `location-choice:${"y".repeat(43)}`;
-const EXPECTED_CHAINS = ["bunnpris", "extra", "rema-1000"] as const;
+const EXPECTED_CHAINS = [
+  "bunnpris",
+  "extra",
+  "rema-1000",
+  "fudi",
+  "holdbart",
+  "meny",
+  "havaristen",
+  "joker",
+  "spar",
+  "fastcandy",
+  "europris",
+  "engrossnett",
+  "oda",
+] as const;
 const MARKET_CONTEXT = {
   contractVersion: 1,
   countryCode: "NO",
@@ -207,10 +221,22 @@ const canonicalProduct = {
   unitsPerPack: 1,
 };
 
+const FULL_COVERAGE_CHAINS = [...EXPECTED_CHAINS] as const;
+
 const prices: Record<Chain, number> = {
   bunnpris: 1_990,
   extra: 2_490,
   "rema-1000": 2_290,
+  fudi: 2_290,
+  holdbart: 2_290,
+  meny: 2_290,
+  havaristen: 2_290,
+  joker: 2_290,
+  spar: 2_290,
+  fastcandy: 2_290,
+  europris: 2_290,
+  engrossnett: 2_290,
+  oda: 2_290,
 };
 
 function priceEvidence(chainId: Chain, amountOre = prices[chainId]) {
@@ -500,11 +526,10 @@ function mixedCoverage(evidenceId: string) {
   return {
     completeness: "partial" as const,
     contractVersion: 1 as const,
-    entries: [
-      { chainId: "bunnpris" as const, status: { kind: "unknown" as const, reason: "not-checked" as const } },
-      { chainId: "extra" as const, status: { evidenceId, kind: "priced" as const } },
-      { chainId: "rema-1000" as const, status: { kind: "unknown" as const, reason: "not-checked" as const } },
-    ],
+    entries: EXPECTED_CHAINS.map((chainId) =>
+      chainId === "extra"
+        ? { chainId, status: { evidenceId, kind: "priced" as const } }
+        : { chainId, status: { kind: "unknown" as const, reason: "not-checked" as const } }),
     evaluatedAt: GENERATED_AT,
     expectedChainIds: [...EXPECTED_CHAINS],
   };
@@ -725,7 +750,7 @@ describe("Planlegg strict result workspace", () => {
     expect(screen.queryByText("LOCAL PRODUCT MUST STAY PRIVATE")).not.toBeInTheDocument();
     expect(screen.getByText("22,90 kr", { selector: ".result-total" })).toBeVisible();
     expect(screen.getByText(/Kun kontrollert, lagret prisgrunnlag/)).toBeVisible();
-    expect(screen.getByText(/alle tre kjeder er kontrollert/)).toBeVisible();
+    expect(screen.getByText(/alle støttede kjeder er kontrollert/)).toBeVisible();
     expect(screen.getAllByRole("radio").map((radio) => radio.getAttribute("value"))).toEqual([
       "server-balanced",
     ]);
@@ -792,7 +817,7 @@ describe("Planlegg strict result workspace", () => {
   it("selects directly from returned representatives and persists only the normalized preference", async () => {
     const user = userEvent.setup();
     localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
-    vi.stubGlobal("fetch", okFetch(resultResponse({ plans: equivalentPlans })));
+    vi.stubGlobal("fetch", okFetch(resultResponse({ plans: equivalentPlans, pricedChains: [...FULL_COVERAGE_CHAINS] })));
     const first = render(<ResultPage />);
 
     await user.click(await screen.findByRole("radio", { name: /Likeverdig alternativ 3/ }));
@@ -878,6 +903,7 @@ describe("Planlegg strict result workspace", () => {
         enabledMembershipProgramIds: posted.enabledMembershipProgramIds,
         offers: [memberOffer],
         plans: equivalentPlans,
+        pricedChains: [...FULL_COVERAGE_CHAINS],
       })), {
         headers: { "content-type": "application/json" },
         status: 200,
@@ -1509,7 +1535,7 @@ describe("Planlegg strict result workspace", () => {
 
   it("uses the latest keyboard preference when a pending travel response arrives", async () => {
     const user = userEvent.setup();
-    const planning = resultResponse({ plans: equivalentPlans });
+    const planning = resultResponse({ plans: equivalentPlans, pricedChains: [...FULL_COVERAGE_CHAINS] });
     localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
     let resolveTravel!: (response: Response) => void;
     const fetch = vi.fn((input: RequestInfo | URL) => {

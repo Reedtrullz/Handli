@@ -28,6 +28,21 @@ const MARKET_CONTEXT = {
   countryCode: "NO",
   kind: "national",
 } as const;
+const EXPECTED_CHAINS = [
+  "bunnpris",
+  "extra",
+  "rema-1000",
+  "fudi",
+  "holdbart",
+  "meny",
+  "havaristen",
+  "joker",
+  "spar",
+  "fastcandy",
+  "europris",
+  "engrossnett",
+  "oda",
+] as const;
 const catalogSource = {
   contractVersion: 1 as const,
   displayName: "Kassalapp",
@@ -138,13 +153,14 @@ function fixtureResponse(): PublicDiscoveryResponse {
       comparisonScope: {
         completeness: "partial",
         contractVersion: 1,
-        entries: [
-          { chainId: "bunnpris", status: { kind: "unknown", reason: "not-checked" } },
-          { chainId: "extra", status: { evidenceId: currentExtra.id, kind: "priced" } },
-          { chainId: "rema-1000", status: { evidenceId: currentRema.id, kind: "priced" } },
-        ],
+        entries: EXPECTED_CHAINS.map((chainId) =>
+          chainId === "extra"
+            ? { chainId, status: { evidenceId: currentExtra.id, kind: "priced" } }
+            : chainId === "rema-1000"
+              ? { chainId, status: { evidenceId: currentRema.id, kind: "priced" } }
+              : { chainId, status: { kind: "unknown", reason: "not-checked" } }),
         evaluatedAt: GENERATED_AT,
-        expectedChainIds: ["bunnpris", "extra", "rema-1000"],
+        expectedChainIds: [...EXPECTED_CHAINS],
       },
       excludedPriceEvidence: [],
       historicalComparisons: [{
@@ -206,13 +222,12 @@ function fixtureResponse(): PublicDiscoveryResponse {
       comparisonScope: {
         completeness: "partial",
         contractVersion: 1,
-        entries: [
-          { chainId: "bunnpris", status: { evidenceId: bunnpris.id, kind: "priced" } },
-          { chainId: "extra", status: { kind: "unknown", reason: "not-checked" } },
-          { chainId: "rema-1000", status: { kind: "unknown", reason: "not-checked" } },
-        ],
+        entries: EXPECTED_CHAINS.map((chainId) =>
+          chainId === "bunnpris"
+            ? { chainId, status: { evidenceId: bunnpris.id, kind: "priced" } }
+            : { chainId, status: { kind: "unknown", reason: "not-checked" } }),
         evaluatedAt: GENERATED_AT,
-        expectedChainIds: ["bunnpris", "extra", "rema-1000"],
+        expectedChainIds: [...EXPECTED_CHAINS],
       },
       excludedPriceEvidence: [],
       historicalComparisons: [],

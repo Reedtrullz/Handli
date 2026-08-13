@@ -31,6 +31,16 @@ const chainOrder: Readonly<Record<TravelChainId, number>> = {
   bunnpris: 0,
   extra: 1,
   "rema-1000": 2,
+  fudi: 3,
+  holdbart: 4,
+  meny: 5,
+  havaristen: 6,
+  joker: 7,
+  spar: 8,
+  fastcandy: 9,
+  europris: 10,
+  engrossnett: 11,
+  oda: 12,
 };
 
 function compareText(left: string, right: string): number {

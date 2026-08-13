@@ -21,7 +21,7 @@ import {
 } from "./geography";
 import { officialOfferSchema } from "./offers";
 
-const chainSchema = z.enum(["bunnpris", "rema-1000", "extra"]);
+const chainSchema = z.enum(["bunnpris", "rema-1000", "extra", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"]);
 const maxStoresSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
 
 export const planningNeedV2Schema = z

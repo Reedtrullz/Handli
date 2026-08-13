@@ -400,11 +400,14 @@ it("keeps accepted, unknown-price, and unknown-chain price states explicit", () 
     }
   });
 
-  it("quarantines malformed and future price records instead of coercing them", () => {
-    const malformed = structuredClone(pricesFixture);
-    malformed.data[0]!.stores[0]!.current_price = "21.90" as unknown as number;
-    expect(normalizePriceSourceResponse(malformed, { now: NOW, retrievedAt: RETRIEVED_AT }))
-      .toContainEqual(expect.objectContaining({ state: "quarantined", reason: "MALFORMED_RECORD" }));
+  it("accepts string price amounts and quarantines future price records", () => {
+    const stringPrice = structuredClone(pricesFixture);
+    stringPrice.data[0]!.stores[0]!.current_price = "21.90";
+    expect(normalizePriceSourceResponse(stringPrice, { now: NOW, retrievedAt: RETRIEVED_AT }))
+      .toContainEqual(expect.objectContaining({
+        state: "accepted",
+        record: expect.objectContaining({ amountOre: 2_190 }),
+      }));
 
     const future = structuredClone(pricesFixture);
     future.data[0]!.stores[0]!.last_checked = "2026-07-17T08:30:00Z";
@@ -459,7 +462,19 @@ it("keeps accepted, unknown-price, and unknown-chain price states explicit", () 
         ? [outcome.chainCode]
         : []);
     expect(acceptedChains).toEqual(["BUNNPRIS", "COOP_EXTRA"]);
-    expect(missingChains).toEqual(["REMA_1000"]);
+    expect(missingChains).toEqual([
+      "ENGROSSNETT_NO",
+      "EUROPRIS_NO",
+      "FASTCANDY",
+      "FUDI",
+      "HAVARISTEN",
+      "HOLDBART",
+      "JOKER_NO",
+      "MENY_NO",
+      "ODA_NO",
+      "REMA_1000",
+      "SPAR_NO",
+    ]);
   });
 
   it("does not invent an observation time and never lets a future timestamp bypass validation", () => {

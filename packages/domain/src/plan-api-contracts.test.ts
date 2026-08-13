@@ -126,7 +126,14 @@ const validPlan = planResultV2Schema.parse({
   totalOre: 4_980,
 });
 
-const EXPECTED_CHAINS = ["bunnpris", "extra", "rema-1000"] as const;
+const EXPECTED_CHAINS = ["bunnpris", "extra", "rema-1000", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"] as const;
+
+function scopeEntriesWithPriced(pricedChainId: string, evidenceId: string) {
+  return EXPECTED_CHAINS.map((chainId) =>
+    chainId === pricedChainId
+      ? { chainId, status: { kind: "priced" as const, evidenceId } }
+      : { chainId, status: { kind: "unknown" as const, reason: "not-checked" as const } });
+}
 
 function emptyNeedEvidence(needId: string) {
   return {
@@ -180,11 +187,7 @@ function responseEvidence(
           ...emptyNeedEvidence(id),
           comparisonScope: {
             ...emptyNeedEvidence(id).comparisonScope,
-            entries: [
-              { chainId: "bunnpris", status: { kind: "unknown" as const, reason: "not-checked" as const } },
-              { chainId: "extra", status: { kind: "priced" as const, evidenceId: milkPriceEvidence.id } },
-              { chainId: "rema-1000", status: { kind: "unknown" as const, reason: "not-checked" as const } },
-            ],
+            entries: scopeEntriesWithPriced("extra", milkPriceEvidence.id),
           },
           ordinaryPrices: [milkPriceEvidence],
         }
@@ -218,25 +221,17 @@ function completeResponseEvidence(checkedAt: string): ExactProductPlanApiEvidenc
       comparisonScope: {
         ...need.comparisonScope,
         completeness: "complete" as const,
-        entries: [
-          {
-            chainId: "bunnpris",
-            status: {
-              checkedAt,
-              kind: "known-not-carried" as const,
-              sourceId: "fixture-source",
-            },
-          },
-          { chainId: "extra", status: { evidenceId: milkPriceEvidence.id, kind: "priced" as const } },
-          {
-            chainId: "rema-1000",
-            status: {
-              checkedAt,
-              kind: "known-not-carried" as const,
-              sourceId: "fixture-source",
-            },
-          },
-        ],
+        entries: EXPECTED_CHAINS.map((chainId) =>
+          chainId === "extra"
+            ? { chainId, status: { evidenceId: milkPriceEvidence.id, kind: "priced" as const } }
+            : {
+                chainId,
+                status: {
+                  checkedAt,
+                  kind: "known-not-carried" as const,
+                  sourceId: "fixture-source",
+                },
+              }),
       },
     })),
   };
@@ -1196,9 +1191,9 @@ describe("V1 exact-product plan API contracts", () => {
     }).success).toBe(false);
 
     const oversizedCollections = [
-      ["ordinaryPrices", 4],
-      ["excludedPriceEvidence", 4],
-      ["historicalComparisons", 4],
+      ["ordinaryPrices", 14],
+      ["excludedPriceEvidence", 14],
+      ["historicalComparisons", 14],
       ["historicalPriceEvidence", 301],
     ] as const;
     for (const [field, length] of oversizedCollections) {

@@ -14,6 +14,22 @@ const source = {
   state: "approved" as const,
 };
 
+const expectedChainIds = [
+  "bunnpris",
+  "extra",
+  "rema-1000",
+  "fudi",
+  "holdbart",
+  "meny",
+  "havaristen",
+  "joker",
+  "spar",
+  "fastcandy",
+  "europris",
+  "engrossnett",
+  "oda",
+] as const;
+
 const catalog = {
   brand: "TINE",
   catalogEvidence: {
@@ -62,12 +78,12 @@ const response = {
     comparisonScope: {
       completeness: "partial",
       contractVersion: 1,
-      entries: ["bunnpris", "extra", "rema-1000"].map((chainId) => ({
+      entries: expectedChainIds.map((chainId) => ({
         chainId,
         status: { kind: "unknown", reason: "not-checked" },
       })),
       evaluatedAt: "2026-07-16T12:00:00.000Z",
-      expectedChainIds: ["bunnpris", "extra", "rema-1000"],
+      expectedChainIds,
     },
     excludedPriceEvidence: [],
     historicalComparisons: [],

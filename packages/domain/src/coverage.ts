@@ -332,7 +332,7 @@ export function deriveComparisonScope(
   const product = identifierSchema.safeParse(input.canonicalProductId);
   const location = geographicContextSchema.safeParse(input.context?.location);
   const expectedChainIds = Array.isArray(input.expectedChainIds)
-    ? [...input.expectedChainIds].sort(compareText)
+    ? [...input.expectedChainIds]
     : [];
   if (
     !product.success
@@ -343,7 +343,7 @@ export function deriveComparisonScope(
     || !Number.isSafeInteger(input.context?.maxAgeMs)
     || input.context.maxAgeMs < 0
     || expectedChainIds.length < 1
-    || expectedChainIds.length > 3
+    || expectedChainIds.length > 13
     || !expectedChainIds.every((chainId) => identifierSchema.safeParse(chainId).success)
     || !hasUniqueStrings(expectedChainIds)
   ) {

@@ -26,6 +26,29 @@ const MARKET_CONTEXT = {
   kind: "national",
 } as const satisfies MarketContextV1;
 
+const ALL_CHAINS = [
+  "bunnpris",
+  "extra",
+  "rema-1000",
+  "fudi",
+  "holdbart",
+  "meny",
+  "havaristen",
+  "joker",
+  "spar",
+  "fastcandy",
+  "europris",
+  "engrossnett",
+  "oda",
+] as const;
+
+function scopeEntries(pricedChainId: string, evidenceId: string) {
+  return ALL_CHAINS.map((chainId) =>
+    chainId === pricedChainId
+      ? { chainId, status: { evidenceId, kind: "priced" as const } }
+      : { chainId, status: { kind: "unknown" as const, reason: "not-checked" as const } });
+}
+
 export interface StrictResultTripFixture {
   exactRequest: ExactProductPlanApiRequest;
   exactResponse: ExactProductPlanApiResponse;
@@ -193,13 +216,9 @@ export function strictResultTripFixture(
       comparisonScope: {
         completeness: "partial",
         contractVersion: 1,
-        entries: [
-          { chainId: "bunnpris", status: { kind: "unknown", reason: "not-checked" } },
-          { chainId: "extra", status: { evidenceId: ordinaryPrice.id, kind: "priced" } },
-          { chainId: "rema-1000", status: { kind: "unknown", reason: "not-checked" } },
-        ],
+        entries: scopeEntries("extra", ordinaryPrice.id),
         evaluatedAt: generatedAt,
-        expectedChainIds: ["bunnpris", "extra", "rema-1000"],
+        expectedChainIds: [...ALL_CHAINS],
       },
       excludedPriceEvidence: [],
       historicalComparisons: [],
@@ -461,13 +480,9 @@ export function reviewedStrictResultTripFixture(
     comparisonScope: {
       completeness: "partial" as const,
       contractVersion: 1 as const,
-      entries: [
-        { chainId: "bunnpris" as const, status: { kind: "unknown" as const, reason: "not-checked" as const } },
-        { chainId: "extra" as const, status: { evidenceId, kind: "priced" as const } },
-        { chainId: "rema-1000" as const, status: { kind: "unknown" as const, reason: "not-checked" as const } },
-      ],
+      entries: scopeEntries("extra", evidenceId),
       evaluatedAt: generatedAt,
-      expectedChainIds: ["bunnpris", "extra", "rema-1000"] as const,
+      expectedChainIds: [...ALL_CHAINS],
     },
     needId,
   });

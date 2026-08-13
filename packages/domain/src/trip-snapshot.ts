@@ -43,7 +43,7 @@ import {
 } from "./reviewed-family-plan-api-contracts";
 import { travelModeSchema } from "./travel-contracts";
 
-const chainSchema = z.enum(["bunnpris", "extra", "rema-1000"]);
+const chainSchema = z.enum(["bunnpris", "extra", "rema-1000", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"]);
 const checklistItemIdSchema = z.string().trim().min(1).max(300);
 const CURRENT_PRICE_MAX_AGE_MS = 72 * 60 * 60 * 1_000;
 const measureUnitSchema = z.enum(["g", "ml", "piece", "package"]);
@@ -988,6 +988,16 @@ const CHAIN_NAMES: Readonly<Record<z.infer<typeof chainSchema>, string>> = {
   bunnpris: "Bunnpris",
   extra: "Extra",
   "rema-1000": "REMA 1000",
+  fudi: "FUDI",
+  holdbart: "Holdbart",
+  meny: "MENY",
+  havaristen: "Havaristen",
+  joker: "Joker",
+  spar: "SPAR",
+  fastcandy: "FastCandy",
+  europris: "Europris",
+  engrossnett: "Engrosnett",
+  oda: "Oda",
 };
 
 function stableChecklistId(planId: string, needId: string): string {

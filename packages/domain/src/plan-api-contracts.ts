@@ -93,7 +93,7 @@ export const exactProductPlanApiRequestSchema = z
 
 export type ExactProductPlanApiRequest = z.infer<typeof exactProductPlanApiRequestSchema>;
 
-const exactProductPlanApiChainSchema = z.enum(["bunnpris", "extra", "rema-1000"]);
+const exactProductPlanApiChainSchema = z.enum(["bunnpris", "extra", "rema-1000", "fudi", "holdbart", "meny", "havaristen", "joker", "spar", "fastcandy", "europris", "engrossnett", "oda"]);
 
 export const EXACT_PRODUCT_OFFER_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1_000;
 export const EXACT_PRODUCT_PRICE_MAX_AGE_MS = 72 * 60 * 60 * 1_000;
@@ -167,11 +167,11 @@ export type ExactProductPlanApiProductSummary = z.infer<
 export const exactProductPlanApiNeedEvidenceSchema = z
   .object({
     needId: identifierSchema,
-    ordinaryPrices: z.array(priceEvidenceSchema).max(3),
+    ordinaryPrices: z.array(priceEvidenceSchema).max(13),
     historicalPriceEvidence: z.array(priceEvidenceSchema).max(300),
-    excludedPriceEvidence: z.array(priceEvidenceSchema).max(3),
+    excludedPriceEvidence: z.array(priceEvidenceSchema).max(13),
     officialOffers: z.array(officialOfferSchema).max(50),
-    historicalComparisons: z.array(historicalComparisonSchema).max(3),
+    historicalComparisons: z.array(historicalComparisonSchema).max(13),
     comparisonScope: comparisonScopeSchema,
   })
   .strict()
