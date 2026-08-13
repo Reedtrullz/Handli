@@ -98,9 +98,8 @@ async function awaitAbortable<T>(
 }
 
 function canonicalChains(value: readonly TravelChainId[]): TravelChainId[] | undefined {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 3) return undefined;
-  if (value.some((chain: unknown) =>
-    chain !== "bunnpris" && chain !== "extra" && chain !== "rema-1000")) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 13) return undefined;
+  if (value.some((chain: unknown) => CHAIN_ORDER[chain as TravelChainId] === undefined)) {
     return undefined;
   }
   const unique = [...new Set(value as readonly TravelChainId[])];
