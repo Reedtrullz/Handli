@@ -5,6 +5,7 @@ import type { HandleplanDatabase } from "./client";
 export interface WorkerGtinTargetReader {
   getCatalogDiscoveryPage(signal?: AbortSignal): Promise<number>;
   getCatalogGtins(limit: number, signal?: AbortSignal): Promise<readonly string[]>;
+  getNationalPriceScopeId(signal?: AbortSignal): Promise<number | undefined>;
   getPriceGtins(
     limit: number,
     claimEligibility: "historical_eligible" | "ordinary_only",
@@ -125,6 +126,25 @@ export class PostgresWorkerGtinTargetReader implements WorkerGtinTargetReader {
     `, signal);
     if (signal?.aborted) throw cancelledError();
     return values(rows);
+  }
+
+  async getNationalPriceScopeId(signal?: AbortSignal): Promise<number | undefined> {
+    const rows = await awaitAbortable(this.db.$client<Array<{ id: number }>>`
+      select id
+      from geographic_scopes
+      where scope_kind = 'national'
+        and country_code = 'NO'
+        and status = 'active'
+      order by id
+      limit 1
+    `, signal);
+    if (signal?.aborted) throw cancelledError();
+    const id = rows[0]?.id;
+    if (id === undefined) return undefined;
+    if (!Number.isSafeInteger(id) || id < 1) {
+      throw new TypeError("PostgreSQL returned an invalid national geographic scope id");
+    }
+    return id;
   }
 
   async getPriceGtins(

@@ -176,6 +176,7 @@ describe("production worker adapters", () => {
     const reader = {
       getCatalogDiscoveryPage: vi.fn(async () => 3),
       getCatalogGtins: vi.fn(async () => [...EANS, EANS[0]!]),
+      getNationalPriceScopeId: vi.fn(async () => 42),
       getPriceGtins: vi.fn(async () => [...EANS].reverse()),
     };
     const targets = new PostgresKassalappTargetProvider(reader, 2);
@@ -185,14 +186,28 @@ describe("production worker adapters", () => {
       EANS.map((ean) => ({ ean })),
     );
     await expect(targets.getBenchmarkPriceTargets(SIGNAL)).resolves.toEqual(
-      EANS.map((ean) => ({ ean })),
+      EANS.map((ean) => ({ ean, geographicScopeId: 42 })),
     );
     await expect(targets.getHistoricalObservationTargets(SIGNAL)).resolves.toEqual(
-      EANS.map((ean) => ({ ean })),
+      EANS.map((ean) => ({ ean, geographicScopeId: 42 })),
     );
     expect(reader.getCatalogGtins).toHaveBeenCalledWith(2, SIGNAL);
     expect(reader.getPriceGtins).toHaveBeenNthCalledWith(1, 2, "ordinary_only", SIGNAL);
     expect(reader.getPriceGtins).toHaveBeenNthCalledWith(2, 2, "historical_eligible", SIGNAL);
+    expect(reader.getNationalPriceScopeId).toHaveBeenCalledTimes(2);
+  });
+
+  it("omits the scope when no national scope exists yet", async () => {
+    const reader = {
+      getCatalogDiscoveryPage: vi.fn(async () => 3),
+      getCatalogGtins: vi.fn(async () => EANS),
+      getNationalPriceScopeId: vi.fn(async () => undefined),
+      getPriceGtins: vi.fn(async () => EANS),
+    };
+    const targets = new PostgresKassalappTargetProvider(reader, 2);
+    await expect(targets.getBenchmarkPriceTargets(SIGNAL)).resolves.toEqual(
+      EANS.map((ean) => ({ ean })),
+    );
   });
 
   it("binds the runtime lease to the source and maps fenced schedule state", async () => {

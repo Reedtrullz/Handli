@@ -184,18 +184,20 @@ export class PostgresKassalappTargetProvider implements KassalappTargetProvider 
     return await this.reader.getCatalogDiscoveryPage(signal);
   }
 
-  async getBenchmarkPriceTargets(signal: AbortSignal): Promise<readonly { ean: string }[]> {
+  async getBenchmarkPriceTargets(signal: AbortSignal): Promise<readonly { ean: string; geographicScopeId?: number }[]> {
+    const geographicScopeId = await this.reader.getNationalPriceScopeId(signal);
     return canonicalTargets(
       await this.reader.getPriceGtins(this.targetLimit, "ordinary_only", signal),
       this.targetLimit,
-    );
+    ).map(({ ean }) => ({ ean, ...(geographicScopeId === undefined ? {} : { geographicScopeId }) }));
   }
 
-  async getHistoricalObservationTargets(signal: AbortSignal): Promise<readonly { ean: string }[]> {
+  async getHistoricalObservationTargets(signal: AbortSignal): Promise<readonly { ean: string; geographicScopeId?: number }[]> {
+    const geographicScopeId = await this.reader.getNationalPriceScopeId(signal);
     return canonicalTargets(
       await this.reader.getPriceGtins(this.targetLimit, "historical_eligible", signal),
       this.targetLimit,
-    );
+    ).map(({ ean }) => ({ ean, ...(geographicScopeId === undefined ? {} : { geographicScopeId }) }));
   }
 }
 
