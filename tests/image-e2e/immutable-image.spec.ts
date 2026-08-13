@@ -652,7 +652,7 @@ test("the exact production image searches and plans from governed PostgreSQL evi
   await expect(ordinaryPrices).toContainText("24,90 kr");
   await expect(ordinaryPrices).toContainText("CI verifisert ordinærpris");
   await expect(productCard).toContainText(
-    "Delvis dekning. Uavklart: Bunnpris, REMA 1000.",
+    "Delvis dekning. Uavklart: Bunnpris, REMA 1000, FUDI, Holdbart, MENY, Havaristen, Joker, SPAR, FastCandy, Europris, Engrosnett, Oda.",
   );
 
   await productCard.getByRole("button", { name: "Legg til i handlelisten" }).click();
