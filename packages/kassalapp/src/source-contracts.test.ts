@@ -402,7 +402,7 @@ it("keeps accepted, unknown-price, and unknown-chain price states explicit", () 
 
   it("accepts string price amounts and quarantines future price records", () => {
     const stringPrice = structuredClone(pricesFixture);
-    stringPrice.data[0]!.stores[0]!.current_price = "21.90";
+    stringPrice.data[0]!.stores[0]!.current_price = "21.90" as unknown as number;
     expect(normalizePriceSourceResponse(stringPrice, { now: NOW, retrievedAt: RETRIEVED_AT }))
       .toContainEqual(expect.objectContaining({
         state: "accepted",
