@@ -14,6 +14,11 @@ export const WCAG_22_A_AA_TAGS = [
  * a reason to exclude a selector or disable a rule.
  */
 export async function expectNoAutomatedWcag22Violations(page: Page): Promise<void> {
+  // A whole-page axe scan at an arbitrary scroll position can misreport
+  // targets that sit under the sticky header (axe counts the header's
+  // static children as obscuring neighbors). Scan from the top of the page
+  // so the result depends on the layout, not the scroll offset.
+  await page.evaluate(() => window.scrollTo(0, 0));
   const result = await new AxeBuilder({ page })
     .withTags([...WCAG_22_A_AA_TAGS])
     .analyze();
