@@ -68,9 +68,10 @@ function productForBasket(product: ExactProductPlanApiProductSummary): Product {
     ...(product.brand === undefined ? {} : { brand: product.brand }),
     ean: product.gtin,
     name: product.displayName,
-    packageQuantity: product.packageMeasure.amount,
+    packageQuantity: product.packageMeasure?.amount,
     packageUnit:
-      product.packageMeasure.unit === "g" || product.packageMeasure.unit === "ml"
+      product.packageMeasure !== undefined
+        && (product.packageMeasure.unit === "g" || product.packageMeasure.unit === "ml")
         ? product.packageMeasure.unit
         : "each",
   };

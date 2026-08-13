@@ -156,6 +156,7 @@ function formatDate(value: string): string {
 }
 
 function packageLabel(product: ExactProductPlanApiProductSummary): string {
+  if (product.packageMeasure === undefined) return "Størrelse ikke oppgitt";
   const unit = product.packageMeasure.unit === "piece"
     ? "stk"
     : product.packageMeasure.unit === "package"
@@ -170,15 +171,17 @@ function legacyProductFromCatalog(product: ExactProductPlanApiProductSummary): P
     ean: product.gtin,
     name: product.displayName,
     ...(product.brand === undefined ? {} : { brand: product.brand }),
-    packageQuantity: product.packageMeasure.amount,
+    packageQuantity: product.packageMeasure?.amount,
     packageUnit:
-      product.packageMeasure.unit === "g" || product.packageMeasure.unit === "ml"
+      product.packageMeasure !== undefined
+        && (product.packageMeasure.unit === "g" || product.packageMeasure.unit === "ml")
         ? product.packageMeasure.unit
         : "each",
   };
 }
 
 function unitPrice(product: ExactProductPlanApiProductSummary, amountOre: number): string | undefined {
+  if (product.packageMeasure === undefined) return undefined;
   const { amount, unit } = product.packageMeasure;
   if (unit === "g") return `${formatNok(amountOre / (amount / 1_000))} / kg`;
   if (unit === "ml") return `${formatNok(amountOre / (amount / 1_000))} / l`;

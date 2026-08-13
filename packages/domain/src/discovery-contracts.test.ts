@@ -329,4 +329,17 @@ describe("public discovery contracts", () => {
       }],
     }).success).toBe(false);
   });
+
+  it("accepts search products without a package measure", () => {
+    expect(publicProductSearchResponseSchema.safeParse({
+      contractVersion: 1,
+      products: [{
+        contractVersion: 1,
+        brand: catalog.brand,
+        displayName: catalog.displayName,
+        gtin: catalog.gtin,
+        unitsPerPack: catalog.unitsPerPack,
+      }],
+    }).success).toBe(true);
+  });
 });

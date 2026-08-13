@@ -95,6 +95,7 @@ describe("forward-only v1 migrations", () => {
       "027_official_offer_publication_health.sql",
       "028_private_review_image_evidence_only.sql",
       "029_kassalapp_source_approval.sql",
+      "030_catalog_measure_optional.sql",
     ]);
   });
 
@@ -104,7 +105,7 @@ describe("forward-only v1 migrations", () => {
       .sort();
     expect(files[0]).toBe("001_price_cache.sql");
     const guardedFiles = files.slice(1);
-    expect(guardedFiles.at(-1)).toBe("029_kassalapp_source_approval.sql");
+    expect(guardedFiles.at(-1)).toBe("030_catalog_measure_optional.sql");
     const source = (
       await Promise.all(
         guardedFiles.map((file) => readFile(path.join(migrationsDirectory, file), "utf8")),

@@ -155,7 +155,7 @@ export const exactProductPlanApiProductSummarySchema = z
     gtin: gtinSchema,
     displayName: nonEmptyStringSchema,
     brand: nonEmptyStringSchema.optional(),
-    packageMeasure: packageMeasureSchema,
+    packageMeasure: packageMeasureSchema.optional(),
     unitsPerPack: positiveSafeIntegerSchema,
   })
   .strict();

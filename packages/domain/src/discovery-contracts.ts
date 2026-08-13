@@ -78,7 +78,7 @@ export const publicCatalogProductSchema = z
     gtin: gtinSchema,
     displayName: nonEmptyStringSchema,
     brand: nonEmptyStringSchema.optional(),
-    packageMeasure: packageMeasureSchema,
+    packageMeasure: packageMeasureSchema.optional(),
     unitsPerPack: positiveSafeIntegerSchema,
   })
   .strict();
@@ -112,7 +112,7 @@ export function publicCatalogProductFromSummary(
     gtin: summary.gtin,
     displayName: summary.displayName,
     ...(summary.brand === undefined ? {} : { brand: summary.brand }),
-    packageMeasure: summary.packageMeasure,
+    ...(summary.packageMeasure === undefined ? {} : { packageMeasure: summary.packageMeasure }),
     unitsPerPack: summary.unitsPerPack,
   });
 }

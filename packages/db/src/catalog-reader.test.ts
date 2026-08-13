@@ -4,6 +4,7 @@ import type { HandleplanDatabase } from "./client";
 import {
   ActiveCatalogReaderError,
   PostgresActiveCatalogReader,
+  catalogSummaryFromRow,
   classifyCatalogRow,
   normalizeCatalogEligibilityRow,
 } from "./catalog-reader";
@@ -449,5 +450,40 @@ describe("PostgresActiveCatalogReader", () => {
     expect(new ActiveCatalogReaderError("UNAVAILABLE")).toMatchObject(
       expectReaderError("UNAVAILABLE"),
     );
+  });
+
+  it("summarizes a catalog product without a package measure", () => {
+    const row = {
+      brand: null,
+      canonical_product_id: 1,
+      catalog_last_seen_at: AT,
+      catalog_raw_record_hash: "a".repeat(64),
+      catalog_runtime_state: "approved",
+      catalog_source_display_name: "Kassalapp",
+      catalog_source_id: "kassalapp",
+      catalog_source_kind: "ordinary_price",
+      confidence: 100,
+      display_name: "Red Bull Green Edition 250 ml",
+      gtin: "9002490287603",
+      package_amount: null,
+      package_unit: null,
+      permission_catalog: true,
+      permission_decision: "approved",
+      permission_id: 7,
+      permission_reviewed_at: AT,
+      permission_valid_until: null,
+      scheme: "ean13",
+      source_permission_expires_at: null,
+      source_permission_reviewed_at: AT,
+      status: "active",
+      units_per_pack: 1,
+      verified_at: AT,
+    };
+
+    expect(catalogSummaryFromRow(row)).toMatchObject({
+      displayName: "Red Bull Green Edition 250 ml",
+      gtin: "9002490287603",
+    });
+    expect(catalogSummaryFromRow(row)).not.toHaveProperty("packageMeasure");
   });
 });

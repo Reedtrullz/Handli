@@ -42,8 +42,8 @@ export interface CatalogEligibilityRow {
   confidence: number;
   display_name: string;
   gtin: string;
-  package_amount: number;
-  package_unit: string;
+  package_amount: number | null;
+  package_unit: string | null;
   permission_catalog: boolean | null;
   permission_decision: string | null;
   permission_id: number | null;
@@ -283,10 +283,14 @@ export function catalogSummaryFromRow(
     },
     displayName: row.display_name,
     gtin: row.gtin,
-    packageMeasure: {
-      amount: row.package_amount,
-      unit: row.package_unit,
-    },
+    ...(row.package_amount === null || row.package_unit === null
+      ? {}
+      : {
+          packageMeasure: {
+            amount: row.package_amount,
+            unit: row.package_unit,
+          },
+        }),
     unitsPerPack: row.units_per_pack,
   });
   if (!parsed.success) throw new ActiveCatalogReaderError("UNAVAILABLE");

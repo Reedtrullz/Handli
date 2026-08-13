@@ -173,6 +173,11 @@ function exactRequestAsPlannerV2Input(
   priceResult: Awaited<ReturnType<PriceService["readExact"]>>,
 ): ServerPlanningInputV2 {
   const catalogByGtin = new Map(products.map((product) => [product.gtin, product]));
+  for (const product of products) {
+    if (product.packageMeasure === undefined) {
+      throw new UnknownExactProductError();
+    }
+  }
   const identityByGtin = new Map(
     priceResult.products.map((product) => [product.gtin, product]),
   );
@@ -232,7 +237,7 @@ function exactRequestAsPlannerV2Input(
         canonicalProductId: identity.canonicalProductId,
         ean: product.gtin,
         name: product.displayName,
-        packageMeasure: product.packageMeasure,
+        packageMeasure: product.packageMeasure!,
       };
     }),
   };
@@ -562,6 +567,11 @@ function mixedPlannerInput(
   familyByProduct: ReadonlyMap<string, string>,
   priceResult: ProductPriceServiceResult,
 ): ServerPlanningInputV2 {
+  for (const { product } of productClaims) {
+    if (product.packageMeasure === undefined) {
+      throw new UnknownExactProductError();
+    }
+  }
   const claimByCanonicalId = new Map(
     productClaims.map((claim) => [claim.canonicalProductId, claim]),
   );
@@ -631,7 +641,7 @@ function mixedPlannerInput(
       canonicalProductId,
       ean: product.gtin,
       name: product.displayName,
-      packageMeasure: product.packageMeasure,
+      packageMeasure: product.packageMeasure!,
       ...(familyByProduct.get(canonicalProductId) === undefined
         ? {}
         : { productFamily: familyByProduct.get(canonicalProductId)! }),
@@ -765,6 +775,11 @@ function exactImpactPlannerInput(
   identityByGtin: ReadonlyMap<string, ProductPriceServiceResult["products"][number]>,
   priceResult: ProductPriceServiceResult,
 ): ServerPlanningInputV2 {
+  for (const product of catalogProducts) {
+    if (product.packageMeasure === undefined) {
+      throw new UnknownExactProductError();
+    }
+  }
   const productByGtin = new Map(
     catalogProducts.map((product) => [product.gtin, product]),
   );
@@ -821,7 +836,7 @@ function exactImpactPlannerInput(
         canonicalProductId: identity.canonicalProductId,
         ean: product.gtin,
         name: product.displayName,
-        packageMeasure: product.packageMeasure,
+        packageMeasure: product.packageMeasure!,
       };
     }),
   };

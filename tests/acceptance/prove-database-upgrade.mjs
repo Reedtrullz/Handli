@@ -62,6 +62,7 @@ const expectedMigrations = [
   "027_official_offer_publication_health.sql",
   "028_private_review_image_evidence_only.sql",
   "029_kassalapp_source_approval.sql",
+  "030_catalog_measure_optional.sql",
 ];
 
 assert.equal(process.env.CI, "true", "database proof requires CI=true");
@@ -2185,7 +2186,7 @@ async function verifyPdfEvidenceUpgradePrecondition(sql, database) {
       ) as image_constraint_installed,
       exists (
         select 1 from handleplan_schema_migrations
-        where id = '029_kassalapp_source_approval.sql'
+        where id = '030_catalog_measure_optional.sql'
       ) as migration_recorded,
       pg_catalog.pg_get_functiondef(
         'private_review_record_evidence_render_v1(bigint,integer,text,text,text,text,text,text,text,timestamptz)'::regprocedure

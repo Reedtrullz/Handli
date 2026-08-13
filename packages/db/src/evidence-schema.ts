@@ -95,8 +95,8 @@ export const canonicalProducts = pgTable(
     id: id("id").primaryKey(),
     displayName: varchar("display_name", { length: 240 }).notNull(),
     brand: varchar("brand", { length: 160 }),
-    packageAmount: integer("package_amount").notNull(),
-    packageUnit: varchar("package_unit", { length: 16 }).notNull(),
+    packageAmount: integer("package_amount"),
+    packageUnit: varchar("package_unit", { length: 16 }),
     unitsPerPack: integer("units_per_pack").notNull().default(1),
     status: varchar("status", { length: 16 }).notNull().default("active"),
     createdAt: time("created_at").notNull().defaultNow(),
@@ -106,11 +106,11 @@ export const canonicalProducts = pgTable(
   (table) => [
     check(
       "canonical_products_package_amount_positive",
-      sql`${table.packageAmount} > 0`,
+      sql`${table.packageAmount} is null or ${table.packageAmount} > 0`,
     ),
     check(
       "canonical_products_package_unit",
-      sql`${table.packageUnit} in ('g', 'ml', 'piece', 'package')`,
+      sql`${table.packageUnit} is null or ${table.packageUnit} in ('g', 'ml', 'piece', 'package')`,
     ),
     check(
       "canonical_products_units_per_pack_positive",
@@ -761,8 +761,8 @@ export const catalogObservations = pgTable(
     gtin: varchar("gtin", { length: 14 }).notNull(),
     displayName: varchar("display_name", { length: 240 }).notNull(),
     brand: varchar("brand", { length: 160 }),
-    packageAmount: integer("package_amount").notNull(),
-    packageUnit: varchar("package_unit", { length: 16 }).notNull(),
+    packageAmount: integer("package_amount"),
+    packageUnit: varchar("package_unit", { length: 16 }),
     unitsPerPack: integer("units_per_pack").notNull().default(1),
     retrievedAt: time("retrieved_at").notNull(),
     sourceUpdatedAt: time("source_updated_at"),
@@ -806,11 +806,11 @@ export const catalogObservations = pgTable(
     ),
     check(
       "catalog_observations_package_amount_positive",
-      sql`${table.packageAmount} > 0`,
+      sql`${table.packageAmount} is null or ${table.packageAmount} > 0`,
     ),
     check(
       "catalog_observations_package_unit",
-      sql`${table.packageUnit} in ('g', 'ml', 'piece', 'package')`,
+      sql`${table.packageUnit} is null or ${table.packageUnit} in ('g', 'ml', 'piece', 'package')`,
     ),
     check(
       "catalog_observations_units_per_pack_positive",

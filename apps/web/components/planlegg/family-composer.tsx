@@ -55,6 +55,7 @@ function errorCopy(code: ReviewedFamilyCandidateClientError["code"]): string {
 }
 
 function formatCandidatePackage(product: ExactProductPlanApiProductSummary): string {
+  if (product.packageMeasure === undefined) return "Størrelse ikke oppgitt";
   const { amount, unit } = product.packageMeasure;
   const formattedAmount = new Intl.NumberFormat("nb-NO").format(amount);
   const measure = unit === "piece"

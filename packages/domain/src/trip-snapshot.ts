@@ -791,7 +791,10 @@ export const tripSnapshotV2Schema = tripSnapshotV2ObjectSchema
           "Purchase observation and freshness must exactly mirror the immutable plan",
         );
       }
-      if (!sameMeasure(purchase.packageMeasure, product.packageMeasure)) {
+      if (
+        product.packageMeasure === undefined
+        || !sameMeasure(purchase.packageMeasure, product.packageMeasure)
+      ) {
         addPurchaseIssue(
           context,
           index,

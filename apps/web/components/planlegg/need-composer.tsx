@@ -72,9 +72,10 @@ function legacyProductFromCatalog(product: PublicCatalogProduct): Product {
     ean: product.gtin,
     name: product.displayName,
     ...(product.brand === undefined ? {} : { brand: product.brand }),
-    packageQuantity: product.packageMeasure.amount,
+    packageQuantity: product.packageMeasure?.amount,
     packageUnit:
-      product.packageMeasure.unit === "g" || product.packageMeasure.unit === "ml"
+      product.packageMeasure !== undefined
+        && (product.packageMeasure.unit === "g" || product.packageMeasure.unit === "ml")
         ? product.packageMeasure.unit
         : "each",
   };

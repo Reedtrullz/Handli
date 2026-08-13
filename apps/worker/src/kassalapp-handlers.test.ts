@@ -345,19 +345,19 @@ describe("Kassalapp worker handlers", () => {
     } });
   });
 
-  it("downgrades a provider-accepted product without a package measure to audited unknown", async () => {
+  it("accepts a provider-accepted product without a package measure into the catalog", async () => {
     const gateway = createGateway();
     vi.mocked(gateway.getSourceProductByEan).mockResolvedValue([{
       state: "accepted",
       record: productRecord({ packageMeasure: undefined, packageMeasureState: "missing" }),
     }]);
     const repository = createRepository({
-      accepted: 0,
+      accepted: 1,
       failed: 0,
       fetched: 1,
       persisted: 1,
       quarantined: 0,
-      unknown: 1,
+      unknown: 0,
     });
     const handlers = createKassalappHandlers(createDependencies({ gateway, repository }));
 
@@ -365,8 +365,11 @@ describe("Kassalapp worker handlers", () => {
 
     expect(repository.persistCatalogOutcomes).toHaveBeenCalledWith(RUN_HANDLE, [
       expect.objectContaining({
-        outcomeState: "unknown",
-        reason: "MISSING_MEASURE",
+        outcomeState: "accepted",
+        product: expect.objectContaining({
+          displayName: expect.any(String),
+        }),
+        recordKind: "product",
         subjectEan: EAN,
       }),
     ], SIGNAL);

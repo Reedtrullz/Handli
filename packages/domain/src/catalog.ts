@@ -90,7 +90,7 @@ export const canonicalProductSchema = z
     brand: nonEmptyStringSchema.optional(),
     identifiers: z.array(productIdentifierSchema).min(1),
     familyId: identifierSchema.optional(),
-    packageMeasure: packageMeasureSchema,
+    packageMeasure: packageMeasureSchema.optional(),
     status: z.enum(["active", "quarantined", "retired"]),
   })
   .strict()

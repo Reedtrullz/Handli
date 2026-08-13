@@ -96,8 +96,8 @@ export type KassalappCatalogIngestionOutcome =
           readonly sourceCategoryId: string;
         }[];
         readonly displayName: string;
-        readonly packageAmount: number;
-        readonly packageUnit: "g" | "ml" | "package" | "piece";
+        readonly packageAmount?: number;
+        readonly packageUnit?: "g" | "ml" | "package" | "piece";
         readonly retrievedAt: Date;
         readonly sourceUpdatedAt?: Date;
         readonly unitsPerPack?: number;
@@ -490,13 +490,23 @@ function mapCatalogOutcome(
   if (record.packageMeasure === undefined) {
     return {
       normalizedRecord: normalizedRecord(record),
-      outcomeState: "unknown",
+      outcomeState: "accepted",
       rawChainCode: undefined,
-      reason: record.packageMeasureState === "unknown-unit" ? "UNKNOWN_UNIT" : "MISSING_MEASURE",
       recordedAt: sourceRecordedAt,
       recordKind: "product",
       sourceRecordId: record.sourceRecordId,
       subjectEan: record.ean,
+      product: {
+        ...(record.brand === undefined ? {} : { brand: record.brand }),
+        ...(record.categoryPath === undefined
+          ? {}
+          : { categoryPath: record.categoryPath.map((category) => ({ ...category })) }),
+        displayName: record.name,
+        retrievedAt: sourceRecordedAt,
+        ...(record.sourceUpdatedAt === undefined
+          ? {}
+          : { sourceUpdatedAt: checkedDate(record.sourceUpdatedAt) }),
+      },
     };
   }
 

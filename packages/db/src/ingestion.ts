@@ -100,8 +100,8 @@ export type CatalogProductRecord = {
   brand?: string;
   categoryPath?: readonly CatalogCategoryPathEntry[];
   displayName: string;
-  packageAmount: number;
-  packageUnit: "g" | "ml" | "package" | "piece";
+  packageAmount?: number;
+  packageUnit?: "g" | "ml" | "package" | "piece";
   retrievedAt: Date;
   sourceUpdatedAt?: Date;
   unitsPerPack?: number;
@@ -116,8 +116,8 @@ export interface CatalogCategoryPathEntry {
 type CatalogCanonicalSnapshot = {
   brand: string | null;
   displayName: string;
-  packageAmount: number;
-  packageUnit: CatalogProductRecord["packageUnit"];
+  packageAmount: number | null;
+  packageUnit: CatalogProductRecord["packageUnit"] | null;
   status: "active" | "quarantined" | "retired";
   unitsPerPack: number;
   updatedAt: Date;
@@ -133,8 +133,8 @@ export function catalogCanonicalMutationDecision(input: {
 }): CatalogCanonicalMutationDecision {
   const fieldsMatch = input.canonical.brand === (input.incoming.brand ?? null)
     && input.canonical.displayName === input.incoming.displayName
-    && input.canonical.packageAmount === input.incoming.packageAmount
-    && input.canonical.packageUnit === input.incoming.packageUnit
+    && input.canonical.packageAmount === (input.incoming.packageAmount ?? null)
+    && input.canonical.packageUnit === (input.incoming.packageUnit ?? null)
     && input.canonical.unitsPerPack === (input.incoming.unitsPerPack ?? 1);
   if (input.canonical.status === "retired") return "review";
   if (input.canonical.status === "quarantined") {
@@ -596,8 +596,8 @@ function normalizeCatalogOutcome(outcome: CatalogIngestionOutcome): SourceRecord
         ? {}
         : { categoryPath: product.categoryPath.map((entry) => ({ ...entry })) }),
       displayName: product.displayName,
-      packageAmount: product.packageAmount,
-      packageUnit: product.packageUnit,
+      ...(product.packageAmount === undefined ? {} : { packageAmount: product.packageAmount }),
+      ...(product.packageUnit === undefined ? {} : { packageUnit: product.packageUnit }),
       retrievedAt: product.retrievedAt.toISOString(),
       ...(product.sourceUpdatedAt === undefined
         ? {}
@@ -727,8 +727,17 @@ function validateCatalogProduct(product: CatalogProductRecord): void {
       throw new TypeError("product.sourceUpdatedAt must not follow product.retrievedAt");
     }
   }
-  if (!Number.isSafeInteger(product.packageAmount) || product.packageAmount < 1) {
+  if (
+    product.packageAmount !== undefined
+    && (!Number.isSafeInteger(product.packageAmount) || product.packageAmount < 1)
+  ) {
     throw new TypeError("product.packageAmount must be a positive safe integer");
+  }
+  if (
+    product.packageUnit !== undefined
+    && !["g", "ml", "package", "piece"].includes(product.packageUnit)
+  ) {
+    throw new TypeError("product.packageUnit must be g, ml, package, or piece");
   }
   const unitsPerPack = product.unitsPerPack ?? 1;
   if (!Number.isSafeInteger(unitsPerPack) || unitsPerPack < 1) {
@@ -1479,8 +1488,8 @@ export class PostgresIngestionRepository {
             .set({
               brand: catalog.outcome.product.brand ?? null,
               displayName: catalog.outcome.product.displayName,
-              packageAmount: catalog.outcome.product.packageAmount,
-              packageUnit: catalog.outcome.product.packageUnit,
+              packageAmount: catalog.outcome.product.packageAmount ?? null,
+              packageUnit: catalog.outcome.product.packageUnit ?? null,
               ...(mutation === "activate" ? { status: "active" } : {}),
               unitsPerPack: catalog.outcome.product.unitsPerPack ?? 1,
               updatedAt: catalog.outcome.product.retrievedAt,
@@ -1504,16 +1513,16 @@ export class PostgresIngestionRepository {
         catalogProduct === undefined
           ? {
               displayName: `Pending catalog match ${ean}`,
-              packageAmount: 1,
-              packageUnit: "package",
+              packageAmount: null,
+              packageUnit: null,
               status: "quarantined",
               unitsPerPack: 1,
             }
           : {
               brand: catalogProduct.brand,
               displayName: catalogProduct.displayName,
-              packageAmount: catalogProduct.packageAmount,
-              packageUnit: catalogProduct.packageUnit,
+              packageAmount: catalogProduct.packageAmount ?? null,
+              packageUnit: catalogProduct.packageUnit ?? null,
               status: catalog?.sourceAccessApproved === true ? "active" : "quarantined",
               unitsPerPack: catalogProduct.unitsPerPack ?? 1,
               updatedAt: catalogProduct.retrievedAt,
@@ -1686,8 +1695,8 @@ export class PostgresIngestionRepository {
         displayName: outcome.product.displayName,
         gtin: outcome.subjectEan,
         ingestionRunId: handle.id,
-        packageAmount: outcome.product.packageAmount,
-        packageUnit: outcome.product.packageUnit,
+        packageAmount: outcome.product.packageAmount ?? null,
+        packageUnit: outcome.product.packageUnit ?? null,
         rawRecordHash: hashSourceRecordOutcome(audited),
         retrievedAt: outcome.product.retrievedAt,
         sourceRecordId: outcome.sourceRecordId,

@@ -88,7 +88,7 @@ export function StoreAssignment({
               <span className="assignment-quantity">{formatMeasure(assignment.fulfilment.requested)}</span>
               <div>
                 <strong>{product.displayName}</strong>
-                <small>{product.brand ? `${product.brand} · ` : ""}{formatMeasure(product.packageMeasure)} per pakke</small>
+                <small>{product.brand ? `${product.brand} · ` : ""}{product.packageMeasure === undefined ? "Størrelse ikke oppgitt" : `${formatMeasure(product.packageMeasure)} per pakke`}</small>
                 <small>{fulfilmentCopy(assignment)}</small>
                 {assignment.officialOffer !== undefined && (
                   <small>Offisielt tilbud brukt · kilde {assignment.officialOffer.sourceId}</small>
