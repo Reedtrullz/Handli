@@ -2,7 +2,7 @@ import "server-only";
 
 import type { HandleplanDatabase } from "@handleplan/db/client";
 
-export const REQUIRED_DATABASE_MIGRATION = "030_catalog_measure_optional.sql" as const;
+export const REQUIRED_DATABASE_MIGRATION = "031_supported_chain_expansion.sql" as const;
 
 export interface DatabaseReadinessResult {
   requiredMigration: typeof REQUIRED_DATABASE_MIGRATION;

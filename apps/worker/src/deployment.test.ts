@@ -535,7 +535,7 @@ describe("production runtime deployment", () => {
     expect(operationsBlock).toContain("body.database?.role!=='handleplan_operations'");
     expect(operationsBlock).not.toContain("api/internal/operations/snapshot");
     expect(operationsBlock).toContain(
-      "'030_catalog_measure_optional.sql'",
+      "'031_supported_chain_expansion.sql'",
     );
     expect(operationsBlock).toContain('"127.0.0.1:3007:3000"');
     expect(operationsBlock).not.toContain("private-captures");
@@ -1216,7 +1216,7 @@ describe("production runtime deployment", () => {
     expect(reviewBlock).toContain("body.database?.role!=='handleplan_review'");
     expect(reviewBlock).not.toContain("api/review/candidates");
     expect(reviewBlock).toContain(
-      "'030_catalog_measure_optional.sql'",
+      "'031_supported_chain_expansion.sql'",
     );
     expect(operationsBlock).toContain('"127.0.0.1:3007:3000"');
     expect(operationsBlock).toMatch(/^\s+OPERATIONS_DATABASE_URL:/mu);
