@@ -50,7 +50,7 @@ export const KASSALAPP_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition[]
     timeoutMs: 15 * 60 * 1_000,
   }),
   Object.freeze({
-    anchorAt: "2026-08-14T00:05:00.000Z",
+    anchorAt: "2026-08-14T00:35:00.000Z",
     intervalMs: 6 * 60 * 60 * 1_000,
     kind: "benchmark-price-refresh",
     sourceId: KASSALAPP_SOURCE_ID,
