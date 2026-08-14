@@ -130,7 +130,7 @@ export class PostgresWorkerGtinTargetReader implements WorkerGtinTargetReader {
 
   async getNationalPriceScopeId(signal?: AbortSignal): Promise<number | undefined> {
     const rows = await awaitAbortable(this.db.$client<Array<{ id: number }>>`
-      select id
+      select id::integer as id
       from geographic_scopes
       where scope_kind = 'national'
         and country_code = 'NO'

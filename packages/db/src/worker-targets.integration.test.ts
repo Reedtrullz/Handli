@@ -33,6 +33,21 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       await connection?.close();
     });
 
+    it("returns the national scope id as a number", async () => {
+      const scopeKey = `no-national-${nonce}`;
+      await connection.sql`
+        insert into geographic_scopes (scope_key, scope_kind, label, country_code, status)
+        values (${scopeKey}, 'national', 'Test nasjonalt', 'NO', 'active')
+      `;
+      const reader = new PostgresWorkerGtinTargetReader(connection.db);
+      const id = await reader.getNationalPriceScopeId();
+      expect(Number.isSafeInteger(id)).toBe(true);
+      expect((id as number) > 0).toBe(true);
+      await connection.sql`
+        delete from geographic_scopes where scope_key = ${scopeKey}
+      `;
+    });
+
     it("selects and promotes a migration-style unverified quarantine before refreshed rows", async () => {
       const migrationEan = gtin13(Date.now() % 1_000_000_000_000);
       const cacheOnlyEan = gtin13((Date.now() + 1) % 1_000_000_000_000);
