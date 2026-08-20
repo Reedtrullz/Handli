@@ -60,8 +60,8 @@ export async function superviseWorker(
       try {
         const result = await runtime.runCycle();
         options.observer?.cycleCompleted(result);
-      } catch (cycleError) {
-        options.observer?.cycleFailed(); console.error("Worker cycle failed:", cycleError instanceof Error ? cycleError.message : String(cycleError));
+      } catch {
+        options.observer?.cycleFailed();
         shutdown();
         await shutdownPromise;
         finalExitCode = 1;
