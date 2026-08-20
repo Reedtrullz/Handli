@@ -197,7 +197,7 @@ export class PostgresWorkerGtinTargetReader implements WorkerGtinTargetReader {
       from product_identifiers identifier
       join canonical_products product on product.id = identifier.product_id
       where identifier.scheme in ('ean8', 'ean13')
-        and identifier.value ~ '^([0-9]{8}|[0-9]{13})
+        and identifier.value ~ '^([0-9]{8}|[0-9]{13})$'
 
         and identifier.verified_at is not null
         and product.status = 'active'
