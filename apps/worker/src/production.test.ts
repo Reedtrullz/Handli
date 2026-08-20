@@ -224,7 +224,7 @@ describe("production worker adapters", () => {
       sourceId: "kassalapp",
       ttlMs: 120_000,
     });
-    await expect(leaseProvider.acquire(SIGNAL)).resolves.toBe(leaseHandle);
+    await expect(leaseProvider.acquire("kassalapp", SIGNAL)).resolves.toBe(leaseHandle);
     expect(leaseAdapter.acquire).toHaveBeenCalledWith({
       leaseKey: expect.stringMatching(/^worker:v1:[0-9a-f]{64}$/),
       ownerId: "worker-a",

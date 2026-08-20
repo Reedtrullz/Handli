@@ -29,7 +29,7 @@ const schedules: WorkerScheduleDefinition[] = [
 
 function createLeaseProvider(onRelease: () => void = () => undefined): WorkerLeaseProvider {
   return {
-    acquire: async (): Promise<WorkerLeaseHandle> => ({
+    acquire: async (_sourceId: string): Promise<WorkerLeaseHandle> => ({
       fenceToken: "fence-1",
       release: async () => onRelease(),
       signal: new AbortController().signal,
@@ -220,7 +220,7 @@ describe("WorkerRuntime", () => {
     let starts = 0;
     const runtime = new WorkerRuntime({
       leaseProvider: {
-        acquire: async () => ({
+        acquire: async (_sourceId: string) => ({
           fenceToken: "lost-fence",
           release: async () => undefined,
           signal: lease.signal,
@@ -314,7 +314,7 @@ describe("WorkerRuntime", () => {
       },
       recordResult: async () => undefined,
     };
-    const leaseProvider: WorkerLeaseProvider = { acquire: async () => undefined };
+    const leaseProvider: WorkerLeaseProvider = { acquire: async (_sourceId: string) => undefined };
     const runtime = new WorkerRuntime({
       leaseProvider,
       now: () => NOW,

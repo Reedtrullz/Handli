@@ -15,7 +15,7 @@ export interface WorkerLeaseHandle extends WorkerLeaseFence {
 }
 
 export interface WorkerLeaseProvider {
-  acquire(signal: AbortSignal): Promise<WorkerLeaseHandle | undefined>;
+  acquire(sourceId: string, signal: AbortSignal): Promise<WorkerLeaseHandle | undefined>;
 }
 
 export interface WorkerRuntimeStateStore {
@@ -140,22 +140,31 @@ export class WorkerRuntime {
   }
 
   private async executeCycle(): Promise<WorkerCycleResult> {
-    let lease: WorkerLeaseHandle | undefined;
+    this.options.observer?.cycleOperational();
+    // Acquire leases per unique source ID so fence tokens match their schedules.
+    const sourceIds = [...new Set(this.schedules.map((s) => s.sourceId))].sort();
+    const leases = new Map<string, WorkerLeaseHandle>();
     try {
-      lease = await this.options.leaseProvider.acquire(this.controller.signal);
+      for (const sourceId of sourceIds) {
+        const lease = await this.options.leaseProvider.acquire(sourceId, this.controller.signal);
+        if (lease === undefined) {
+          // Release any already-acquired leases.
+          for (const acquired of leases.values()) await acquired.release();
+          return EMPTY_CYCLE_RESULT;
+        }
+        leases.set(sourceId, lease);
+      }
     } catch (error) {
+      for (const acquired of leases.values()) await acquired.release().catch(() => undefined);
       if (this.controller.signal.aborted) return EMPTY_CYCLE_RESULT;
       throw error;
     }
-    this.options.observer?.cycleOperational();
-    if (lease === undefined) return EMPTY_CYCLE_RESULT;
+
 
     const results: WorkerRunResult[] = [];
-    const fence: WorkerLeaseFence = Object.freeze({
-      fenceToken: lease.fenceToken,
-      signal: lease.signal,
-    });
-    const workSignal = AbortSignal.any([this.controller.signal, lease.signal]);
+    // Build a composite work signal from all leases.
+    const leaseSignals = [...leases.values()].map((l) => l.signal);
+    const workSignal = AbortSignal.any([this.controller.signal, ...leaseSignals]);
     let releaseLease = true;
     try {
       for (const schedule of this.schedules) {
@@ -171,13 +180,16 @@ export class WorkerRuntime {
         const request = newestMissedWorkerJob(schedule, lastScheduledAt, this.options.now());
         if (request === undefined) continue;
 
-        const result = await this.options.runner.run(request, {
-          fenceToken: lease.fenceToken,
-          signal: workSignal,
+        const scheduleLease = leases.get(schedule.sourceId);
+        if (scheduleLease === undefined) continue;
+        const runFence: WorkerLeaseFence = Object.freeze({
+          fenceToken: scheduleLease.fenceToken,
+          signal: scheduleLease.signal,
         });
+        const result = await this.options.runner.run(request, { fenceToken: scheduleLease.fenceToken, signal: workSignal });
         results.push(result);
-        if (lease.signal.aborted) break;
-        await this.options.stateStore.recordResult(request, result, fence);
+        if (scheduleLease.signal.aborted) break;
+        await this.options.stateStore.recordResult(request, result, runFence);
         if (workSignal.aborted) break;
       }
       return { leaseAcquired: true, results };
@@ -189,7 +201,10 @@ export class WorkerRuntime {
       }
       throw error;
     } finally {
-      if (releaseLease) await lease.release();
+      if (releaseLease) {
+        const releases = [...leases.values()].map((l) => l.release());
+        await Promise.allSettled(releases);
+      }
     }
   }
 
@@ -226,3 +241,4 @@ export class WorkerRuntime {
     this.controller.abort();
   }
 }
+

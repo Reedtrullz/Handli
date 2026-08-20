@@ -335,9 +335,9 @@ export class PostgresWorkerLeaseProvider implements WorkerLeaseProvider {
     this.options = Object.freeze({ ...options });
   }
 
-  async acquire(signal: AbortSignal): Promise<WorkerLeaseHandle | undefined> {
+  async acquire(sourceId: string, signal: AbortSignal): Promise<WorkerLeaseHandle | undefined> {
     return await this.adapter.acquire({
-      leaseKey: ingestionWorkerLeaseKey({ sourceId: this.options.sourceId }),
+      leaseKey: ingestionWorkerLeaseKey({ sourceId }),
       ownerId: this.options.ownerId,
       signal,
       ttlMs: this.options.ttlMs,
