@@ -99,6 +99,7 @@ describe("forward-only v1 migrations", () => {
       "031_supported_chain_expansion.sql",
       "032_seed_national_scope.sql",
       "033_open_prices_source.sql",
+      "034_open_prices_job_kind.sql",
     ]);
   });
 
