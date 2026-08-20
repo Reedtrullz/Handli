@@ -84,6 +84,7 @@ export class PostgresEvidencePriceReader {
         amountOre: priceObservations.amountOre,
         chain: priceObservations.chain,
         ean: productIdentifiers.value,
+        sourceId: priceObservations.sourceId,
         id: priceObservations.id,
         observedAt: priceObservations.observedAt,
       })
@@ -133,7 +134,6 @@ export class PostgresEvidencePriceReader {
           lte(productIdentifiers.verifiedAt, now),
           lte(productIdentifiers.createdAt, now),
           lte(productIdentifiers.publicStateChangedAt, now),
-          eq(priceObservations.sourceId, "kassalapp"),
           eq(priceObservations.confidence, 100),
           inArray(priceObservations.claimEligibility, [
             "ordinary_only",
@@ -215,7 +215,7 @@ export class PostgresEvidencePriceReader {
         chain: row.chain as PriceObservation["chain"],
         ean: row.ean,
         observedAt: row.observedAt.toISOString(),
-        source: "kassalapp",
+        source: row.sourceId,
       };
       const key = rowKey(observation);
       if (!latest.has(key)) latest.set(key, observation);

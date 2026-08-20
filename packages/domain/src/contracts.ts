@@ -41,7 +41,7 @@ export interface Product {
   productFamily?: string;
 }
 
-export interface PriceObservation<SourceId extends string = "kassalapp"> {
+export interface PriceObservation<SourceId extends string = string> {
   ean: string;
   chain: z.infer<typeof chainSchema>;
   amountOre: MoneyOre;
@@ -49,7 +49,7 @@ export interface PriceObservation<SourceId extends string = "kassalapp"> {
   source: SourceId;
 }
 
-export interface PlanRequest<SourceId extends string = "kassalapp"> {
+export interface PlanRequest<SourceId extends string = string> {
   needs: Need[];
   matchingRules: MatchRule[];
   products: Product[];
@@ -57,7 +57,7 @@ export interface PlanRequest<SourceId extends string = "kassalapp"> {
   maxStores: 1 | 2 | 3;
 }
 
-export interface PlanResult<SourceId extends string = "kassalapp"> {
+export interface PlanResult<SourceId extends string = string> {
   id: string;
   assignments: Array<{
     needId: string;

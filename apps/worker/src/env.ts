@@ -14,6 +14,7 @@ export interface WorkerProductionEnv {
   leaseTtlMs: number;
   officialOfferFoundationEnabled: false;
   officialOfferPrivateCaptureRoot: string;
+  openPricesEnabled: boolean;
   requestBudgetLimit: number;
   requestBudgetMaxWaitMs: number;
   requestBudgetWindowMs: number;
@@ -113,6 +114,10 @@ function sourceAccessState(value: string | undefined): WorkerSourceAccessState {
   return state as WorkerSourceAccessState;
 }
 
+function openPricesEnabled(value: string | undefined): boolean {
+  return value === "true";
+}
+
 function optionalApiKey(value: string | undefined, access: WorkerSourceAccessState): string | undefined {
   if (value !== undefined && (value.length < 1 || value.length > 1_024 || value.trim().length < 1)) {
     throw new TypeError("KASSAL_API_KEY must contain 1-1024 nonblank characters");
@@ -175,6 +180,7 @@ export function readWorkerProductionEnv(
     officialOfferPrivateCaptureRoot: requirePrivateCaptureRoot(
       source.OFFICIAL_OFFER_PRIVATE_CAPTURE_ROOT,
     ),
+    openPricesEnabled: openPricesEnabled(source.OPEN_PRICES_ENABLED),
     requestBudgetLimit: boundedInteger(
       source.WORKER_REQUEST_BUDGET_LIMIT,
       60,

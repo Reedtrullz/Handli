@@ -178,6 +178,7 @@ describe("production worker adapters", () => {
       getCatalogGtins: vi.fn(async () => [...EANS, EANS[0]!]),
       getNationalPriceScopeId: vi.fn(async () => 42),
       getPriceGtins: vi.fn(async () => [...EANS].reverse()),
+      getGapPriceGtins: vi.fn(async () => EANS),
     };
     const targets = new PostgresKassalappTargetProvider(reader, 2);
 
@@ -203,6 +204,7 @@ describe("production worker adapters", () => {
       getCatalogGtins: vi.fn(async () => EANS),
       getNationalPriceScopeId: vi.fn(async () => undefined),
       getPriceGtins: vi.fn(async () => EANS),
+      getGapPriceGtins: vi.fn(async () => EANS),
     };
     const targets = new PostgresKassalappTargetProvider(reader, 2);
     await expect(targets.getBenchmarkPriceTargets(SIGNAL)).resolves.toEqual(

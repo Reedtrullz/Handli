@@ -659,10 +659,12 @@ export function normalizePriceSourceResponse(
     const product = upstreamPriceProductSchema.safeParse(candidateProduct);
     if (!product.success) {
       const candidateEan = (candidateProduct as { ean?: unknown })?.ean;
+      const validEan = typeof candidateEan === "string" && isValidGtin(candidateEan) ? candidateEan : undefined;
+      if (validEan !== undefined) {
+        returnedEans.add(validEan);
+      }
       outcomes.push({
-        ...(typeof candidateEan === "string" && isValidGtin(candidateEan)
-          ? { ean: candidateEan }
-          : {}),
+        ...(validEan !== undefined ? { ean: validEan } : {}),
         state: "quarantined",
         sourceRecordId: `price-product-${productIndex}`,
         reason: "MALFORMED_RECORD",
@@ -692,6 +694,9 @@ export function normalizePriceSourceResponse(
           ? candidateChainCode.trim()
           : undefined;
         const chainId = chainCode === undefined ? undefined : CHAIN_BY_CODE[chainCode];
+        if (chainCode !== undefined && chainCode !== "" && chainId !== undefined) {
+          returnedSupportedChains.add(chainCode);
+        }
         outcomes.push({
           ean,
           ...(chainCode === undefined || chainCode === "" ? {} : { chainCode }),
@@ -825,10 +830,12 @@ export function normalizeHistoricalPriceSourceResponse(
     const product = upstreamPriceProductSchema.safeParse(candidateProduct);
     if (!product.success) {
       const candidateEan = (candidateProduct as { ean?: unknown })?.ean;
+      const validEan = typeof candidateEan === "string" && isValidGtin(candidateEan) ? candidateEan : undefined;
+      if (validEan !== undefined) {
+        returnedEans.add(validEan);
+      }
       outcomes.push({
-        ...(typeof candidateEan === "string" && isValidGtin(candidateEan)
-          ? { ean: candidateEan }
-          : {}),
+        ...(validEan !== undefined ? { ean: validEan } : {}),
         state: "quarantined",
         sourceRecordId: `historical-price-product-${productIndex}`,
         reason: "MALFORMED_RECORD",

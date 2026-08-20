@@ -98,6 +98,7 @@ describe("forward-only v1 migrations", () => {
       "030_catalog_measure_optional.sql",
       "031_supported_chain_expansion.sql",
       "032_seed_national_scope.sql",
+      "033_open_prices_source.sql",
     ]);
   });
 
@@ -107,7 +108,7 @@ describe("forward-only v1 migrations", () => {
       .sort();
     expect(files[0]).toBe("001_price_cache.sql");
     const guardedFiles = files.slice(1);
-    expect(guardedFiles.at(-1)).toBe("032_seed_national_scope.sql");
+    expect(guardedFiles.at(-1)).toBe("033_open_prices_source.sql");
     const source = (
       await Promise.all(
         guardedFiles.map((file) => readFile(path.join(migrationsDirectory, file), "utf8")),

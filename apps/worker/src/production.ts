@@ -8,6 +8,7 @@ import { ingestionWorkerLeaseKey } from "@handleplan/db/worker-lease";
 import type {
   SourceAccessSnapshot,
 } from "@handleplan/db/source-access";
+import { PostgresIngestionRepository } from "@handleplan/db/ingestion";
 import type { WorkerGtinTargetReader } from "@handleplan/db/worker-targets";
 import {
   isValidGtin,
@@ -15,9 +16,14 @@ import {
   type KassalappRequestAttemptAuthorizer,
   type KassalappRequestScope,
 } from "@handleplan/kassalapp";
+import type {
+  OpenPricesPrice,
+  OpenPricesPriceIngestionOutcome,
+} from "@handleplan/open-prices";
 
 import type {
   KassalappWorkerJobKind,
+  OpenPricesWorkerJobKind,
   WorkerJobRequest,
   WorkerRunResult,
 } from "./contracts";
@@ -27,6 +33,12 @@ import type {
   KassalappSourceAccessState,
   KassalappTargetProvider,
 } from "./kassalapp-handlers";
+import {
+  createOpenPricesHandlers,
+  type OpenPricesSourceAccessPolicy,
+  type OpenPricesSourceAccessState,
+  type OpenPricesTargetProvider,
+} from "./open-prices-handlers";
 import { createKassalappHandlers } from "./kassalapp-handlers";
 import { WorkerRunner } from "./runner";
 import {
@@ -71,6 +83,92 @@ export const KASSALAPP_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition[]
     timeoutMs: 15 * 60 * 1_000,
   }),
 ]);
+
+
+export const OPEN_PRICES_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition[] = Object.freeze([
+  Object.freeze({
+    anchorAt: "2026-08-20T01:30:00.000Z",
+    intervalMs: 6 * 60 * 60 * 1_000,
+    kind: "open-prices-benchmark-refresh" as const,
+    sourceId: "open-prices" as const,
+    timeoutMs: 10 * 60 * 1_000,
+  }),
+]);
+
+const OPEN_PRICES_PERMISSION_SCOPE_BY_JOB: Readonly<Record<OpenPricesWorkerJobKind, string>> = {
+  "open-prices-benchmark-refresh": "ordinaryPrice",
+};
+
+export class StaticOpenPricesSourceAccessPolicy implements OpenPricesSourceAccessPolicy {
+  constructor(private readonly state: OpenPricesSourceAccessState = "conditional") {
+    if (!["approved", "blocked", "conditional", "revoked"].includes(state)) {
+      throw new TypeError("Unsupported Open Prices source access state");
+    }
+    Object.freeze(this);
+  }
+
+  async getAccessState(
+    _context: Readonly<{ jobKind: OpenPricesWorkerJobKind; sourceId: "open-prices" }>,
+    signal: AbortSignal,
+  ): Promise<OpenPricesSourceAccessState> {
+    if (signal.aborted) throw Object.assign(new Error("Source access check cancelled"), {
+      code: "CANCELLED",
+    });
+    return this.state;
+  }
+}
+
+export class GovernedOpenPricesSourceAccessPolicy implements OpenPricesSourceAccessPolicy {
+  constructor(
+    private readonly deploymentState: OpenPricesSourceAccessState,
+    private readonly reader: SourceAccessReader,
+  ) {
+    if (!["approved", "blocked", "conditional", "revoked"].includes(deploymentState)) {
+      throw new TypeError("Unsupported Open Prices deployment access state");
+    }
+  }
+
+  async getAccessState(
+    context: Readonly<{ jobKind: OpenPricesWorkerJobKind; sourceId: "open-prices" }>,
+    signal: AbortSignal,
+  ): Promise<OpenPricesSourceAccessState> {
+    if (this.deploymentState !== "approved") return this.deploymentState;
+    const access = await this.reader.getSourceAccess(context.sourceId, signal);
+    if (access === undefined) return "blocked";
+    if (access.runtimeState !== "approved") return access.runtimeState;
+    if (!access.sourcePermissionCurrent || !access.permissionCurrent) return "blocked";
+    const decision = access.permissionDecision;
+    if (decision !== "approved") return decision ?? "blocked";
+    const scope = OPEN_PRICES_PERMISSION_SCOPE_BY_JOB[context.jobKind];
+    return access.permissions[scope] === true ? "approved" : "blocked";
+  }
+}
+
+export class PostgresOpenPricesTargetProvider implements OpenPricesTargetProvider {
+  constructor(
+    private readonly reader: WorkerGtinTargetReader,
+    private readonly targetLimit: number,
+  ) {
+    requireTargetLimit(targetLimit);
+  }
+
+  async getBenchmarkPriceTargets(signal: AbortSignal): Promise<readonly { ean: string; geographicScopeId?: number }[]> {
+    const geographicScopeId = await this.reader.getNationalPriceScopeId(signal);
+    const chains = ["bunnpris", "extra", "rema-1000"] as const;
+    const rawGtins = await this.reader.getGapPriceGtins(this.targetLimit, chains, signal);
+    const unique = new Set<string>();
+    for (const value of rawGtins) {
+      if (isValidGtin(value)) unique.add(value);
+    }
+    return [...unique]
+      .sort((left, right) => left.localeCompare(right))
+      .slice(0, this.targetLimit)
+      .map((ean) => ({
+        ean,
+        ...(geographicScopeId === undefined ? {} : { geographicScopeId }),
+      }));
+  }
+}
 
 export class StaticKassalappSourceAccessPolicy implements KassalappSourceAccessPolicy {
   constructor(private readonly state: KassalappSourceAccessState = "conditional") {
@@ -300,11 +398,19 @@ export class PostgresWorkerRuntimeStateStore implements WorkerRuntimeStateStore 
   }
 }
 
+export interface OpenPricesProductionRuntimeDependencies {
+  client: { getPricesForGtins(gtins: readonly string[], signal: AbortSignal): Promise<readonly OpenPricesPrice[]> };
+  ingestionRepository: PostgresIngestionRepository;
+  sourceAccessPolicy: OpenPricesSourceAccessPolicy;
+  targetProvider: OpenPricesTargetProvider;
+}
+
 export interface ProductionWorkerRuntimeDependencies<RunHandle = unknown> {
   clock: () => Date;
   gateway: KassalappIngestionGateway;
   ingestionRepository: KassalappIngestionRepository<RunHandle>;
   leaseProvider: WorkerLeaseProvider;
+  openPrices?: OpenPricesProductionRuntimeDependencies;
   runtimeObserver?: WorkerRuntimeObserver;
   schedules?: readonly WorkerScheduleDefinition[];
   shutdownGraceMs: number;
@@ -320,13 +426,33 @@ function runIdFor(request: WorkerJobRequest): string {
 export function createProductionWorkerRuntime<RunHandle = unknown>(
   dependencies: ProductionWorkerRuntimeDependencies<RunHandle>,
 ): WorkerRuntime {
-  const handlers = createKassalappHandlers({
+  const kassalappHandlers = createKassalappHandlers({
     clock: dependencies.clock,
     gateway: dependencies.gateway,
     repository: dependencies.ingestionRepository,
     sourceAccessPolicy: dependencies.sourceAccessPolicy,
     targetProvider: dependencies.targetProvider,
   });
+
+  const openPricesHandlers = dependencies.openPrices !== undefined
+    ? createOpenPricesHandlers({
+        clock: dependencies.clock,
+        client: dependencies.openPrices.client,
+        repository: dependencies.openPrices.ingestionRepository,
+        sourceAccessPolicy: dependencies.openPrices.sourceAccessPolicy,
+        targetProvider: dependencies.openPrices.targetProvider,
+      })
+    : {};
+
+  const handlers = { ...kassalappHandlers, ...openPricesHandlers };
+
+  const schedules = dependencies.openPrices !== undefined
+    ? [
+        ...(dependencies.schedules ?? KASSALAPP_PRODUCTION_SCHEDULES),
+        ...OPEN_PRICES_PRODUCTION_SCHEDULES,
+      ]
+    : (dependencies.schedules ?? KASSALAPP_PRODUCTION_SCHEDULES);
+
   const runner = new WorkerRunner({
     createRunId: runIdFor,
     handlerShutdownGraceMs: dependencies.shutdownGraceMs,
@@ -338,8 +464,9 @@ export function createProductionWorkerRuntime<RunHandle = unknown>(
     now: dependencies.clock,
     observer: dependencies.runtimeObserver,
     runner,
-    schedules: dependencies.schedules ?? KASSALAPP_PRODUCTION_SCHEDULES,
+    schedules,
     shutdownGraceMs: dependencies.shutdownGraceMs,
     stateStore: dependencies.stateStore,
   });
 }
+  ingestionRepository: PostgresIngestionRepository;

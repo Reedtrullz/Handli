@@ -9,15 +9,19 @@ import { PostgresWorkerLeaseAdapter } from "@handleplan/db/worker-lease";
 import { PostgresWorkerJobStateRepository } from "@handleplan/db/worker-state";
 import { PostgresWorkerGtinTargetReader } from "@handleplan/db/worker-targets";
 import { KassalappClient } from "@handleplan/kassalapp";
+import { OpenPricesClient } from "@handleplan/open-prices";
 
 import { readWorkerProductionEnv, readWorkerRuntimeEnv } from "./env";
 import { startWorkerHealthServer, WorkerHealthMonitor } from "./health";
 import {
   KASSALAPP_PRODUCTION_SCHEDULES,
+  OPEN_PRICES_PRODUCTION_SCHEDULES,
   PostgresKassalappTargetProvider,
+  PostgresOpenPricesTargetProvider,
   PostgresWorkerLeaseProvider,
   PostgresWorkerRuntimeStateStore,
   GovernedKassalappSourceAccessPolicy,
+  GovernedOpenPricesSourceAccessPolicy,
   createKassalappRequestAttemptAuthorizer,
   createProductionWorkerRuntime,
 } from "./production";
@@ -32,7 +36,7 @@ export function workerOwnerId(host = hostname(), processId = process.pid): strin
 }
 
 export function productionCycleBoundMs(shutdownGraceMs: number): number {
-  return KASSALAPP_PRODUCTION_SCHEDULES.reduce(
+  return [...KASSALAPP_PRODUCTION_SCHEDULES, ...OPEN_PRICES_PRODUCTION_SCHEDULES].reduce(
     (total, schedule) => total + schedule.timeoutMs + shutdownGraceMs,
     0,
   );
@@ -82,6 +86,25 @@ export async function runProductionWorkerProcess(
       maxCycleDurationMs: productionCycleBoundMs(runtimeEnv.shutdownGraceMs),
       revision: values.APP_COMMIT_SHA ?? "",
     });
+    const openPricesSourceAccessPolicy = productionEnv.openPricesEnabled
+      ? new GovernedOpenPricesSourceAccessPolicy(
+          productionEnv.sourceAccessState,
+          new PostgresSourceAccessReader(connection.db),
+        )
+      : undefined;
+
+    const openPricesDependencies = productionEnv.openPricesEnabled
+      ? {
+          client: new OpenPricesClient(),
+          ingestionRepository,
+          sourceAccessPolicy: openPricesSourceAccessPolicy!,
+          targetProvider: new PostgresOpenPricesTargetProvider(
+            new PostgresWorkerGtinTargetReader(connection.db),
+            productionEnv.targetLimit,
+          ),
+        }
+      : undefined;
+
     const runtime = createProductionWorkerRuntime({
       clock: () => new Date(),
       gateway,
@@ -91,6 +114,7 @@ export async function runProductionWorkerProcess(
         sourceId: "kassalapp",
         ttlMs: productionEnv.leaseTtlMs,
       }),
+      openPrices: openPricesDependencies,
       runtimeObserver: health,
       shutdownGraceMs: runtimeEnv.shutdownGraceMs,
       sourceAccessPolicy,
