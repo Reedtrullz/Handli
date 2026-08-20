@@ -13,6 +13,8 @@ COPY apps/worker/package.json apps/worker/package.json
 COPY packages/db/package.json packages/db/package.json
 COPY packages/domain/package.json packages/domain/package.json
 COPY packages/kassalapp/package.json packages/kassalapp/package.json
+COPY packages/open-prices/package.json packages/open-prices/package.json
+COPY packages/tjek/package.json packages/tjek/package.json
 RUN pnpm install --frozen-lockfile
 
 FROM dependencies AS builder
