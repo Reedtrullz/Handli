@@ -3,6 +3,7 @@ export const WORKER_SOURCE_HEALTH_JOB_KINDS = [
   "benchmark-price-refresh",
   "physical-store-sync",
   "historical-observation-collection",
+  "open-prices-benchmark-refresh",
   "official-offer-ingestion",
 ] as const;
 

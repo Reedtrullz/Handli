@@ -10,6 +10,12 @@ export const KASSALAPP_WORKER_JOB_KINDS = [
 
 export type KassalappWorkerJobKind = (typeof KASSALAPP_WORKER_JOB_KINDS)[number];
 
+export const OPEN_PRICES_WORKER_JOB_KINDS = [
+  "open-prices-benchmark-refresh",
+] as const;
+
+export type OpenPricesWorkerJobKind = (typeof OPEN_PRICES_WORKER_JOB_KINDS)[number];
+
 export const OFFICIAL_OFFER_WORKER_JOB_KINDS = [
   "official-offer-discovery",
   "official-offer-fetch",
@@ -21,6 +27,7 @@ export type OfficialOfferWorkerJobKind = (typeof OFFICIAL_OFFER_WORKER_JOB_KINDS
 
 export const WORKER_JOB_KINDS = [
   ...KASSALAPP_WORKER_JOB_KINDS,
+  ...OPEN_PRICES_WORKER_JOB_KINDS,
   ...OFFICIAL_OFFER_WORKER_JOB_KINDS,
 ] as const;
 

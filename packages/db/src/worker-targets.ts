@@ -11,6 +11,11 @@ export interface WorkerGtinTargetReader {
     claimEligibility: "historical_eligible" | "ordinary_only",
     signal?: AbortSignal,
   ): Promise<readonly string[]>;
+  getGapPriceGtins(
+    limit: number,
+    chains: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<readonly string[]>;
 }
 
 type CancelableQuery<T> = PromiseLike<T> & { cancel(): void };
@@ -173,6 +178,40 @@ export class PostgresWorkerGtinTargetReader implements WorkerGtinTargetReader {
         and product.status = 'active'
       order by refresh.last_refreshed_at asc nulls first, identifier.value asc
       limit ${limit}
+    `, signal);
+    if (signal?.aborted) throw cancelledError();
+    return values(rows);
+  }
+
+  async getGapPriceGtins(
+    limit: number,
+    chains: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<readonly string[]> {
+    requireLimit(limit);
+    if (!Array.isArray(chains) || chains.length === 0) {
+      throw new TypeError("chains must be a non-empty array");
+    }
+    const rows = await awaitAbortable(this.db.$client<Array<{ ean: string }>>`
+      select identifier.value as ean
+      from product_identifiers identifier
+      join canonical_products product on product.id = identifier.product_id
+      where identifier.scheme in ('ean8', 'ean13')
+        and identifier.value ~ '^([0-9]{8}|[0-9]{13})
+
+        and identifier.verified_at is not null
+        and product.status = 'active'
+        and not exists (
+          select 1
+          from price_observations obs
+          inner join ingestion_runs run on run.id = obs.ingestion_run_id
+          where obs.product_id = identifier.product_id
+            and obs.chain = ANY(${chains})
+            and obs.fetched_at > now() - interval '72 hours'
+            and run.status = 'completed'
+        )
+      order by identifier.value asc
+      limit ${Math.ceil(limit * 1.2)}::integer
     `, signal);
     if (signal?.aborted) throw cancelledError();
     return values(rows);

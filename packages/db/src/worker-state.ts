@@ -12,6 +12,7 @@ export const WORKER_JOB_STATE_KINDS = [
   "benchmark-price-refresh",
   "physical-store-sync",
   "historical-observation-collection",
+  "open-prices-benchmark-refresh",
   "official-offer-discovery",
   "official-offer-fetch",
   "official-offer-ingestion",

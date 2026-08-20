@@ -1,7 +1,7 @@
 {
   "contractVersion": 1,
   "generatedFrom": "installed frozen pnpm dependency manifests",
-  "inventorySha256": "5c70be9d3acded817eedfdbe09bf4a0b26f5aa7d62f9aa180d50b5989f8f6797",
+  "inventorySha256": "f83334eabda4b4c8a2492af97cf908a8b053bc7035a3b0fb7cc31b05a7b543cc",
   "licenseCounts": {
     "0BSD": 1,
     "Apache-2.0": 29,
@@ -11,14 +11,14 @@
     "CC-BY-4.0": 1,
     "CC0-1.0": 2,
     "ISC": 16,
-    "MIT": 379,
+    "MIT": 380,
     "MIT-0": 2,
     "MPL-2.0": 3,
     "Python-2.0": 1,
     "Unlicense": 1
   },
-  "lockfileSha256": "607cacd790d7e1b35b0e2df5f2a01f1396ee6a76fd9c9acf72da9690e24bb036",
-  "packageCount": 451,
+  "lockfileSha256": "5324b5dcc44da70ff6564932ba95c63151e83935591aa9cb28143d26835229f9",
+  "packageCount": 452,
   "packages": [
     {
       "license": "MIT",
@@ -1744,6 +1744,11 @@
       "license": "MIT",
       "name": "possible-typed-array-names",
       "version": "1.1.0"
+    },
+    {
+      "license": "MIT",
+      "name": "postcss",
+      "version": "8.5.19"
     },
     {
       "license": "MIT",

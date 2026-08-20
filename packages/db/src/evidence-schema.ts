@@ -1324,7 +1324,7 @@ export const workerJobResults = pgTable(
     ),
     check(
       "worker_job_results_job_kind",
-      sql`${table.jobKind} in ('catalog-refresh', 'benchmark-price-refresh', 'physical-store-sync', 'historical-observation-collection', 'official-offer-discovery', 'official-offer-fetch', 'official-offer-ingestion', 'official-offer-lifecycle-reconcile')`,
+      sql`${table.jobKind} in ('catalog-refresh', 'benchmark-price-refresh', 'physical-store-sync', 'historical-observation-collection', 'open-prices-benchmark-refresh', 'official-offer-discovery', 'official-offer-fetch', 'official-offer-ingestion', 'official-offer-lifecycle-reconcile')`,
     ),
     check(
       "worker_job_results_status",
