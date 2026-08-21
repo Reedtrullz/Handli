@@ -183,7 +183,9 @@ export function createOpenPricesHandlers(
         throw new SourceAccessChangedError();
       }
 
+      console.error("[open-prices] calling API with", gtins.length, "gtins");
       const prices = await dependencies.client.getPricesForGtins(gtins, signal);
+      console.error("[open-prices] API returned", prices.length, "prices");
       throwIfCancelled(signal);
 
       const geographicScopeId = targets[0]?.geographicScopeId;
@@ -201,6 +203,7 @@ export function createOpenPricesHandlers(
       const batches = batchOutcomes(outcomes, MAX_INGESTION_BATCH_SIZE);
       for (const batch of batches) {
         throwIfCancelled(signal);
+        console.error("[open-prices] persisting batch of", batch.length);
         await dependencies.repository.persistPriceOutcomes(handle, batch, signal);
         persisted += batch.length;
       }
