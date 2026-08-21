@@ -103,7 +103,7 @@ export const OPEN_PRICES_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition
  */
 export const TJEK_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition[] = Object.freeze([
   Object.freeze({
-    anchorAt: "2026-08-17T02:15:00.000Z",
+    anchorAt: "2026-08-14T02:15:00.000Z",
     intervalMs: 7 * 24 * 60 * 60 * 1_000,
     kind: "official-offer-discovery" as const,
     sourceId: "tjek" as const,
