@@ -55,7 +55,7 @@ function abort(signal: AbortSignal): void { if (signal.aborted) throw new Worker
 
 async function computeEditionIdentitySha256(
   db: HandleplanDatabase,
-  args: { sourceId: string; externalId: string; chain: string; title: string; contentKind: string; geographicScopeId: number; validFrom: Date; validUntil: Date; discoveredAt: Date },
+  args: { sourceId: string; externalId: string; chain: string; title: string; contentKind: string; geographicScopeId: number; validFrom: string; validUntil: string; discoveredAt: string },
 ): Promise<string> {
   const scopeRow = await db.$client<{ scope_kind: string; label: string; country_code: string }[]>`SELECT scope_kind, label, country_code FROM public.geographic_scopes WHERE id = ${args.geographicScopeId} AND status = 'active'`;
     const sr = scopeRow[0];
@@ -96,6 +96,7 @@ async function processCatalog(
   const db = deps.db;
   const chain = catalog.chainId ?? CHAIN_BY_DEALER[catalog.dealer_id] ?? "bunnpris";
   const now = deps.clock?.() ?? new Date();
+  const nowStr = now.toISOString();
   const validFrom = date(catalog.run_from, now);
   const validUntil = date(catalog.run_till, new Date(now.getTime() + 7 * 86400000));
   const title = catalog.brand + " " + (catalog.publication_date || now.toISOString().slice(0, 10));
@@ -106,11 +107,11 @@ async function processCatalog(
   // 1. Compute edition_identity_sha256
   const editionIdentitySha256 = await computeEditionIdentitySha256(db, {
     sourceId: TJEK_SOURCE_ID, externalId: catalog.id, chain, title, contentKind,
-    geographicScopeId, validFrom, validUntil, discoveredAt: now,
+    geographicScopeId, validFrom: validFrom.toISOString(), validUntil: validUntil.toISOString(), discoveredAt: now.toISOString(),
   });
 
   // 2. Insert publication
-  const publication = await db.$client<{ id: number }[]>`INSERT INTO publications (source_id, external_id, chain, title, content_kind, geographic_scope_id, declared_geographic_scope, edition_identity_sha256, discovery_permission_id, valid_from, valid_until, discovered_at, status) VALUES (${TJEK_SOURCE_ID}, ${catalog.id}, ${chain}, ${title}, ${contentKind}, ${geographicScopeId}, ${JSON.stringify(declaredGeographicScope)}::jsonb, ${editionIdentitySha256}, ${permissionId}, ${validFrom}, ${validUntil}, ${now}, 'discovered') RETURNING id`;
+  const publication = await db.$client<{ id: number }[]>`INSERT INTO publications (source_id, external_id, chain, title, content_kind, geographic_scope_id, declared_geographic_scope, edition_identity_sha256, discovery_permission_id, valid_from, valid_until, discovered_at, status) VALUES (${TJEK_SOURCE_ID}, ${catalog.id}, ${chain}, ${title}, ${contentKind}, ${geographicScopeId}, ${JSON.stringify(declaredGeographicScope)}::jsonb, ${editionIdentitySha256}, ${permissionId}, ${validFrom.toISOString()}, ${validUntil.toISOString()}, ${now.toISOString()}, 'discovered') RETURNING id`;
   const publicationId = publication[0]?.id;
   if (publicationId === undefined) throw new Error("Failed to create publication for " + chain);
 
@@ -134,13 +135,13 @@ async function processCatalog(
   const payload = JSON.stringify({ catalog, offers });
   const capabilitiesJson = JSON.stringify([...OFFICIAL_OFFER_CAPABILITIES]);
   const blobKey = "tjek/" + catalog.id + ".json";
-  const capture = await db.$client<{ id: number }[]>`INSERT INTO publication_captures (publication_id, blob_key, checksum, mime_type, byte_length, rights_classification, capture_permission_id, capture_permission_capabilities, retrieved_at) VALUES (${publicationId}, ${blobKey}, ${checksum(payload)}, 'application/json', ${Buffer.byteLength(payload)}, 'public_display', ${permissionId}, ${capabilitiesJson}::jsonb, ${now}) RETURNING id`;
+  const capture = await db.$client<{ id: number }[]>`INSERT INTO publication_captures (publication_id, blob_key, checksum, mime_type, byte_length, rights_classification, capture_permission_id, capture_permission_capabilities, retrieved_at) VALUES (${publicationId}, ${blobKey}, ${checksum(payload)}, 'application/json', ${Buffer.byteLength(payload)}, 'public_display', ${permissionId}, ${capabilitiesJson}::jsonb, ${nowStr}) RETURNING id`;
   const captureId = capture[0]?.id;
   if (captureId === undefined) throw new Error("Failed to create capture for " + chain);
 
   // 5. Insert extraction run
   const counts = JSON.stringify({ offers: offers.length });
-  const extraction = await db.$client<{ id: number }[]>`INSERT INTO extraction_runs (capture_id, extractor_version, status, started_at, completed_at, counts, extraction_method, extraction_permission_id, permission_capabilities, source_started_at, source_completed_at, empty_result) VALUES (${captureId}, 'tjek-v1', 'completed', ${now}, ${now}, ${counts}::jsonb, 'structured', ${permissionId}, ${capabilitiesJson}::jsonb, ${now}, ${now}, ${offers.length > 0 ? 'not-empty' : 'confirmed-empty'}) RETURNING id`;
+  const extraction = await db.$client<{ id: number }[]>`INSERT INTO extraction_runs (capture_id, extractor_version, status, started_at, completed_at, counts, extraction_method, extraction_permission_id, permission_capabilities, source_started_at, source_completed_at, empty_result) VALUES (${captureId}, 'tjek-v1', 'completed', ${nowStr}, ${nowStr}, ${counts}::jsonb, 'structured', ${permissionId}, ${capabilitiesJson}::jsonb, ${nowStr}, ${nowStr}, ${offers.length > 0 ? 'not-empty' : 'confirmed-empty'}) RETURNING id`;
   const extractionId = extraction[0]?.id;
   if (extractionId === undefined) throw new Error("Failed to create extraction run for " + chain);
 
@@ -167,11 +168,11 @@ async function processCatalog(
     const before = ore(offer.before_price);
 
     const offerKey = "tjek:" + catalog.id + ":" + key;
-    const approved = await db.$client<{ id: number }[]>`INSERT INTO approved_offers (offer_key, candidate_id, source_id, source_reference, chain, geographic_scope_id, amount_ore, before_amount_ore, membership_requirement, valid_from, valid_until, status, version, approved_at) VALUES (${offerKey}, ${candidateId}, ${TJEK_SOURCE_ID}, ${offerKey}, ${chain}, ${geographicScopeId}, ${amount}, ${before !== null && before >= amount ? before : null}, 'public', ${date(offer.run_from, validFrom)}, ${date(offer.run_till, validUntil)}, 'approved', 1, ${now}) RETURNING id`;
+    const approved = await db.$client<{ id: number }[]>`INSERT INTO approved_offers (offer_key, candidate_id, source_id, source_reference, chain, geographic_scope_id, amount_ore, before_amount_ore, membership_requirement, valid_from, valid_until, status, version, approved_at) VALUES (${offerKey}, ${candidateId}, ${TJEK_SOURCE_ID}, ${offerKey}, ${chain}, ${geographicScopeId}, ${amount}, ${before !== null && before >= amount ? before : null}, 'public', ${date(offer.run_from, validFrom).toISOString()}, ${date(offer.run_till, validUntil).toISOString()}, 'approved', 1, ${nowStr}) RETURNING id`;
     const offerId = approved[0]!.id;
 
     const reviewNewValues = { channels: ["in-store"], eligibility: "public" };
-    await db.$client`INSERT INTO review_actions (candidate_id, offer_id, actor_id, action, expected_version, new_values, reason, acted_at) VALUES (${candidateId}, ${offerId}, 'tjek-worker', 'approve', 0, ${JSON.stringify(reviewNewValues)}::jsonb, 'Automated Tjek import', ${now})`;
+    await db.$client`INSERT INTO review_actions (candidate_id, offer_id, actor_id, action, expected_version, new_values, reason, acted_at) VALUES (${candidateId}, ${offerId}, 'tjek-worker', 'approve', 0, ${JSON.stringify(reviewNewValues)}::jsonb, 'Automated Tjek import', ${nowStr})`;
 
     if (match !== undefined) {
       await db.$client`INSERT INTO offer_targets (offer_id, product_id, match_method, match_confidence) VALUES (${offerId}, ${match.productId}, 'human_review', ${match.confidence})`;
