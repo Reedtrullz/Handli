@@ -1,4 +1,3 @@
-import { writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import type { TjekClient, TjekCatalog, TjekOffer } from "@handleplan/tjek";
 import { TjekClientError } from "@handleplan/tjek";
@@ -196,15 +195,7 @@ export function createTjekHandlers(dependencies: TjekHandlerDependencies): Parti
       const permissionId = await resolvePermissionId(dependencies.db);
 
       // Fetch latest catalog from each dealer (Bunnpris, Extra, REMA 1000)
-      let catalogs;
-      try {
-        catalogs = await dependencies.client.getAllLatestCatalogs(signal);
-      } catch (e) {
-        try { writeFileSync(String('/tmp/tjek-debug.log'), JSON.stringify({ts: new Date().toISOString(), error: ((e as Error).message)}) + String('\n')); } catch {}
-        throw e;
-      }
-      try { writeFileSync(String('/tmp/tjek-debug.log'), JSON.stringify({ts: new Date().toISOString(), catalogsCount: catalogs.length, chains: catalogs.map((c) => c.chainId)}) + String('\n')); } catch {}
-
+      const catalogs = await dependencies.client.getAllLatestCatalogs(signal);
       console.error("[tjek] found", catalogs.length, "catalogs from", catalogs.map((c) => c.chainId).join(", "));
 
       if (catalogs.length === 0) return { counters: {} };
