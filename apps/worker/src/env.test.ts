@@ -51,6 +51,7 @@ describe("readWorkerProductionEnv", () => {
       requestBudgetWindowMs: 60_000,
       sourceAccessState: "conditional",
       targetLimit: 500,
+      tjekEnabled: false,
     });
   });
 

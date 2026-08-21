@@ -111,6 +111,9 @@ importers:
       '@handleplan/open-prices':
         specifier: workspace:*
         version: link:../../packages/open-prices
+      '@handleplan/tjek':
+        specifier: workspace:*
+        version: link:../../packages/tjek
       zod:
         specifier: 4.4.3
         version: 4.4.3

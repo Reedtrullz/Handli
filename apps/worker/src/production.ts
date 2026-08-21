@@ -20,6 +20,7 @@ import type {
   OpenPricesPrice,
   OpenPricesPriceIngestionOutcome,
 } from "@handleplan/open-prices";
+import { TjekClient } from "@handleplan/tjek";
 
 import type {
   KassalappWorkerJobKind,
@@ -39,6 +40,7 @@ import {
   type OpenPricesSourceAccessState,
   type OpenPricesTargetProvider,
 } from "./open-prices-handlers";
+import { createTjekHandlers, type TjekHandlerDependencies } from "./tjek-handlers";
 import { createKassalappHandlers } from "./kassalapp-handlers";
 import { WorkerRunner } from "./runner";
 import {
@@ -419,12 +421,17 @@ export interface OpenPricesProductionRuntimeDependencies {
   targetProvider: OpenPricesTargetProvider;
 }
 
+export interface TjekProductionRuntimeDependencies {
+  db: TjekHandlerDependencies["db"];
+}
+
 export interface ProductionWorkerRuntimeDependencies<RunHandle = unknown> {
   clock: () => Date;
   gateway: KassalappIngestionGateway;
   ingestionRepository: KassalappIngestionRepository<RunHandle>;
   leaseProvider: WorkerLeaseProvider;
   openPrices?: OpenPricesProductionRuntimeDependencies;
+  tjek?: TjekProductionRuntimeDependencies;
   runtimeObserver?: WorkerRuntimeObserver;
   schedules?: readonly WorkerScheduleDefinition[];
   shutdownGraceMs: number;
@@ -458,14 +465,15 @@ export function createProductionWorkerRuntime<RunHandle = unknown>(
       })
     : {};
 
-  const handlers = { ...kassalappHandlers, ...openPricesHandlers };
+  const tjekHandlers = dependencies.tjek !== undefined ? createTjekHandlers({ client: new TjekClient(), db: dependencies.tjek.db }) : {};
 
-  const schedules = dependencies.openPrices !== undefined
-    ? [
-        ...(dependencies.schedules ?? KASSALAPP_PRODUCTION_SCHEDULES),
-        ...OPEN_PRICES_PRODUCTION_SCHEDULES,
-      ]
-    : (dependencies.schedules ?? KASSALAPP_PRODUCTION_SCHEDULES);
+  const handlers = { ...kassalappHandlers, ...openPricesHandlers, ...tjekHandlers };
+
+  const schedules = [
+    ...(dependencies.schedules ?? KASSALAPP_PRODUCTION_SCHEDULES),
+    ...(dependencies.openPrices !== undefined ? OPEN_PRICES_PRODUCTION_SCHEDULES : []),
+    ...(dependencies.tjek !== undefined ? TJEK_PRODUCTION_SCHEDULES : []),
+  ];
 
   const runner = new WorkerRunner({
     createRunId: runIdFor,

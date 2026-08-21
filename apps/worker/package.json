@@ -16,7 +16,8 @@
     "@handleplan/domain": "workspace:*",
     "@handleplan/kassalapp": "workspace:*",
     "@handleplan/open-prices": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.4.3",
+    "@handleplan/tjek": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "24.10.13",

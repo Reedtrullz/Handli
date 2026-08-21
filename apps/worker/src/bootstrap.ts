@@ -10,6 +10,7 @@ import { PostgresWorkerJobStateRepository } from "@handleplan/db/worker-state";
 import { PostgresWorkerGtinTargetReader } from "@handleplan/db/worker-targets";
 import { KassalappClient } from "@handleplan/kassalapp";
 import { OpenPricesClient } from "@handleplan/open-prices";
+import { TjekClient } from "@handleplan/tjek";
 
 import { readWorkerProductionEnv, readWorkerRuntimeEnv } from "./env";
 import { startWorkerHealthServer, WorkerHealthMonitor } from "./health";
@@ -110,6 +111,10 @@ export async function runProductionWorkerProcess(
         }
       : undefined;
 
+    const tjekDependencies = productionEnv.tjekEnabled
+      ? { db: connection.db }
+      : undefined;
+
     const runtime = createProductionWorkerRuntime({
       clock: () => new Date(),
       gateway,
@@ -120,6 +125,7 @@ export async function runProductionWorkerProcess(
         ttlMs: productionEnv.leaseTtlMs,
       }),
       openPrices: openPricesDependencies,
+      tjek: tjekDependencies,
       runtimeObserver: health,
       shutdownGraceMs: runtimeEnv.shutdownGraceMs,
       sourceAccessPolicy,
