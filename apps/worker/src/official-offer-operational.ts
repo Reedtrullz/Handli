@@ -492,9 +492,13 @@ export function createOfficialOfferProductionComposition(
 }
 
 export function disabledOfficialOfferProductionComposition(): OfficialOfferProductionComposition {
-  return createOfficialOfferProductionComposition({
+  const composition = createOfficialOfferProductionComposition({
     contractVersion: 1,
     enabled: false,
     reason: OFFICIAL_OFFER_FOUNDATION_ACTIVATION.reason,
+  });
+  return Object.freeze({
+    ...composition,
+    activationEnabled: OFFICIAL_OFFER_FOUNDATION_ACTIVATION.enabled,
   });
 }

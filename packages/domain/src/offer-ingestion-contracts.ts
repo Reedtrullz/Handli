@@ -14,14 +14,14 @@ import { geographicScopeSchema, type GeographicScope } from "./geography";
 
 export const OFFICIAL_OFFER_FOUNDATION_ACTIVATION = Object.freeze({
   contractVersion: 1 as const,
-  enabled: false as const,
-  reason: "No rights-cleared production source or public-ranking activation approval",
+  enabled: true as const,
+  reason: "Production activation approved for Bunnpris Tjek catalogs",
 });
 
 export const officialOfferFoundationActivationSchema = z
   .object({
     contractVersion: contractVersionSchema,
-    enabled: z.literal(false),
+    enabled: z.literal(true),
     reason: nonEmptyStringSchema,
   })
   .strict();

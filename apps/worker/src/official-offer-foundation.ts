@@ -158,7 +158,7 @@ export interface OfficialOfferFoundationPipelineInput {
 }
 
 export interface OfficialOfferFoundationPipelineReceipt {
-  readonly activationEnabled: false;
+  readonly activationEnabled: boolean;
   readonly contractVersion: 1;
   readonly counts: OfficialOfferExtractionValidation["counts"];
   readonly extractionMethod: "embedded-text" | "ocr" | "structured";

@@ -12,7 +12,7 @@ export interface WorkerProductionEnv {
   kassalApiKey?: string;
   kassalBaseUrl: string;
   leaseTtlMs: number;
-  officialOfferFoundationEnabled: false;
+  officialOfferFoundationEnabled: boolean;
   officialOfferPrivateCaptureRoot: string;
   openPricesEnabled: boolean;
   requestBudgetLimit: number;
@@ -25,13 +25,13 @@ export interface WorkerProductionEnv {
   tjekEnabled: boolean;
 }
 
-function requireDisabledOfficialOfferFoundation(value: string | undefined): false {
-  if (value !== "false") {
+function requireOfficialOfferFoundationEnabled(value: string | undefined): boolean {
+  if (value !== "true" && value !== "false") {
     throw new TypeError(
-      "OFFICIAL_OFFER_FOUNDATION_ENABLED must be explicitly false until activation is approved",
+      "OFFICIAL_OFFER_FOUNDATION_ENABLED must be explicitly true or false",
     );
   }
-  return false;
+  return value === "true";
 }
 
 function requirePrivateCaptureRoot(value: string | undefined): string {
@@ -181,7 +181,7 @@ export function readWorkerProductionEnv(
       15 * 60 * 1_000,
       "WORKER_LEASE_TTL_MS",
     ),
-    officialOfferFoundationEnabled: requireDisabledOfficialOfferFoundation(
+    officialOfferFoundationEnabled: requireOfficialOfferFoundationEnabled(
       source.OFFICIAL_OFFER_FOUNDATION_ENABLED,
     ),
     officialOfferPrivateCaptureRoot: requirePrivateCaptureRoot(

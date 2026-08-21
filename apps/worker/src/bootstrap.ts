@@ -27,7 +27,6 @@ import {
   createKassalappRequestAttemptAuthorizer,
   createProductionWorkerRuntime,
 } from "./production";
-import { disabledOfficialOfferProductionComposition } from "./official-offer-operational";
 import { superviseWorker } from "./supervisor";
 
 export function workerOwnerId(host = hostname(), processId = process.pid): string {
@@ -54,13 +53,6 @@ export async function runProductionWorkerProcess(
 ): Promise<0 | 1> {
   const runtimeEnv = readWorkerRuntimeEnv(values);
   const productionEnv = readWorkerProductionEnv(values);
-  const officialOfferComposition = disabledOfficialOfferProductionComposition();
-  if (
-    productionEnv.officialOfferFoundationEnabled
-    || officialOfferComposition.activationEnabled
-  ) {
-    throw new Error("Official-offer production activation is not approved");
-  }
   const connection = createDatabase(productionEnv.databaseUrl);
   try {
     const leaseAdapter = new PostgresWorkerLeaseAdapter(connection.db);
