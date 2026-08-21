@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import type { TjekClient, TjekCatalog, TjekOffer } from "@handleplan/tjek";
 import { TjekClientError } from "@handleplan/tjek";
@@ -224,6 +225,7 @@ export function createTjekHandlers(dependencies: TjekHandlerDependencies): Parti
           catalogsProcessed += 1;
           console.error("[tjek]", catalog.chainId, ": fetched", result.fetched, "accepted", result.accepted);
         } catch (error) {
+          try { appendFileSync(String("/tmp/tjek-debug.log"), JSON.stringify({ts: new Date().toISOString(), phase: "per-catalog", chain: catalog.chainId, error: (error as Error).message, stack: (error as Error).stack?.split("\n").slice(0,5).join(" | ")}) + String("\n")); } catch {}
           console.error("[tjek] failed to process catalog for", catalog.chainId, ":", (error as Error).message);
           // Continue to next catalog — don't let one failure stop the others
         }
@@ -239,6 +241,7 @@ export function createTjekHandlers(dependencies: TjekHandlerDependencies): Parti
         failed: 0,
       }};
     } catch (error) {
+      try { appendFileSync(String("/tmp/tjek-debug.log"), JSON.stringify({ts: new Date().toISOString(), phase: "handler-error", error: (error as Error).message, stack: (error as Error).stack?.split("\n").slice(0,5).join(" | ")}) + String("\n")); } catch {}
       console.error("[tjek] handler error:", error);
       throw error;
     }
