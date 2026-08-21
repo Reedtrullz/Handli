@@ -170,6 +170,7 @@ export function createOpenPricesHandlers(
     let persisted = 0;
 
     try {
+      console.error("[open-prices] targets:", targets.length, "gtins:", targets.slice(0,5).map(t => t.ean).join(","));
       const gtins = targets.map(({ ean }: { ean: string }) => ean);
       throwIfCancelled(signal);
 
@@ -216,6 +217,7 @@ export function createOpenPricesHandlers(
 
       return { counters: { ...finalization.counts, failed } };
     } catch (error) {
+      console.error("[open-prices] handler error:", error instanceof Error ? error.message : String(error));
       const isCancelled =
         signal.aborted || error instanceof WorkerCancelledError;
       const isAccessChanged = error instanceof SourceAccessChangedError;
