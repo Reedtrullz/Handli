@@ -82,7 +82,7 @@ describe("Tjek worker handler wiring and idempotency", () => {
     expect(client.getLatestCatalog).toHaveBeenCalledWith(expect.anything());
     expect(client.getOffersFromCatalog).not.toHaveBeenCalled();
     expect(db.$client).toHaveBeenCalledTimes(1);
-    expect(String(queryCalls[0]?.[0])).toContain("select id from publications");
+    expect(String(queryCalls[0]?.[0]).toLowerCase()).toContain("select id from publications");
   });
 
   it("fails closed on a pre-cancelled signal before making source or database calls", async () => {

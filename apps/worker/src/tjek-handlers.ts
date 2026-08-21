@@ -7,6 +7,10 @@ import { WorkerCancelledError } from "./runner";
 export const TJEK_SOURCE_ID = "tjek" as const;
 export const TJEK_JOB_KIND = "official-offer-discovery" as const;
 
+/** source_permissions.id for the approved Tjek source. */
+const TJEK_PERMISSION_ID = 3 as const;
+const OFFICIAL_OFFER_CAPABILITIES = ["capture", "discover", "extract"] as const;
+
 export function normalizeOfferName(value: string): string {
   return value.toLocaleLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\b(stk|pk|pakke|kg|g|gram|ml|l|liter|cl|tilbud|kr)\b/gu, " ")
@@ -43,39 +47,125 @@ function date(value: string, fallback: Date): Date { const d = new Date(value); 
 function checksum(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 function abort(signal: AbortSignal): void { if (signal.aborted) throw new WorkerCancelledError(); }
 
+/**
+ * Compute the edition_identity_sha256 that the publications trigger expects.
+ * Delegates to the canonical_official_offer_edition_identity SQL function and
+ * hashes the result, matching the exact logic in enforce_publication_offer_identity().
+ */
+async function computeEditionIdentitySha256(
+  db: HandleplanDatabase,
+  args: { sourceId: string; externalId: string; chain: string; title: string; contentKind: string; geographicScopeId: number; validFrom: Date; validUntil: Date; discoveredAt: Date },
+): Promise<string> {
+  const row = await db.$client<{ hash: string }[]>`SELECT encode(sha256(convert_to(
+    public.canonical_official_offer_edition_identity(
+      ${args.sourceId}, ${args.externalId}, ${args.chain}, ${args.title},
+      ${args.contentKind}, ${args.geographicScopeId},
+      (SELECT public.canonical_official_offer_scope_identity(declared_geographic_scope)
+       FROM public.geographic_scopes WHERE id = ${args.geographicScopeId} AND status = 'active')::jsonb,
+      ${args.validFrom}, ${args.validUntil}, ${args.discoveredAt}
+    ), 'UTF8')), 'hex') AS hash`;
+  const hash = row[0]?.hash;
+  if (!hash || hash.length !== 64) throw new Error("Failed to compute edition identity SHA256");
+  return hash;
+}
+
 export function createTjekHandlers(dependencies: TjekHandlerDependencies): Partial<Record<typeof TJEK_JOB_KIND, WorkerJobHandler>> {
   const handler: WorkerJobHandler = async ({ signal, jobId }) => {
     try {
-    abort(signal);
-    console.error("[tjek] handler started, jobId:", jobId);
-    const catalog = await dependencies.client.getLatestCatalog(signal);
-    if (catalog === undefined) return { counters: {} };
-    const existing = await dependencies.db.$client<{ id: number }[]>`select id from publications where source_id = ${TJEK_SOURCE_ID} and external_id = ${catalog.id} limit 1`;
-    if (existing.length > 0) return { counters: {} };
-    await new Promise<void>((resolve, reject) => { const t = setTimeout(resolve, 1000); signal.addEventListener("abort", () => { clearTimeout(t); reject(new WorkerCancelledError()); }, { once: true }); });
-    const offers = await dependencies.client.getOffersFromCatalog(catalog.id, signal); abort(signal);
-    const now = dependencies.clock?.() ?? new Date();
-    const validFrom = date(catalog.run_from, now); const validUntil = date(catalog.run_till, new Date(now.getTime() + 7 * 86400000));
-    const publication = await dependencies.db.$client<{ id: number }[]>`insert into publications (source_id, external_id, chain, title, content_kind, geographic_scope_id, declared_geographic_scope, valid_from, valid_until, discovered_at, status) values (${TJEK_SOURCE_ID}, ${catalog.id}, 'bunnpris', ${`Bunnpris ${catalog.publication_date}`}, 'structured-feed', 1, ${JSON.stringify({ kind: 'national', countryCode: 'NO' })}::jsonb, ${validFrom}, ${validUntil}, ${now}, 'discovered') returning id`;
-    const publicationId = publication[0]?.id; if (publicationId === undefined) throw new Error("Failed to create Tjek publication");
-    const payload = JSON.stringify({ catalog, offers });
-    const capture = await dependencies.db.$client<{ id: number }[]>`insert into publication_captures (publication_id, blob_key, checksum, mime_type, byte_length, rights_classification, retrieved_at) values (${publicationId}, ${`tjek/${catalog.id}.json`}, ${checksum(payload)}, 'application/json', ${Buffer.byteLength(payload)}, 'public_display', ${now}) returning id`;
-    const extraction = await dependencies.db.$client<{ id: number }[]>`insert into extraction_runs (capture_id, extractor_version, status, started_at, completed_at, counts) values (${capture[0]!.id}, 'tjek-v1', 'completed', ${now}, ${now}, ${JSON.stringify({ offers: offers.length })}::jsonb) returning id`;
-    const products = await dependencies.db.$client<{ id: number; display_name: string }[]>`select id, display_name from canonical_products where status = 'active'`;
-    let accepted = 0;
-    for (const offer of offers) {
-      abort(signal); const key = offer.id || `${catalog.id}-${accepted}`; const match = matchOfferToProduct(offer.name, products.map((p) => ({ id: Number(p.id), displayName: p.display_name })), dependencies.matchThreshold ?? 60);
-      const confidence = match?.confidence ?? 0;
-      const candidate = await dependencies.db.$client<{ id: number }[]>`insert into extracted_offer_candidates (extraction_run_id, candidate_key, normalized_fields, confidence, status, anomaly_codes) values (${extraction[0]!.id}, ${key}, ${JSON.stringify({ candidateKey: key, productName: offer.name, offerPriceOre: ore(offer.price), beforePriceOre: ore(offer.before_price), validFrom: offer.run_from || validFrom.toISOString(), validUntil: offer.run_till || validUntil.toISOString(), eligibility: 'public', channels: ['in-store'], provenance: { method: 'tjek', evidenceLocator: offer.page_number === null ? key : `page:${offer.page_number}`, confidence } })}::jsonb, ${confidence}, 'pending', ${JSON.stringify(match === undefined ? ['unmatched-product'] : [])}::jsonb) returning id`;
-      const candidateId = candidate[0]!.id; const amount = ore(offer.price); if (amount === null) continue; const before = ore(offer.before_price);
-      const approved = await dependencies.db.$client<{ id: number }[]>`insert into approved_offers (offer_key, candidate_id, source_id, source_reference, chain, geographic_scope_id, amount_ore, before_amount_ore, membership_requirement, valid_from, valid_until, status, version, approved_at) values (${`tjek:${catalog.id}:${key}`}, ${candidateId}, ${TJEK_SOURCE_ID}, ${`tjek:${catalog.id}:${key}`}, 'bunnpris', 1, ${amount}, ${before !== null && before >= amount ? before : null}, 'public', ${date(offer.run_from, validFrom)}, ${date(offer.run_till, validUntil)}, 'approved', 1, ${now}) returning id`;
-      const offerId = approved[0]!.id;
-      await dependencies.db.$client`insert into review_actions (candidate_id, offer_id, actor_id, action, expected_version, new_values, reason, acted_at) values (${candidateId}, ${offerId}, 'tjek-worker', 'approve', 0, ${JSON.stringify({ channels: ['in-store'], eligibility: 'public' })}::jsonb, 'Automated Tjek import', ${now})`;
-      if (match !== undefined) await dependencies.db.$client`insert into offer_targets (offer_id, product_id, match_method, match_confidence) values (${offerId}, ${match.productId}, 'human_review', ${match.confidence})`;
-      await dependencies.db.$client`update approved_offers set status = 'published' where id = ${offerId}`; accepted += 1;
-    }
-    console.error("[tjek] done, offers:", offers.length, "accepted:", accepted);
-    return { counters: { fetched: offers.length, accepted, quarantined: offers.length - accepted, unknown: 0, persisted: offers.length, failed: 0 } };
+      abort(signal);
+      console.error("[tjek] handler started, jobId:", jobId);
+      const catalog = await dependencies.client.getLatestCatalog(signal);
+      if (catalog === undefined) return { counters: {} };
+      const existing = await dependencies.db.$client<{ id: number }[]>`SELECT id FROM publications WHERE source_id = ${TJEK_SOURCE_ID} AND external_id = ${catalog.id} LIMIT 1`;
+      if (existing.length > 0) return { counters: {} };
+      // Respectful delay before fetching offers
+      await new Promise<void>((resolve, reject) => { const t = setTimeout(resolve, 1000); signal.addEventListener("abort", () => { clearTimeout(t); reject(new WorkerCancelledError()); }, { once: true }); });
+      const offers = await dependencies.client.getOffersFromCatalog(catalog.id, signal);
+      abort(signal);
+      const now = dependencies.clock?.() ?? new Date();
+      const validFrom = date(catalog.run_from, now);
+      const validUntil = date(catalog.run_till, new Date(now.getTime() + 7 * 86400000));
+      const chain = "bunnpris";
+      const title = "Bunnpris " + catalog.publication_date;
+      const contentKind = "structured-feed";
+      const geographicScopeId = 1;
+      const declaredGeographicScope = { kind: "national", countryCode: "NO" };
+
+      // 1. Compute edition_identity_sha256 (required by enforce_publication_offer_identity)
+      const editionIdentitySha256 = await computeEditionIdentitySha256(dependencies.db, {
+        sourceId: TJEK_SOURCE_ID, externalId: catalog.id, chain, title, contentKind,
+        geographicScopeId, validFrom, validUntil, discoveredAt: now,
+      });
+
+      // 2. Insert publication with complete identity fence
+      const publication = await dependencies.db.$client<{ id: number }[]>`INSERT INTO publications (source_id, external_id, chain, title, content_kind, geographic_scope_id, declared_geographic_scope, edition_identity_sha256, discovery_permission_id, valid_from, valid_until, discovered_at, status) VALUES (${TJEK_SOURCE_ID}, ${catalog.id}, ${chain}, ${title}, ${contentKind}, ${geographicScopeId}, ${JSON.stringify(declaredGeographicScope)}::jsonb, ${editionIdentitySha256}, ${TJEK_PERMISSION_ID}, ${validFrom}, ${validUntil}, ${now}, 'discovered') RETURNING id`;
+      const publicationId = publication[0]?.id;
+      if (publicationId === undefined) throw new Error("Failed to create Tjek publication");
+
+      // 3. Insert capture with permission fence (enforce_capture_permission_fence)
+      const payload = JSON.stringify({ catalog, offers });
+      const capabilitiesJson = JSON.stringify([...OFFICIAL_OFFER_CAPABILITIES]);
+      const blobKey = "tjek/" + catalog.id + ".json";
+      const capture = await dependencies.db.$client<{ id: number }[]>`INSERT INTO publication_captures (publication_id, blob_key, checksum, mime_type, byte_length, rights_classification, capture_permission_id, capture_permission_capabilities, retrieved_at) VALUES (${publicationId}, ${blobKey}, ${checksum(payload)}, 'application/json', ${Buffer.byteLength(payload)}, 'public_display', ${TJEK_PERMISSION_ID}, ${capabilitiesJson}::jsonb, ${now}) RETURNING id`;
+      const captureId = capture[0]?.id;
+      if (captureId === undefined) throw new Error("Failed to create Tjek capture");
+
+      // 4. Insert extraction run with trust fence (enforce_extraction_run_trust_fence)
+      const counts = JSON.stringify({ offers: offers.length });
+      const extraction = await dependencies.db.$client<{ id: number }[]>`INSERT INTO extraction_runs (capture_id, extractor_version, status, started_at, completed_at, counts, extraction_method, extraction_permission_id, permission_capabilities, source_started_at, source_completed_at, empty_result) VALUES (${captureId}, 'tjek-v1', 'completed', ${now}, ${now}, ${counts}::jsonb, 'structured', ${TJEK_PERMISSION_ID}, ${capabilitiesJson}::jsonb, ${now}, ${now}, 'not-empty') RETURNING id`;
+      const extractionId = extraction[0]?.id;
+      if (extractionId === undefined) throw new Error("Failed to create Tjek extraction run");
+
+      // 5. Load canonical products for fuzzy matching
+      const products = await dependencies.db.$client<{ id: number; display_name: string }[]>`SELECT id, display_name FROM canonical_products WHERE status = 'active'`;
+
+      let accepted = 0;
+      for (const offer of offers) {
+        abort(signal);
+        const key = offer.id || catalog.id + "-" + accepted;
+        const match = matchOfferToProduct(offer.name, products.map((p) => ({ id: Number(p.id), displayName: p.display_name })), dependencies.matchThreshold ?? 60);
+        const confidence = match?.confidence ?? 0;
+
+        // 5a. Extracted candidate
+        const normalizedFields = {
+          candidateKey: key,
+          productName: offer.name,
+          offerPriceOre: ore(offer.price),
+          beforePriceOre: ore(offer.before_price),
+          validFrom: offer.run_from || validFrom.toISOString(),
+          validUntil: offer.run_till || validUntil.toISOString(),
+          eligibility: "public",
+          channels: ["in-store"],
+          provenance: { method: "tjek", evidenceLocator: offer.page_number === null ? key : "page:" + offer.page_number, confidence },
+        };
+        const anomalyCodes = match === undefined ? ["unmatched-product"] : [];
+        const candidate = await dependencies.db.$client<{ id: number }[]>`INSERT INTO extracted_offer_candidates (extraction_run_id, candidate_key, normalized_fields, confidence, status, anomaly_codes) VALUES (${extractionId}, ${key}, ${JSON.stringify(normalizedFields)}::jsonb, ${confidence}, 'pending', ${JSON.stringify(anomalyCodes)}::jsonb) RETURNING id`;
+        const candidateId = candidate[0]!.id;
+        const amount = ore(offer.price);
+        if (amount === null) continue;
+        const before = ore(offer.before_price);
+
+        // 5b. Approved offer (enforce_approved_offer_insert_boundary requires status = 'approved')
+        const offerKey = "tjek:" + catalog.id + ":" + key;
+        const approved = await dependencies.db.$client<{ id: number }[]>`INSERT INTO approved_offers (offer_key, candidate_id, source_id, source_reference, chain, geographic_scope_id, amount_ore, before_amount_ore, membership_requirement, valid_from, valid_until, status, version, approved_at) VALUES (${offerKey}, ${candidateId}, ${TJEK_SOURCE_ID}, ${offerKey}, ${chain}, ${geographicScopeId}, ${amount}, ${before !== null && before >= amount ? before : null}, 'public', ${date(offer.run_from, validFrom)}, ${date(offer.run_till, validUntil)}, 'approved', 1, ${now}) RETURNING id`;
+        const offerId = approved[0]!.id;
+
+        // 5c. Review action
+        const reviewNewValues = { channels: ["in-store"], eligibility: "public" };
+        await dependencies.db.$client`INSERT INTO review_actions (candidate_id, offer_id, actor_id, action, expected_version, new_values, reason, acted_at) VALUES (${candidateId}, ${offerId}, 'tjek-worker', 'approve', 0, ${JSON.stringify(reviewNewValues)}::jsonb, 'Automated Tjek import', ${now})`;
+
+        // 5d. Product target (if fuzzy match succeeded)
+        if (match !== undefined) {
+          await dependencies.db.$client`INSERT INTO offer_targets (offer_id, product_id, match_method, match_confidence) VALUES (${offerId}, ${match.productId}, 'human_review', ${match.confidence})`;
+        }
+
+        // 5e. Lifecycle transition: approved -> published (enforce_approved_offer_lifecycle_transition_v1)
+        await dependencies.db.$client`UPDATE approved_offers SET status = 'published' WHERE id = ${offerId}`;
+        accepted += 1;
+      }
+
+      console.error("[tjek] done, offers:", offers.length, "accepted:", accepted);
+      return { counters: { fetched: offers.length, accepted, quarantined: offers.length - accepted, unknown: 0, persisted: offers.length, failed: 0 } };
     } catch (error) {
       console.error("[tjek] handler error:", error);
       throw error;
