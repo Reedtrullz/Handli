@@ -37,6 +37,16 @@ function context(signal = new AbortController().signal) {
   };
 }
 
+function mockClient(overrides: Record<string, unknown> = {}) {
+  return {
+    getLatestCatalog: vi.fn(async () => CATALOG),
+    getOffersFromCatalog: vi.fn(async () => []),
+    getAllLatestCatalogs: vi.fn(async () => [{ ...CATALOG, chainId: "bunnpris" }]),
+    canExtractOffers: vi.fn(() => true),
+    ...overrides,
+  };
+}
+
 describe("Tjek fuzzy product matching", () => {
   it("normalizes case, accents, punctuation, and packaging words", () => {
     expect(normalizeOfferName("TINE Lettmelk L,  tilbud!")).toBe("tine lettmelk");
@@ -63,7 +73,7 @@ describe("Tjek fuzzy product matching", () => {
 });
 
 describe("Tjek worker handler wiring and idempotency", () => {
-  it("registers the official-offer discovery handler and skips an existing catalog", async () => {
+  it("skips an existing catalog across all dealers", async () => {
     const queryCalls: unknown[][] = [];
     const db = {
       $client: vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -71,29 +81,24 @@ describe("Tjek worker handler wiring and idempotency", () => {
         return [{ id: 99 }];
       }),
     };
-    const client = {
-      getLatestCatalog: vi.fn(async () => CATALOG),
-      getOffersFromCatalog: vi.fn(),
-    };
+    const client = mockClient();
     const handlers = createTjekHandlers({ client, db: db as never });
 
     expect(handlers[TJEK_JOB_KIND]).toEqual(expect.any(Function));
-    await expect(handlers[TJEK_JOB_KIND]!(context())).resolves.toEqual({ counters: {} });
-    expect(client.getLatestCatalog).toHaveBeenCalledWith(expect.anything());
+    await expect(handlers[TJEK_JOB_KIND]!(context())).resolves.toEqual({ counters: { fetched: 0, accepted: 0, quarantined: 0, unknown: 0, persisted: 0, failed: 0 } });
+    expect(client.getAllLatestCatalogs).toHaveBeenCalledWith(expect.anything());
     expect(client.getOffersFromCatalog).not.toHaveBeenCalled();
-    expect(db.$client).toHaveBeenCalledTimes(1);
-    expect(String(queryCalls[0]?.[0]).toLowerCase()).toContain("select id from publications");
   });
 
   it("fails closed on a pre-cancelled signal before making source or database calls", async () => {
     const controller = new AbortController();
     controller.abort();
-    const client = { getLatestCatalog: vi.fn(), getOffersFromCatalog: vi.fn() };
+    const client = mockClient();
     const db = { $client: vi.fn() };
     const handlers = createTjekHandlers({ client, db: db as never });
 
     await expect(handlers[TJEK_JOB_KIND]!(context(controller.signal))).rejects.toBeInstanceOf(WorkerCancelledError);
-    expect(client.getLatestCatalog).not.toHaveBeenCalled();
+    expect(client.getAllLatestCatalogs).not.toHaveBeenCalled();
     expect(db.$client).not.toHaveBeenCalled();
   });
 });

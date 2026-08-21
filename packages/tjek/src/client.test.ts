@@ -112,6 +112,28 @@ describe("TjekClient", () => {
       expect(calledUrl.searchParams.get("limit")).toBe("5");
       expect(calledUrl.searchParams.get("order_by")).toBe("-publication_date");
     });
+
+    it("passes an explicit dealer ID and catalog type", async () => {
+      const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([]));
+      const client = createClient(mockFetch);
+
+      await client.listCatalogs({ dealerId: "80742m", types: "paged" });
+
+      const calledUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+      expect(calledUrl.searchParams.get("dealer_id")).toBe("80742m");
+      expect(calledUrl.searchParams.get("types")).toBe("paged");
+    });
+
+    it("serializes multiple catalog types", async () => {
+      const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([]));
+      const client = createClient(mockFetch);
+
+      await client.listCatalogs({ dealerId: "faa0Ym", types: ["paged", "incito"] });
+
+      const calledUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+      expect(calledUrl.searchParams.get("dealer_id")).toBe("faa0Ym");
+      expect(calledUrl.searchParams.get("types")).toBe("paged,incito");
+    });
   });
 
   describe("getLatestCatalog", () => {
@@ -130,6 +152,56 @@ describe("TjekClient", () => {
 
       const result = await client.getLatestCatalog();
       expect(result).toBeUndefined();
+    });
+  });
+
+  describe("multi-dealer catalog discovery", () => {
+    it("returns the latest catalog for each configured dealer", async () => {
+      const catalogsByDealer: Record<string, TjekCatalog> = {
+        "5b11sm": makeCatalog({ id: "bunnpris-latest", dealer_id: "5b11sm", type: "incito" }),
+        "80742m": makeCatalog({ id: "extra-latest", dealer_id: "80742m", type: "paged", brand: "Extra" }),
+        "faa0Ym": makeCatalog({ id: "rema-latest", dealer_id: "faa0Ym", type: "paged", brand: "REMA 1000" }),
+      };
+      const mockFetch = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+        const url = new URL(String(input));
+        const dealerId = url.searchParams.get("dealer_id")!;
+        return jsonResponse([catalogsByDealer[dealerId]!]);
+      });
+      const client = createClient(mockFetch);
+
+      const result = await client.getAllLatestCatalogs();
+
+      expect(result).toHaveLength(3);
+      expect(new Set(result.map((catalog) => catalog.dealer_id))).toEqual(
+        new Set(["5b11sm", "80742m", "faa0Ym"]),
+      );
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it("omits dealers with no latest catalog", async () => {
+      const mockFetch = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+        const dealerId = new URL(String(input)).searchParams.get("dealer_id");
+        return dealerId === "80742m" ? jsonResponse([]) : jsonResponse([makeCatalog({ dealer_id: dealerId! })]);
+      });
+      const client = createClient(mockFetch);
+
+      const result = await client.getAllLatestCatalogs();
+
+      expect(result).toHaveLength(2);
+      expect(result.every((catalog) => catalog.dealer_id !== "80742m")).toBe(true);
+    });
+  });
+
+  describe("canExtractOffers", () => {
+    it("supports Bunnpris incito catalogs", () => {
+      const client = createClient(vi.fn<typeof fetch>());
+      expect(client.canExtractOffers(makeCatalog({ dealer_id: "5b11sm", type: "incito" }))).toBe(true);
+    });
+
+    it("rejects paged catalogs and unknown dealers", () => {
+      const client = createClient(vi.fn<typeof fetch>());
+      expect(client.canExtractOffers(makeCatalog({ dealer_id: "80742m", type: "paged" }))).toBe(false);
+      expect(client.canExtractOffers(makeCatalog({ dealer_id: "unknown", type: "incito" }))).toBe(false);
     });
   });
 

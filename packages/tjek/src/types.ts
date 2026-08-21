@@ -11,6 +11,8 @@ export interface TjekCatalog {
   readonly cover_image_url: string | null;
   readonly page_count: number;
   readonly type: string;
+  readonly types?: readonly string[];
+  readonly incito_publication_id?: string | null;
   readonly locale: string;
   readonly country_code: string;
 }

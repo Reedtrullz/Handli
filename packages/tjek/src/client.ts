@@ -7,6 +7,19 @@ import type {
 const TJEK_BASE_URL = "https://squid-api.tjek.com";
 const BUNNPRIS_DEALER_ID = "5b11sm";
 
+export interface TjekDealerConfig {
+  readonly dealerId: string;
+  readonly chainId: string;
+  readonly displayName: string;
+  readonly catalogTypes: readonly string[];
+}
+
+export const TJEK_NORWEGIAN_DEALERS: readonly TjekDealerConfig[] = [
+  { dealerId: "5b11sm", chainId: "bunnpris", displayName: "Bunnpris", catalogTypes: ["incito"] },
+  { dealerId: "80742m", chainId: "extra", displayName: "Extra", catalogTypes: ["paged"] },
+  { dealerId: "faa0Ym", chainId: "rema-1000", displayName: "REMA 1000", catalogTypes: ["paged"] },
+];
+
 export interface TjekClientOptions {
   readonly apiKey?: string;
   readonly baseUrl?: string;
@@ -15,7 +28,7 @@ export interface TjekClientOptions {
 
 export class TjekClientError extends Error {
   constructor(
-    readonly code: "SERVER_ERROR" | "CANCELLED" | "RATE_LIMITED",
+    readonly code: "SERVER_ERROR" | "CANCELLED" | "RATE_LIMITED" | "NOT_SUPPORTED",
     message: string,
     readonly statusCode?: number,
   ) {
@@ -83,12 +96,13 @@ export class TjekClient {
   }
 
   async listCatalogs(
-    params?: { limit?: number; order_by?: string },
+    params?: { limit?: number; order_by?: string; dealerId?: string; types?: string | readonly string[] },
     signal?: AbortSignal,
   ): Promise<readonly TjekCatalog[]> {
     const searchParams = new URLSearchParams();
-    searchParams.set("dealer_id", BUNNPRIS_DEALER_ID);
-    searchParams.set("types", "incito");
+    searchParams.set("dealer_id", params?.dealerId ?? BUNNPRIS_DEALER_ID);
+    const types = params?.types;
+    searchParams.set("types", types === undefined ? "incito" : typeof types === "string" ? types : [...types].join(","));
     searchParams.set("limit", String(params?.limit ?? 24));
     if (params?.order_by !== undefined) {
       searchParams.set("order_by", params.order_by);
@@ -116,14 +130,48 @@ export class TjekClient {
     return wrapped.catalogs;
   }
 
-  async getLatestCatalog(
+  async getLatestCatalog(signal?: AbortSignal): Promise<TjekCatalog | undefined>;
+  async getLatestCatalog(dealerId: string, signal?: AbortSignal): Promise<TjekCatalog | undefined>;
+  async getLatestCatalog(dealerIdOrSignal?: string | AbortSignal, signal?: AbortSignal): Promise<TjekCatalog | undefined> {
+    const dealerId = typeof dealerIdOrSignal === "string" ? dealerIdOrSignal : undefined;
+    const requestSignal = typeof dealerIdOrSignal === "string" ? signal : dealerIdOrSignal;
+    const catalogs = await this.listCatalogs(
+      { limit: 1, order_by: "-publication_date", ...(dealerId === undefined ? {} : { dealerId }) },
+      requestSignal,
+    );
+    return catalogs[0];
+  }
+
+  async getAllLatestCatalogs(signal?: AbortSignal): Promise<readonly (TjekCatalog & { readonly chainId: string })[]> {
+    const catalogs = await Promise.all(
+      TJEK_NORWEGIAN_DEALERS.map((dealer) =>
+      this.getLatestCatalogForDealer(dealer, signal),
+      ),
+    );
+    return catalogs
+      .filter((catalog): catalog is TjekCatalog => catalog !== undefined)
+      .map((catalog) => ({
+        ...catalog,
+        chainId: TJEK_NORWEGIAN_DEALERS.find((dealer) => dealer.dealerId === catalog.dealer_id)?.chainId ?? catalog.dealer_id,
+      }));
+  }
+
+  private async getLatestCatalogForDealer(
+    dealer: TjekDealerConfig,
     signal?: AbortSignal,
   ): Promise<TjekCatalog | undefined> {
     const catalogs = await this.listCatalogs(
-      { limit: 1, order_by: "-publication_date" },
+      { limit: 1, order_by: "-publication_date", dealerId: dealer.dealerId, types: dealer.catalogTypes },
       signal,
     );
     return catalogs[0];
+  }
+
+  canExtractOffers(catalog: Pick<TjekCatalog, "dealer_id" | "type"> & { readonly types?: readonly string[]; readonly incito_publication_id?: string | null }): boolean {
+    const dealer = TJEK_NORWEGIAN_DEALERS.find((candidate) => candidate.dealerId === catalog.dealer_id);
+    return dealer !== undefined
+      && dealer.catalogTypes.includes("incito")
+      && (Boolean(catalog.incito_publication_id) || catalog.type === "incito" || catalog.types?.includes("incito") === true);
   }
 
   private findOfferViewIds(node: unknown): string[] {
@@ -146,9 +194,26 @@ export class TjekClient {
   }
 
   async getOffersFromCatalog(
-    catalogId: string,
+    catalog: TjekCatalog,
+    signal?: AbortSignal,
+  ): Promise<readonly TjekOffer[]>;
+  async getOffersFromCatalog(
+    catalog: string,
+    signal?: AbortSignal,
+  ): Promise<readonly TjekOffer[]>;
+  async getOffersFromCatalog(
+    catalog: TjekCatalog | string,
     signal?: AbortSignal,
   ): Promise<readonly TjekOffer[]> {
+    // Only Bunnpris' incito publications currently expose the RPC view graph
+    // needed by this extractor. Keep unsupported dealers explicit to callers.
+    const catalogId = typeof catalog === "string" ? catalog : catalog.id;
+    const catalogShape: Pick<TjekCatalog, "dealer_id" | "type"> & { readonly types?: readonly string[]; readonly incito_publication_id?: string | null } = typeof catalog === "string"
+      ? { dealer_id: BUNNPRIS_DEALER_ID, type: "incito" }
+      : catalog;
+    if (!this.canExtractOffers(catalogShape)) {
+      throw new TjekClientError("NOT_SUPPORTED", "Offer extraction is not supported for this catalog");
+    }
     if (!this.apiKey) {
       throw new TjekClientError("SERVER_ERROR", "Tjek API key required for offer data");
     }
@@ -200,7 +265,7 @@ export class TjekClient {
           run_from: typeof validity?.from === "string" ? String(validity.from) : "",
           run_till: typeof validity?.to === "string" ? String(validity.to) : "",
           catalog_id: catalogId,
-          dealer_id: BUNNPRIS_DEALER_ID,
+          dealer_id: catalogShape.dealer_id,
           image_url: null,
           page_number: null,
         });
