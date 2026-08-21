@@ -102,6 +102,7 @@ describe("forward-only v1 migrations", () => {
       "034_open_prices_job_kind.sql",
       "035_tjek_source.sql",
       "036_tjek_official_offer_permission.sql",
+      "037_worker_official_offer_grants.sql",
     ]);
   });
 
@@ -111,7 +112,7 @@ describe("forward-only v1 migrations", () => {
       .sort();
     expect(files[0]).toBe("001_price_cache.sql");
     const guardedFiles = files.slice(1);
-    expect(guardedFiles.at(-1)).toBe("036_tjek_official_offer_permission.sql");
+    expect(guardedFiles.at(-1)).toBe("037_worker_official_offer_grants.sql");
     const source = (
       await Promise.all(
         guardedFiles.map((file) => readFile(path.join(migrationsDirectory, file), "utf8")),

@@ -209,6 +209,28 @@ const insertUpdateTables = [
 
 const replaceableTables = ["worker_leases"];
 
+const officialOfferWorkerTables = [
+  "publications",
+  "publication_captures",
+  "extraction_runs",
+  "extracted_offer_candidates",
+  "approved_offers",
+  "review_actions",
+  "offer_targets",
+  "offer_conditions",
+];
+
+const officialOfferWorkerSequences = [
+  "publications_id_seq",
+  "publication_captures_id_seq",
+  "extraction_runs_id_seq",
+  "extracted_offer_candidates_id_seq",
+  "approved_offers_id_seq",
+  "review_actions_id_seq",
+  "offer_targets_id_seq",
+  "offer_conditions_id_seq",
+];
+
 const ephemeralRequestBudgetTables = ["provider_request_budget_events"];
 
 const runtimeSequences = [
@@ -593,6 +615,9 @@ async function configureRuntimeRoles() {
       grant select, insert, delete on table ${identifiers(ephemeralRequestBudgetTables)}
         to ${workerRole};
       grant usage on sequence ${identifiers(runtimeSequences)} to ${workerRole};
+      grant select, insert on table ${identifiers(officialOfferWorkerTables)}
+        to ${workerRole};
+      grant usage on sequence ${identifiers(officialOfferWorkerSequences)} to ${workerRole};
 
       grant select on table ${identifiers(webReadOnlyTables)} to ${webRole};
       grant select on table latest_price_evidence to ${webRole};
