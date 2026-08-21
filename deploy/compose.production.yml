@@ -21,6 +21,7 @@ services:
 
   migrate:
     image: ${HANDLEPLAN_MIGRATION_IMAGE:?HANDLEPLAN_MIGRATION_IMAGE is required}
+    pull_policy: never
     restart: "no"
     init: true
     read_only: true
@@ -46,6 +47,7 @@ services:
 
   app:
     image: ${HANDLEPLAN_IMAGE:?HANDLEPLAN_IMAGE is required}
+    pull_policy: never
     restart: unless-stopped
     init: true
     read_only: true
@@ -80,6 +82,7 @@ services:
 
   review:
     image: ${HANDLEPLAN_IMAGE:?HANDLEPLAN_IMAGE is required}
+    pull_policy: never
     restart: unless-stopped
     init: true
     read_only: true
@@ -138,6 +141,7 @@ services:
 
   operations:
     image: ${HANDLEPLAN_IMAGE:?HANDLEPLAN_IMAGE is required}
+    pull_policy: never
     restart: unless-stopped
     init: true
     read_only: true
@@ -192,6 +196,7 @@ services:
 
   worker:
     image: ${HANDLEPLAN_IMAGE:?HANDLEPLAN_IMAGE is required}
+    pull_policy: never
     restart: unless-stopped
     init: true
     read_only: true
