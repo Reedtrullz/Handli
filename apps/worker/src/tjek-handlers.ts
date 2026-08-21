@@ -47,7 +47,7 @@ export function createTjekHandlers(dependencies: TjekHandlerDependencies): Parti
   const handler: WorkerJobHandler = async ({ signal, jobId }) => {
     try {
     abort(signal);
-    console.log("[tjek] handler started, jobId:", jobId);
+    console.error("[tjek] handler started, jobId:", jobId);
     const catalog = await dependencies.client.getLatestCatalog(signal);
     if (catalog === undefined) return { counters: {} };
     const existing = await dependencies.db.$client<{ id: number }[]>`select id from publications where source_id = ${TJEK_SOURCE_ID} and external_id = ${catalog.id} limit 1`;
@@ -74,7 +74,7 @@ export function createTjekHandlers(dependencies: TjekHandlerDependencies): Parti
       if (match !== undefined) await dependencies.db.$client`insert into offer_targets (offer_id, product_id, match_method, match_confidence) values (${offerId}, ${match.productId}, 'human_review', ${match.confidence})`;
       await dependencies.db.$client`update approved_offers set status = 'published' where id = ${offerId}`; accepted += 1;
     }
-    console.log("[tjek] done, offers:", offers.length, "accepted:", accepted);
+    console.error("[tjek] done, offers:", offers.length, "accepted:", accepted);
     return { counters: { fetched: offers.length, accepted, quarantined: offers.length - accepted, unknown: 0, persisted: offers.length, failed: 0 } };
     } catch (error) {
       console.error("[tjek] handler error:", error);

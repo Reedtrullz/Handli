@@ -137,19 +137,19 @@ export function createOpenPricesHandlers(
     const { fenceToken, jobId, signal } = context;
     const clock = dependencies.clock;
 
-    console.log("[open-prices] benchmarkRefresh started, jobId:", jobId);
+    console.error("[open-prices] benchmarkRefresh started, jobId:", jobId);
     const accessState = await requireAccessApproved(
       dependencies.sourceAccessPolicy,
       "open-prices-benchmark-refresh",
       signal,
     );
-    console.log("[open-prices] first access check:", accessState);
+    console.error("[open-prices] first access check:", accessState);
     if (accessState !== "approved") {
       throw new SourceAccessChangedError();
     }
 
     const targets = await dependencies.targetProvider.getBenchmarkPriceTargets(signal);
-    console.log("[open-prices] targets:", targets.length, "gtins");
+    console.error("[open-prices] targets:", targets.length, "gtins");
     if (targets.length === 0) {
       return { counters: { fetched: 0, accepted: 0, quarantined: 0, unknown: 0, persisted: 0, failed: 0 } };
     }
@@ -174,7 +174,7 @@ export function createOpenPricesHandlers(
 
     try {
       const gtins = targets.map(({ ean }: { ean: string }) => ean);
-      console.log("[open-prices] fetching prices for", gtins.length, "gtins");
+      console.error("[open-prices] fetching prices for", gtins.length, "gtins");
       throwIfCancelled(signal);
 
       const accessBeforeFetch = await requireAccessApproved(
@@ -186,9 +186,9 @@ export function createOpenPricesHandlers(
         throw new SourceAccessChangedError();
       }
 
-      console.log("[open-prices] calling getPricesForGtins...");
+      console.error("[open-prices] calling getPricesForGtins...");
       const prices = await dependencies.client.getPricesForGtins(gtins, signal);
-      console.log("[open-prices] got", prices.length, "prices");
+      console.error("[open-prices] got", prices.length, "prices");
       throwIfCancelled(signal);
 
       const geographicScopeId = targets[0]?.geographicScopeId;
