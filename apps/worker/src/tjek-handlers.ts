@@ -19,7 +19,8 @@ const CHAIN_BY_DEALER: Record<string, string> = {
 
 export function normalizeOfferName(value: string): string {
   return value.toLocaleLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, " ")
-    .replace(/\b(stk|pk|pakke|kg|g|gram|ml|l|liter|cl|tilbud|kr)\b/gu, " ")
+    .replace(/\b(stk|pk|pakke|kg|g|gram|ml|l|liter|cl|tilbud|kr|av|i|på|med|for|og|er|en|et|den|det|de|som|har|kan|skal|til|fra|om)\b/gu, " ")
+    .replace(/\d+/gu, " ")
     .replace(/\s+/gu, " ").trim();
 }
 
@@ -34,7 +35,7 @@ export function scoreProductMatch(offerName: string, productName: string): numbe
 }
 
 export interface TjekProductMatch { productId: number; confidence: number; displayName: string }
-export function matchOfferToProduct(offerName: string, products: readonly { id: number; displayName: string }[], threshold = 60): TjekProductMatch | undefined {
+export function matchOfferToProduct(offerName: string, products: readonly { id: number; displayName: string }[], threshold = 25): TjekProductMatch | undefined {
   let best: TjekProductMatch | undefined;
   for (const product of products) { const confidence = Math.round(scoreProductMatch(offerName, product.displayName)); if (confidence >= threshold && (best === undefined || confidence > best.confidence)) best = { productId: product.id, confidence, displayName: product.displayName }; }
   return best;
@@ -166,7 +167,7 @@ async function processCatalog(
   for (const offer of offers) {
     abort(signal);
     const key = offer.id || catalog.id + "-" + accepted;
-    const match = matchOfferToProduct(offer.name, products.map((p) => ({ id: Number(p.id), displayName: p.display_name })), deps.matchThreshold ?? 60);
+    const match = matchOfferToProduct(offer.name, products.map((p) => ({ id: Number(p.id), displayName: p.display_name })), deps.matchThreshold ?? 25);
     const confidence = match?.confidence ?? 0;
 
     // Resolve GTIN from product_identifiers for matched products
