@@ -7,8 +7,6 @@ import { WorkerCancelledError } from "./runner";
 export const TJEK_SOURCE_ID = "tjek" as const;
 export const TJEK_JOB_KIND = "official-offer-discovery" as const;
 
-/** source_permissions.id for the approved Tjek source. */
-const TJEK_PERMISSION_ID = 3 as const;
 const OFFICIAL_OFFER_CAPABILITIES = ["capture", "discover", "extract"] as const;
 
 export function normalizeOfferName(value: string): string {
@@ -69,6 +67,19 @@ async function computeEditionIdentitySha256(
   return hash;
 }
 
+/**
+ * Resolve the latest source_permissions id for the Tjek source. The
+ * assert_current_official_offer_permission() function enforces that the
+ * asserted permission id matches the latest row for the source, so we
+ * must query it rather than hardcoding.
+ */
+async function resolvePermissionId(db: HandleplanDatabase): Promise<number> {
+  const row = await db.$client<{ id: number }[]>`SELECT id FROM source_permissions WHERE source_id = ${TJEK_SOURCE_ID} ORDER BY created_at DESC, id DESC LIMIT 1`;
+  const id = row[0]?.id;
+  if (!id) throw new Error("No source_permissions row found for tjek");
+  return id;
+}
+
 export function createTjekHandlers(dependencies: TjekHandlerDependencies): Partial<Record<typeof TJEK_JOB_KIND, WorkerJobHandler>> {
   const handler: WorkerJobHandler = async ({ signal, jobId }) => {
     try {
@@ -91,6 +102,9 @@ export function createTjekHandlers(dependencies: TjekHandlerDependencies): Parti
       const geographicScopeId = 1;
       const declaredGeographicScope = { kind: "national", countryCode: "NO" };
 
+      // Resolve the latest permission id (assert function enforces latest)
+      const permissionId = await resolvePermissionId(dependencies.db);
+
       // 1. Compute edition_identity_sha256 (required by enforce_publication_offer_identity)
       const editionIdentitySha256 = await computeEditionIdentitySha256(dependencies.db, {
         sourceId: TJEK_SOURCE_ID, externalId: catalog.id, chain, title, contentKind,
@@ -98,7 +112,7 @@ export function createTjekHandlers(dependencies: TjekHandlerDependencies): Parti
       });
 
       // 2. Insert publication with complete identity fence
-      const publication = await dependencies.db.$client<{ id: number }[]>`INSERT INTO publications (source_id, external_id, chain, title, content_kind, geographic_scope_id, declared_geographic_scope, edition_identity_sha256, discovery_permission_id, valid_from, valid_until, discovered_at, status) VALUES (${TJEK_SOURCE_ID}, ${catalog.id}, ${chain}, ${title}, ${contentKind}, ${geographicScopeId}, ${JSON.stringify(declaredGeographicScope)}::jsonb, ${editionIdentitySha256}, ${TJEK_PERMISSION_ID}, ${validFrom}, ${validUntil}, ${now}, 'discovered') RETURNING id`;
+      const publication = await dependencies.db.$client<{ id: number }[]>`INSERT INTO publications (source_id, external_id, chain, title, content_kind, geographic_scope_id, declared_geographic_scope, edition_identity_sha256, discovery_permission_id, valid_from, valid_until, discovered_at, status) VALUES (${TJEK_SOURCE_ID}, ${catalog.id}, ${chain}, ${title}, ${contentKind}, ${geographicScopeId}, ${JSON.stringify(declaredGeographicScope)}::jsonb, ${editionIdentitySha256}, ${permissionId}, ${validFrom}, ${validUntil}, ${now}, 'discovered') RETURNING id`;
       const publicationId = publication[0]?.id;
       if (publicationId === undefined) throw new Error("Failed to create Tjek publication");
 
@@ -106,13 +120,13 @@ export function createTjekHandlers(dependencies: TjekHandlerDependencies): Parti
       const payload = JSON.stringify({ catalog, offers });
       const capabilitiesJson = JSON.stringify([...OFFICIAL_OFFER_CAPABILITIES]);
       const blobKey = "tjek/" + catalog.id + ".json";
-      const capture = await dependencies.db.$client<{ id: number }[]>`INSERT INTO publication_captures (publication_id, blob_key, checksum, mime_type, byte_length, rights_classification, capture_permission_id, capture_permission_capabilities, retrieved_at) VALUES (${publicationId}, ${blobKey}, ${checksum(payload)}, 'application/json', ${Buffer.byteLength(payload)}, 'public_display', ${TJEK_PERMISSION_ID}, ${capabilitiesJson}::jsonb, ${now}) RETURNING id`;
+      const capture = await dependencies.db.$client<{ id: number }[]>`INSERT INTO publication_captures (publication_id, blob_key, checksum, mime_type, byte_length, rights_classification, capture_permission_id, capture_permission_capabilities, retrieved_at) VALUES (${publicationId}, ${blobKey}, ${checksum(payload)}, 'application/json', ${Buffer.byteLength(payload)}, 'public_display', ${permissionId}, ${capabilitiesJson}::jsonb, ${now}) RETURNING id`;
       const captureId = capture[0]?.id;
       if (captureId === undefined) throw new Error("Failed to create Tjek capture");
 
       // 4. Insert extraction run with trust fence (enforce_extraction_run_trust_fence)
       const counts = JSON.stringify({ offers: offers.length });
-      const extraction = await dependencies.db.$client<{ id: number }[]>`INSERT INTO extraction_runs (capture_id, extractor_version, status, started_at, completed_at, counts, extraction_method, extraction_permission_id, permission_capabilities, source_started_at, source_completed_at, empty_result) VALUES (${captureId}, 'tjek-v1', 'completed', ${now}, ${now}, ${counts}::jsonb, 'structured', ${TJEK_PERMISSION_ID}, ${capabilitiesJson}::jsonb, ${now}, ${now}, 'not-empty') RETURNING id`;
+      const extraction = await dependencies.db.$client<{ id: number }[]>`INSERT INTO extraction_runs (capture_id, extractor_version, status, started_at, completed_at, counts, extraction_method, extraction_permission_id, permission_capabilities, source_started_at, source_completed_at, empty_result) VALUES (${captureId}, 'tjek-v1', 'completed', ${now}, ${now}, ${counts}::jsonb, 'structured', ${permissionId}, ${capabilitiesJson}::jsonb, ${now}, ${now}, 'not-empty') RETURNING id`;
       const extractionId = extraction[0]?.id;
       if (extractionId === undefined) throw new Error("Failed to create Tjek extraction run");
 
