@@ -137,11 +137,13 @@ export function createOpenPricesHandlers(
     const { fenceToken, jobId, signal } = context;
     const clock = dependencies.clock;
 
+    console.log("[open-prices] benchmarkRefresh started, jobId:", jobId);
     const accessState = await requireAccessApproved(
       dependencies.sourceAccessPolicy,
       "open-prices-benchmark-refresh",
       signal,
     );
+    console.log("[open-prices] first access check:", accessState);
     if (accessState !== "approved") {
       throw new SourceAccessChangedError();
     }
