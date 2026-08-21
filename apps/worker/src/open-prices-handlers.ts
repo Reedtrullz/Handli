@@ -147,6 +147,7 @@ export function createOpenPricesHandlers(
     }
 
     const targets = await dependencies.targetProvider.getBenchmarkPriceTargets(signal);
+    console.log("[open-prices] targets:", targets.length, "gtins");
     if (targets.length === 0) {
       return { counters: { fetched: 0, accepted: 0, quarantined: 0, unknown: 0, persisted: 0, failed: 0 } };
     }
@@ -171,6 +172,7 @@ export function createOpenPricesHandlers(
 
     try {
       const gtins = targets.map(({ ean }: { ean: string }) => ean);
+      console.log("[open-prices] fetching prices for", gtins.length, "gtins");
       throwIfCancelled(signal);
 
       const accessBeforeFetch = await requireAccessApproved(
@@ -182,7 +184,9 @@ export function createOpenPricesHandlers(
         throw new SourceAccessChangedError();
       }
 
+      console.log("[open-prices] calling getPricesForGtins...");
       const prices = await dependencies.client.getPricesForGtins(gtins, signal);
+      console.log("[open-prices] got", prices.length, "prices");
       throwIfCancelled(signal);
 
       const geographicScopeId = targets[0]?.geographicScopeId;
@@ -216,6 +220,7 @@ export function createOpenPricesHandlers(
 
       return { counters: { ...finalization.counts, failed } };
     } catch (error) {
+      console.error("[open-prices] handler error:", error);
       const isCancelled =
         signal.aborted || error instanceof WorkerCancelledError;
       const isAccessChanged = error instanceof SourceAccessChangedError;
