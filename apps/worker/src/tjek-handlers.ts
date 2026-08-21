@@ -99,7 +99,8 @@ async function processCatalog(
   const nowStr = now.toISOString();
   const validFrom = date(catalog.run_from, now);
   const validUntil = date(catalog.run_till, new Date(now.getTime() + 7 * 86400000));
-  const title = catalog.brand + " " + (catalog.publication_date || now.toISOString().slice(0, 10));
+  const brand = catalog.brand || catalog.dealer_id || chain;
+  const title = brand + " " + (catalog.publication_date || now.toISOString().slice(0, 10));
   const contentKind = "structured-feed";
   const geographicScopeId = 1;
   const declaredGeographicScope = { kind: "national", countryCode: "NO" };
