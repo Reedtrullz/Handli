@@ -61,7 +61,7 @@ export const KASSALAPP_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition[]
     intervalMs: 24 * 60 * 60 * 1_000,
     kind: "catalog-refresh",
     sourceId: KASSALAPP_SOURCE_ID,
-    timeoutMs: 15 * 60 * 1_000,
+    timeoutMs: 5 * 60 * 1_000,
   }),
   Object.freeze({
     anchorAt: "2026-08-14T00:40:00.000Z",
@@ -82,7 +82,7 @@ export const KASSALAPP_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition[]
     intervalMs: 24 * 60 * 60 * 1_000,
     kind: "historical-observation-collection",
     sourceId: KASSALAPP_SOURCE_ID,
-    timeoutMs: 15 * 60 * 1_000,
+    timeoutMs: 5 * 60 * 1_000,
   }),
 ]);
 
@@ -107,7 +107,7 @@ export const TJEK_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition[] = Ob
     intervalMs: 7 * 24 * 60 * 60 * 1_000,
     kind: "official-offer-discovery" as const,
     sourceId: "tjek" as const,
-    timeoutMs: 15 * 60 * 1_000,
+    timeoutMs: 5 * 60 * 1_000,
   }),
 ]);
 
