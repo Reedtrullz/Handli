@@ -214,6 +214,7 @@ async function processCatalog(
       contractVersion: 1,
       publicationRoute: "human-review-required",
       disposition: match !== undefined ? "exact-match" : "review-required",
+      exactCanonicalProductId: match !== undefined && gtin !== undefined ? "product:" + match.productId : undefined,
       candidate: candidateObj,
       anomalyCodes,
     };
@@ -242,16 +243,23 @@ async function processCatalog(
         : { kind: "none" },
       validity: {
         startsAt: date(offer.run_from, validFrom).toISOString(),
-        endsAt: date(offer.run_till, validUntil).toISOString(),
+        endsAt: validUntil.toISOString(),
       },
     };
-    const decisionSha256 = sha256hex(stableJson(decisionPayload));
+    // Compute SHA-256 via PostgreSQL jsonb::text to match the SQL function verification
+    const decisionJson = JSON.stringify(decisionPayload);
+    const [{ hash: decisionSha256 }] = await db.$client<{ hash: string }[]>`SELECT encode(sha256(convert_to(${decisionJson}::jsonb::text, 'UTF8')), 'hex') AS hash`;
 
     const offerKey = "official-review:" + candidateId + ":" + decisionSha256;
     const sourceReference = "review-candidate:" + candidateId + ":v1";
 
-    const approved = await db.$client<{ id: number }[]>`INSERT INTO approved_offers (offer_key, candidate_id, source_id, source_reference, chain, geographic_scope_id, amount_ore, before_amount_ore, multibuy_quantity, multibuy_group_amount_ore, membership_requirement, valid_from, valid_until, status, version, approved_at) VALUES (${offerKey}, ${candidateId}, ${TJEK_SOURCE_ID}, ${sourceReference}, ${chain}, ${geographicScopeId}, ${amount}, ${before !== null && before >= amount ? before : null}, null, null, 'public', ${date(offer.run_from, validFrom).toISOString()}, ${date(offer.run_till, validUntil).toISOString()}, 'approved', 1, ${nowStr}) RETURNING id`;
+    const approved = await db.$client<{ id: number }[]>`INSERT INTO approved_offers (offer_key, candidate_id, source_id, source_reference, chain, geographic_scope_id, amount_ore, before_amount_ore, multibuy_quantity, multibuy_group_amount_ore, membership_requirement, valid_from, valid_until, status, version, approved_at) VALUES (${offerKey}, ${candidateId}, ${TJEK_SOURCE_ID}, ${sourceReference}, ${chain}, ${geographicScopeId}, ${amount}, ${before !== null && before >= amount ? before : null}, null, null, 'public', ${date(offer.run_from, validFrom).toISOString()}, ${validUntil.toISOString()}, 'approved', 1, ${nowStr}) RETURNING id`;
     const offerId = approved[0]!.id;
+    if (match !== undefined && gtin !== undefined) {
+      await db.$client`INSERT INTO offer_targets (offer_id, product_id, match_method, match_confidence) VALUES (${offerId}, ${match.productId}, 'exact_identifier', ${match.confidence})`;
+    }
+
+    await db.$client`INSERT INTO offer_conditions (offer_id, condition_type, condition_value) VALUES (${offerId}, 'channel', ${JSON.stringify({ channels: ["in-store"] })}::jsonb)`;
 
     // Review action with V2-compatible structure
     const reviewPreviousValues = {
@@ -267,14 +275,6 @@ async function processCatalog(
       state: "approved",
     };
     await db.$client`INSERT INTO review_actions (candidate_id, offer_id, actor_id, action, expected_version, previous_values, new_values, reason, acted_at, decision_boundary_version) VALUES (${candidateId}, ${offerId}, ${tjekActorId()}, 'approve', 0, ${JSON.stringify(reviewPreviousValues)}::jsonb, ${JSON.stringify(reviewNewValues)}::jsonb, 'Automated Tjek import', ${nowStr}, 2)`;
-
-    // Offer conditions (required by public_official_offer_rows_v1)
-    await db.$client`INSERT INTO offer_conditions (offer_id, condition_type, condition_value) VALUES (${offerId}, 'channel', ${JSON.stringify({ channels: ["in-store"] })}::jsonb)`;
-
-    // Offer targets (only for matched products with resolved GTIN)
-    if (match !== undefined && gtin !== undefined) {
-      await db.$client`INSERT INTO offer_targets (offer_id, product_id, match_method, match_confidence) VALUES (${offerId}, ${match.productId}, 'exact_identifier', ${match.confidence})`;
-    }
 
     await db.$client`UPDATE approved_offers SET status = 'published' WHERE id = ${offerId}`;
     accepted += 1;
