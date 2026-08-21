@@ -70,6 +70,7 @@ const expectedMigrations = [
   "035_tjek_source.sql",
   "036_tjek_official_offer_permission.sql",
   "037_worker_official_offer_grants.sql",
+  "038_tjek_function_grants.sql",
 ];
 
 assert.equal(process.env.CI, "true", "database proof requires CI=true");

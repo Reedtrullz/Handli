@@ -21,15 +21,15 @@ describe("official-offer publication runtime migration", () => {
     const files = (await readdir(migrationsDirectory))
       .filter((file) => /^\d{3}_[a-z0-9_]+\.sql$/u.test(file))
       .sort();
-    expect(files.at(-14)).toBe("024_operations_runtime_boundary.sql");
-    expect(files.at(-13)).toBe("025_private_review_evidence_renderer.sql");
-    expect(files.at(-12)).toBe("026_official_offer_publication_runtime.sql");
-    expect(files.at(-11)).toBe("027_official_offer_publication_health.sql");
-    expect(files.at(-10)).toBe("028_private_review_image_evidence_only.sql");
-    expect(files.at(-9)).toBe("029_kassalapp_source_approval.sql");
-    expect(files.at(-8)).toBe("030_catalog_measure_optional.sql");
-    expect(files.at(-7)).toBe("031_supported_chain_expansion.sql");
-    expect(files.at(-6)).toBe("032_seed_national_scope.sql");
+    expect(files.at(-15)).toBe("024_operations_runtime_boundary.sql");
+    expect(files.at(-14)).toBe("025_private_review_evidence_renderer.sql");
+    expect(files.at(-13)).toBe("026_official_offer_publication_runtime.sql");
+    expect(files.at(-12)).toBe("027_official_offer_publication_health.sql");
+    expect(files.at(-11)).toBe("028_private_review_image_evidence_only.sql");
+    expect(files.at(-10)).toBe("029_kassalapp_source_approval.sql");
+    expect(files.at(-9)).toBe("030_catalog_measure_optional.sql");
+    expect(files.at(-8)).toBe("031_supported_chain_expansion.sql");
+    expect(files.at(-7)).toBe("032_seed_national_scope.sql");
   });
 
   it("owns an inactive policy, dedicated lease and immutable job boundary", async () => {
