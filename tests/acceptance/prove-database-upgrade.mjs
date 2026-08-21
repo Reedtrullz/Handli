@@ -66,6 +66,9 @@ const expectedMigrations = [
   "031_supported_chain_expansion.sql",
   "032_seed_national_scope.sql",
   "033_open_prices_source.sql",
+  "034_open_prices_job_kind.sql",
+  "035_tjek_source.sql",
+  "036_tjek_official_offer_permission.sql",
 ];
 
 assert.equal(process.env.CI, "true", "database proof requires CI=true");
