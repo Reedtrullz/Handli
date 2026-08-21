@@ -176,6 +176,9 @@ const operationsRuntimeBoundaryEnabled = migrationFiles.includes(
 const officialOfferLifecycleRuntimeEnabled = migrationFiles.includes(
   "026_official_offer_publication_runtime.sql",
 );
+const officialOfferEditionIdentityEnabled = migrationFiles.includes(
+  "038_tjek_function_grants.sql",
+);
 const officialOfferPublicationHealthEnabled = migrationFiles.includes(
   "027_official_offer_publication_health.sql",
 );
@@ -725,6 +728,16 @@ async function configureRuntimeRoles() {
       await transaction.unsafe(`
         grant execute on function public.official_offer_lifecycle_reconcile_v1(
           text, text, text, timestamp with time zone, text, integer, boolean
+        ) to ${workerRole};
+      `);
+    }
+    if (officialOfferEditionIdentityEnabled) {
+      await transaction.unsafe(`
+        grant execute on function public.canonical_official_offer_edition_identity(
+          text, text, text, text, text, bigint, jsonb, timestamp with time zone, timestamp with time zone, timestamp with time zone
+        ) to ${workerRole};
+        grant execute on function public.canonical_official_offer_scope_identity(
+          text, text, text, bigint, jsonb
         ) to ${workerRole};
       `);
     }
