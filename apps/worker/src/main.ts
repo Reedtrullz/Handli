@@ -7,7 +7,8 @@ process.once("SIGTERM", requestShutdown);
 
 try {
   process.exitCode = await runProductionWorkerProcess(process.env, shutdown.signal);
-} catch {
+} catch (err) {
+  console.error("[worker-startup-error]", err instanceof Error ? err.message : String(err));
   // Deliberately fixed text: errors at this boundary may contain credentials or source payloads.
   console.error("Handleplan worker terminated before a clean shutdown");
   process.exitCode = 1;
