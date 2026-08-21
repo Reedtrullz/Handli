@@ -16,6 +16,7 @@ import { startWorkerHealthServer, WorkerHealthMonitor } from "./health";
 import {
   KASSALAPP_PRODUCTION_SCHEDULES,
   OPEN_PRICES_PRODUCTION_SCHEDULES,
+  TJEK_PRODUCTION_SCHEDULES,
   PostgresKassalappTargetProvider,
   PostgresOpenPricesTargetProvider,
   PostgresWorkerLeaseProvider,
@@ -36,7 +37,11 @@ export function workerOwnerId(host = hostname(), processId = process.pid): strin
 }
 
 export function productionCycleBoundMs(shutdownGraceMs: number): number {
-  return [...KASSALAPP_PRODUCTION_SCHEDULES, ...OPEN_PRICES_PRODUCTION_SCHEDULES].reduce(
+  return [
+    ...KASSALAPP_PRODUCTION_SCHEDULES,
+    ...OPEN_PRICES_PRODUCTION_SCHEDULES,
+    ...TJEK_PRODUCTION_SCHEDULES,
+  ].reduce(
     (total, schedule) => total + schedule.timeoutMs + shutdownGraceMs,
     0,
   );

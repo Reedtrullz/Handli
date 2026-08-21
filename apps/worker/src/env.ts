@@ -20,6 +20,8 @@ export interface WorkerProductionEnv {
   requestBudgetWindowMs: number;
   sourceAccessState: WorkerSourceAccessState;
   targetLimit: number;
+  /** Tjek offer discovery remains opt-in until its production composition is approved. */
+  tjekEnabled: boolean;
 }
 
 function requireDisabledOfficialOfferFoundation(value: string | undefined): false {
@@ -118,6 +120,10 @@ function openPricesEnabled(value: string | undefined): boolean {
   return value === "true";
 }
 
+function tjekEnabled(value: string | undefined): boolean {
+  return value === "true";
+}
+
 function optionalApiKey(value: string | undefined, access: WorkerSourceAccessState): string | undefined {
   if (value !== undefined && (value.length < 1 || value.length > 1_024 || value.trim().length < 1)) {
     throw new TypeError("KASSAL_API_KEY must contain 1-1024 nonblank characters");
@@ -210,5 +216,6 @@ export function readWorkerProductionEnv(
       500,
       "WORKER_TARGET_LIMIT",
     ),
+    tjekEnabled: tjekEnabled(source.TJEK_ENABLED),
   });
 }

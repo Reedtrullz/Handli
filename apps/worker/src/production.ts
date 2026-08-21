@@ -95,6 +95,20 @@ export const OPEN_PRICES_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition
   }),
 ]);
 
+/**
+ * Weekly Bunnpris Tjek catalog discovery. The schedule is declared here for
+ * bounded-cycle accounting; production handler composition remains opt-in.
+ */
+export const TJEK_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition[] = Object.freeze([
+  Object.freeze({
+    anchorAt: "2026-08-17T02:15:00.000Z",
+    intervalMs: 7 * 24 * 60 * 60 * 1_000,
+    kind: "official-offer-discovery" as const,
+    sourceId: "tjek" as const,
+    timeoutMs: 15 * 60 * 1_000,
+  }),
+]);
+
 const OPEN_PRICES_PERMISSION_SCOPE_BY_JOB: Readonly<Record<OpenPricesWorkerJobKind, string>> = {
   "open-prices-benchmark-refresh": "ordinaryPrice",
 };
