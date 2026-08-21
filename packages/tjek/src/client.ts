@@ -61,8 +61,11 @@ export class TjekClient {
         response.status,
       );
     }
-    const data = (await response.json()) as TjekCatalogListResponse;
-    return data.catalogs;
+    const data: unknown = await response.json();
+    // API returns a raw array of catalogs, not { catalogs: [...] }
+    if (Array.isArray(data)) return data as readonly TjekCatalog[];
+    const wrapped = data as TjekCatalogListResponse;
+    return wrapped.catalogs;
   }
 
   async getLatestCatalog(
