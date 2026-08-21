@@ -1,17 +1,49 @@
 import { describe, expect, it } from "vitest";
 import { TjekClient } from "./client";
-import type { TjekRpcOfferResponseItem } from "./types";
 
-// Tests for offer normalization via the client's parseOfferResponse.
-// We exercise it indirectly through getOffersFromCatalog with a mock fetch.
+// Tests for offer normalization via the new incito + offer detail flow.
 
-function createClientForParsing(items: readonly TjekRpcOfferResponseItem[]) {
-  const mockFetch = async () =>
-    new Response(JSON.stringify(items), {
-      headers: { "content-type": "application/json" },
-      status: 200,
-    });
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    headers: { "content-type": "application/json" },
+    status: 200,
+  });
+}
+
+function incitoWithOffers(viewIds: string[]) {
+  return {
+    id: "test-catalog",
+    root_view: {
+      role: "paged-mandatory",
+      child_views: viewIds.map((id) => ({
+        role: "section",
+        child_views: [{ role: "offer", id }],
+      })),
+    },
+  };
+}
+
+function offerDetail(name: string, price: number, extra: Record<string, unknown> = {}) {
+  return {
+    offer: {
+      name,
+      price,
+      currency_code: "NOK",
+      validity: { from: "2026-08-17T22:00:00Z", to: "2026-08-24T22:00:00Z" },
+      ...extra,
+    },
+  };
+}
+
+function createClientWithFlow(responses: unknown[]) {
+  let callIndex = 0;
+  const mockFetch = async () => {
+    const resp = responses[callIndex] ?? {};
+    callIndex += 1;
+    return jsonResponse(resp);
+  };
   return new TjekClient({
+    apiKey: "test-key",
     baseUrl: "https://fixture.invalid",
     fetch: mockFetch as typeof fetch,
   });
@@ -19,133 +51,72 @@ function createClientForParsing(items: readonly TjekRpcOfferResponseItem[]) {
 
 describe("TjekClient offer normalization", () => {
   it("normalizes a fully populated offer", async () => {
-    const client = createClientForParsing([
-      {
-        id: "full-1",
-        heading: "Kjott",
-        name: "Kyllingbryst",
-        price: 59.9,
-        price_text: "kr 59,90",
-        before_price: 79.9,
-        quantity: "400",
-        unit: "g",
-        run_from: "2026-08-17T22:00:00Z",
-        run_till: "2026-08-24T21:59:00Z",
-        image_url: "https://example.com/kylling.jpg",
-        page_number: 3,
-      },
+    const client = createClientWithFlow([
+      incitoWithOffers(["v1"]),
+      offerDetail("Kyllingbryst", 59.9, {
+        unit_symbol: "g",
+        unit_size: { from: 400, to: 1 },
+      }),
     ]);
 
     const result = await client.getOffersFromCatalog("cat-1");
 
     expect(result).toHaveLength(1);
     const offer = result[0]!;
-    expect(offer.id).toBe("full-1");
-    expect(offer.heading).toBe("Kjott");
     expect(offer.name).toBe("Kyllingbryst");
     expect(offer.price).toBe(59.9);
-    expect(offer.price_text).toBe("kr 59,90");
-    expect(offer.before_price).toBe(79.9);
-    expect(offer.quantity).toBe("400");
     expect(offer.unit).toBe("g");
-    expect(offer.run_from).toBe("2026-08-17T22:00:00Z");
-    expect(offer.run_till).toBe("2026-08-24T21:59:00Z");
+    expect(offer.quantity).toBe("400");
     expect(offer.catalog_id).toBe("cat-1");
     expect(offer.dealer_id).toBe("5b11sm");
-    expect(offer.image_url).toBe("https://example.com/kylling.jpg");
-    expect(offer.page_number).toBe(3);
   });
 
-  it("normalizes an offer with null price", async () => {
-    const client = createClientForParsing([
-      {
-        id: "np-1",
-        name: "Ukjent pris",
-        price: undefined,
-      },
+  it("normalizes multiple offers from different view IDs", async () => {
+    const client = createClientWithFlow([
+      incitoWithOffers(["v1", "v2"]),
+      offerDetail("Kjøttdeig", 40),
+      offerDetail("Melk 1L", 14.9),
     ]);
 
     const result = await client.getOffersFromCatalog("cat-2");
 
-    expect(result).toHaveLength(1);
-    expect(result[0]!.price).toBeNull();
-    expect(result[0]!.price_text).toBeNull();
-    expect(result[0]!.before_price).toBeNull();
+    expect(result).toHaveLength(2);
+    expect(result[0]!.name).toBe("Kjøttdeig");
+    expect(result[0]!.price).toBe(40);
+    expect(result[1]!.name).toBe("Melk 1L");
+    expect(result[1]!.price).toBe(14.9);
   });
 
-  it("normalizes an offer with before_price (discount)", async () => {
-    const client = createClientForParsing([
-      {
-        id: "disc-1",
-        name: "Paalegg",
-        price: 25.0,
-        before_price: 35.0,
-      },
+  it("skips offers with missing name or price", async () => {
+    const client = createClientWithFlow([
+      incitoWithOffers(["v1", "v2", "v3"]),
+      { offer: { price: 10 } },  // missing name
+      { offer: { name: "No price" } },  // missing price
+      offerDetail("Valid Offer", 25),
     ]);
 
     const result = await client.getOffersFromCatalog("cat-3");
-
     expect(result).toHaveLength(1);
-    expect(result[0]!.price).toBe(25.0);
-    expect(result[0]!.before_price).toBe(35.0);
+    expect(result[0]!.name).toBe("Valid Offer");
   });
 
-  it("handles offer with all missing optional fields", async () => {
-    const client = createClientForParsing([{}]);
-
-    const result = await client.getOffersFromCatalog("cat-empty");
-
-    expect(result).toHaveLength(1);
-    const offer = result[0]!;
-    expect(offer.id).toBe("cat-empty-0");
-    expect(offer.heading).toBeNull();
-    expect(offer.name).toBe("Offer 0");
-    expect(offer.price).toBeNull();
-    expect(offer.price_text).toBeNull();
-    expect(offer.before_price).toBeNull();
-    expect(offer.quantity).toBeNull();
-    expect(offer.unit).toBeNull();
-    expect(offer.run_from).toBe("");
-    expect(offer.run_till).toBe("");
-    expect(offer.image_url).toBeNull();
-    expect(offer.page_number).toBeNull();
-  });
-
-  it("prefers name over heading for display name", async () => {
-    const client = createClientForParsing([
-      {
-        heading: "Meieri",
-        name: "Yoghurt",
-      },
+  it("handles before_price (discount)", async () => {
+    const client = createClientWithFlow([
+      incitoWithOffers(["v1"]),
+      offerDetail("Pålegg", 25, { before_price: 35 }),
     ]);
 
     const result = await client.getOffersFromCatalog("cat-4");
-
-    expect(result[0]!.name).toBe("Yoghurt");
-    expect(result[0]!.heading).toBe("Meieri");
+    expect(result).toHaveLength(1);
+    expect(result[0]!.before_price).toBe(35);
   });
 
-  it("falls back to heading when name is missing", async () => {
-    const client = createClientForParsing([
-      {
-        heading: "Tilbud paa frokost",
-      },
+  it("returns empty when no offer views found", async () => {
+    const client = createClientWithFlow([
+      incitoWithOffers([]),
     ]);
 
     const result = await client.getOffersFromCatalog("cat-5");
-
-    expect(result[0]!.name).toBe("Tilbud paa frokost");
-    expect(result[0]!.heading).toBe("Tilbud paa frokost");
-  });
-
-  it("generates sequential fallback ids", async () => {
-    const client = createClientForParsing([{}, {}, {}]);
-
-    const result = await client.getOffersFromCatalog("seq");
-
-    expect(result).toHaveLength(3);
-    expect(result[0]!.id).toBe("seq-0");
-    expect(result[1]!.id).toBe("seq-1");
-    expect(result[2]!.id).toBe("seq-2");
+    expect(result).toHaveLength(0);
   });
 });

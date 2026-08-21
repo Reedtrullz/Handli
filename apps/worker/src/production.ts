@@ -422,6 +422,7 @@ export interface OpenPricesProductionRuntimeDependencies {
 }
 
 export interface TjekProductionRuntimeDependencies {
+  apiKey?: string;
   db: TjekHandlerDependencies["db"];
 }
 
@@ -465,7 +466,7 @@ export function createProductionWorkerRuntime<RunHandle = unknown>(
       })
     : {};
 
-  const tjekHandlers = dependencies.tjek !== undefined ? createTjekHandlers({ client: new TjekClient(), db: dependencies.tjek.db }) : {};
+  const tjekHandlers = dependencies.tjek !== undefined ? createTjekHandlers({ client: new TjekClient({ apiKey: dependencies.tjek.apiKey }), db: dependencies.tjek.db }) : {};
 
   const handlers = { ...kassalappHandlers, ...openPricesHandlers, ...tjekHandlers };
 

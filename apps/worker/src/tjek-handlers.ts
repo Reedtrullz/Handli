@@ -31,6 +31,7 @@ export function matchOfferToProduct(offerName: string, products: readonly { id: 
 }
 
 export interface TjekHandlerDependencies {
+  readonly apiKey?: string;
   readonly client: Pick<TjekClient, "getLatestCatalog" | "getOffersFromCatalog">;
   readonly db: HandleplanDatabase;
   readonly clock?: () => Date;

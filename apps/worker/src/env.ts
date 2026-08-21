@@ -21,6 +21,7 @@ export interface WorkerProductionEnv {
   sourceAccessState: WorkerSourceAccessState;
   targetLimit: number;
   /** Tjek offer discovery remains opt-in until its production composition is approved. */
+  tjekApiKey?: string;
   tjekEnabled: boolean;
 }
 
@@ -216,6 +217,7 @@ export function readWorkerProductionEnv(
       500,
       "WORKER_TARGET_LIMIT",
     ),
+    tjekApiKey: source.TJEK_API_KEY,
     tjekEnabled: tjekEnabled(source.TJEK_ENABLED),
   });
 }

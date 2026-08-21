@@ -2,13 +2,13 @@ import type {
   TjekCatalog,
   TjekCatalogListResponse,
   TjekOffer,
-  TjekRpcOfferResponseItem,
 } from "./types";
 
 const TJEK_BASE_URL = "https://squid-api.tjek.com";
 const BUNNPRIS_DEALER_ID = "5b11sm";
 
 export interface TjekClientOptions {
+  readonly apiKey?: string;
   readonly baseUrl?: string;
   readonly fetch?: typeof globalThis.fetch;
 }
@@ -24,13 +24,62 @@ export class TjekClientError extends Error {
   }
 }
 
+interface IncitoOfferView {
+  readonly id: string;
+  readonly role: string;
+}
+
+interface IncitoOfferDetail {
+  readonly offer?: {
+    readonly name?: string;
+    readonly price?: number;
+    readonly currency_code?: string;
+    readonly validity?: { readonly from?: string; readonly to?: string };
+    readonly unit_symbol?: string;
+    readonly unit_size?: { readonly from?: number; readonly to?: number };
+    readonly piece_count?: { readonly from?: number; readonly to?: number };
+    readonly before_price?: number;
+  };
+  readonly name?: string;
+  readonly price?: number;
+}
+
 export class TjekClient {
   private readonly baseUrl: string;
+  private readonly apiKey?: string;
   private readonly fetchFn: typeof globalThis.fetch;
 
   constructor(options: TjekClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? TJEK_BASE_URL;
+    this.apiKey = options.apiKey;
     this.fetchFn = options.fetch ?? globalThis.fetch;
+  }
+
+  private async rpc(
+    method: string,
+    body: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const url = `${this.baseUrl}/v4/rpc/${method}`;
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (this.apiKey) headers["X-Api-Key"] = this.apiKey;
+    const response = await this.fetchFn(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ id: "req", method, ...body }),
+      signal,
+    });
+    if (response.status === 429) {
+      throw new TjekClientError("RATE_LIMITED", "Rate limited by Tjek API");
+    }
+    if (!response.ok) {
+      throw new TjekClientError(
+        "SERVER_ERROR",
+        `Tjek RPC error: ${response.status}`,
+        response.status,
+      );
+    }
+    return await response.json();
   }
 
   async listCatalogs(
@@ -62,7 +111,6 @@ export class TjekClient {
       );
     }
     const data: unknown = await response.json();
-    // API returns a raw array of catalogs, not { catalogs: [...] }
     if (Array.isArray(data)) return data as readonly TjekCatalog[];
     const wrapped = data as TjekCatalogListResponse;
     return wrapped.catalogs;
@@ -78,73 +126,88 @@ export class TjekClient {
     return catalogs[0];
   }
 
+  private findOfferViewIds(node: unknown): string[] {
+    if (node === null || node === undefined) return [];
+    if (Array.isArray(node)) {
+      return node.flatMap((item) => this.findOfferViewIds(item));
+    }
+    if (typeof node === "object") {
+      const obj = node as Record<string, unknown>;
+      const ids: string[] = [];
+      if (obj.role === "offer" && typeof obj.id === "string") {
+        ids.push(obj.id);
+      }
+      for (const value of Object.values(obj)) {
+        ids.push(...this.findOfferViewIds(value));
+      }
+      return ids;
+    }
+    return [];
+  }
+
   async getOffersFromCatalog(
     catalogId: string,
     signal?: AbortSignal,
   ): Promise<readonly TjekOffer[]> {
+    if (!this.apiKey) {
+      throw new TjekClientError("SERVER_ERROR", "Tjek API key required for offer data");
+    }
     if (signal?.aborted) {
       throw new TjekClientError("CANCELLED", "Request cancelled");
     }
 
-    const url = `${this.baseUrl}/v4/rpc/get_offer_products`;
-    const response = await this.fetchFn(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        method: "get_offer_products",
-        params: [{ catalog_id: catalogId }],
-      }),
+    // Step 1: Generate incito from publication to discover offer view IDs
+    const incito = await this.rpc(
+      "generate_incito_from_publication",
+      {
+        device_category: "mobile",
+        id: catalogId,
+        max_width: 414,
+        orientation: "vertical",
+        pointer: "coarse",
+        pixel_ratio: 2,
+        versions_supported: ["1.0.0"],
+      },
       signal,
-    });
+    );
 
-    if (response.status === 429) {
-      throw new TjekClientError("RATE_LIMITED", "Rate limited by Tjek API");
+    const offerViewIds = [...new Set(this.findOfferViewIds(incito))];
+    if (offerViewIds.length === 0) return [];
+
+    // Step 2: Fetch each offer's details
+    const offers: TjekOffer[] = [];
+    for (const viewId of offerViewIds) {
+      if (signal?.aborted) throw new TjekClientError("CANCELLED", "Request cancelled");
+      try {
+        const raw = await this.rpc(
+          "get_offer_from_incito_publication_view",
+          { id: viewId, publication_id: catalogId, view_id: viewId },
+          signal,
+        ) as Record<string, unknown>;
+        const detail = (raw.offer ?? raw) as Record<string, unknown>;
+        if (typeof detail.name !== "string" || typeof detail.price !== "number") continue;
+        const validity = detail.validity as Record<string, unknown> | undefined;
+        const unitSize = detail.unit_size as Record<string, unknown> | undefined;
+        offers.push({
+          id: `${catalogId}:${viewId}`,
+          heading: null,
+          name: detail.name,
+          price: detail.price,
+          price_text: null,
+          before_price: typeof detail.before_price === "number" ? detail.before_price : null,
+          quantity: typeof unitSize?.from === "number" ? String(unitSize.from) : null,
+          unit: typeof detail.unit_symbol === "string" ? detail.unit_symbol : null,
+          run_from: typeof validity?.from === "string" ? String(validity.from) : "",
+          run_till: typeof validity?.to === "string" ? String(validity.to) : "",
+          catalog_id: catalogId,
+          dealer_id: BUNNPRIS_DEALER_ID,
+          image_url: null,
+          page_number: null,
+        });
+      } catch {
+        // Skip offers that fail to fetch
+      }
     }
-    if (!response.ok) {
-      throw new TjekClientError(
-        "SERVER_ERROR",
-        `Tjek RPC error: ${response.status}`,
-        response.status,
-      );
-    }
-
-    const data: unknown = await response.json();
-    return this.parseOfferResponse(data, catalogId);
-  }
-
-  private parseOfferResponse(
-    data: unknown,
-    catalogId: string,
-  ): readonly TjekOffer[] {
-    const raw = data as Record<string, unknown>;
-    const items: readonly TjekRpcOfferResponseItem[] = Array.isArray(data)
-      ? (data as readonly TjekRpcOfferResponseItem[])
-      : Array.isArray(raw?.result)
-        ? (raw.result as readonly TjekRpcOfferResponseItem[])
-        : [];
-
-    return items.map((item, index) => ({
-      id: typeof item.id === "string" ? item.id : `${catalogId}-${index}`,
-      heading: typeof item.heading === "string" ? item.heading : null,
-      name:
-        typeof item.name === "string"
-          ? item.name
-          : typeof item.heading === "string"
-            ? item.heading
-            : `Offer ${index}`,
-      price: typeof item.price === "number" ? item.price : null,
-      price_text: typeof item.price_text === "string" ? item.price_text : null,
-      before_price:
-        typeof item.before_price === "number" ? item.before_price : null,
-      quantity: typeof item.quantity === "string" ? item.quantity : null,
-      unit: typeof item.unit === "string" ? item.unit : null,
-      run_from: typeof item.run_from === "string" ? item.run_from : "",
-      run_till: typeof item.run_till === "string" ? item.run_till : "",
-      catalog_id: catalogId,
-      dealer_id: BUNNPRIS_DEALER_ID,
-      image_url: typeof item.image_url === "string" ? item.image_url : null,
-      page_number:
-        typeof item.page_number === "number" ? item.page_number : null,
-    }));
+    return offers;
   }
 }

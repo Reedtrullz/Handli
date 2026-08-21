@@ -112,7 +112,7 @@ export async function runProductionWorkerProcess(
       : undefined;
 
     const tjekDependencies = productionEnv.tjekEnabled
-      ? { db: connection.db }
+      ? { apiKey: productionEnv.tjekApiKey, db: connection.db }
       : undefined;
 
     const runtime = createProductionWorkerRuntime({
