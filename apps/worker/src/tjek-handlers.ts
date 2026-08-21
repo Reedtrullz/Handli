@@ -53,6 +53,22 @@ function date(value: string, fallback: Date): Date { const d = new Date(value); 
 function checksum(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 function abort(signal: AbortSignal): void { if (signal.aborted) throw new WorkerCancelledError(); }
 
+function sha256hex(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || value === undefined) return JSON.stringify(value);
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return JSON.stringify(value);
+  if (Array.isArray(value)) return "[" + value.map((v) => stableJson(v)).join(",") + "]";
+  const keys = Object.keys(value as Record<string, unknown>).sort();
+  return "{" + keys.map((k) => JSON.stringify(k) + ":" + stableJson((value as Record<string, unknown>)[k])).join(",") + "}";
+}
+
+function tjekActorId(): string {
+  return "access:" + sha256hex("tjek-auto-approve:v1");
+}
+
 async function computeEditionIdentitySha256(
   db: HandleplanDatabase,
   args: { sourceId: string; externalId: string; chain: string; title: string; contentKind: string; geographicScopeId: number; validFrom: string; validUntil: string; discoveredAt: string },
@@ -153,30 +169,111 @@ async function processCatalog(
     const match = matchOfferToProduct(offer.name, products.map((p) => ({ id: Number(p.id), displayName: p.display_name })), deps.matchThreshold ?? 60);
     const confidence = match?.confidence ?? 0;
 
-    const normalizedFields = {
-      candidateKey: key, productName: offer.name,
-      offerPriceOre: ore(offer.price), beforePriceOre: ore(offer.before_price),
-      validFrom: offer.run_from || validFrom.toISOString(),
-      validUntil: offer.run_till || validUntil.toISOString(),
-      eligibility: "public", channels: ["in-store"],
-      provenance: { method: "tjek", evidenceLocator: offer.page_number === null ? key : "page:" + offer.page_number, confidence },
-    };
+    // Resolve GTIN from product_identifiers for matched products
+    let gtin: string | undefined;
+    if (match !== undefined) {
+      const gtinRow = await db.$client<{ value: string }[]>`SELECT value FROM product_identifiers WHERE product_id = ${match.productId} AND scheme IN ('ean13', 'ean8') AND confidence = 100 AND verified_at IS NOT NULL LIMIT 1`;
+      if (gtinRow.length === 0) continue;
+      gtin = gtinRow[0].value;
+    }
+
     const anomalyCodes = match === undefined ? ["unmatched-product"] : [];
+
+    // Build candidate object matching private_review_decide_v2 output shape
+    const candidateObj: Record<string, unknown> = {
+      contractVersion: 1,
+      candidateKey: key,
+      anomalyCodes,
+      provenance: {
+        method: "structured",
+        confidence,
+        evidenceLocator: offer.page_number === null ? key : "page:" + offer.page_number,
+      },
+      geographicScope: declaredGeographicScope,
+      channels: ["in-store"],
+      eligibility: { kind: "public" },
+      pricing: {
+        kind: "unit",
+        offerPriceOre: ore(offer.price),
+        beforePriceOre: ore(offer.before_price),
+      },
+      validity: {
+        state: "parsed",
+        startsAt: offer.run_from || validFrom.toISOString(),
+        endsAt: offer.run_till || validUntil.toISOString(),
+      },
+    };
+
+    // Add product identification fields for matched products
+    if (match !== undefined && gtin !== undefined) {
+      candidateObj.product = { kind: "exact-identifier", scheme: "gtin", value: gtin };
+      candidateObj.exactCanonicalProductId = "product:" + match.productId;
+    }
+
+    const normalizedFields: Record<string, unknown> = {
+      contractVersion: 1,
+      publicationRoute: "human-review-required",
+      disposition: match !== undefined ? "exact-match" : "review-required",
+      candidate: candidateObj,
+      anomalyCodes,
+    };
+
     const candidate = await db.$client<{ id: number }[]>`INSERT INTO extracted_offer_candidates (extraction_run_id, candidate_key, normalized_fields, confidence, status, anomaly_codes) VALUES (${extractionId}, ${key}, ${JSON.stringify(normalizedFields)}::jsonb, ${confidence}, 'pending', ${JSON.stringify(anomalyCodes)}::jsonb) RETURNING id`;
     const candidateId = candidate[0]!.id;
+
+    // Compute candidate SHA-256 for review provenance
+    const candidateSha256 = sha256hex(stableJson(normalizedFields));
+
     const amount = ore(offer.price);
     if (amount === null) continue;
     const before = ore(offer.before_price);
 
-    const offerKey = "tjek:" + catalog.id + ":" + key;
-    const approved = await db.$client<{ id: number }[]>`INSERT INTO approved_offers (offer_key, candidate_id, source_id, source_reference, chain, geographic_scope_id, amount_ore, before_amount_ore, membership_requirement, valid_from, valid_until, status, version, approved_at) VALUES (${offerKey}, ${candidateId}, ${TJEK_SOURCE_ID}, ${offerKey}, ${chain}, ${geographicScopeId}, ${amount}, ${before !== null && before >= amount ? before : null}, 'public', ${date(offer.run_from, validFrom).toISOString()}, ${date(offer.run_till, validUntil).toISOString()}, 'approved', 1, ${nowStr}) RETURNING id`;
+    // Build decision payload matching private_review_decide_v2 output shape
+    const decisionPayload: Record<string, unknown> = {
+      channels: ["in-store"],
+      eligibility: { kind: "public" },
+      pricing: {
+        kind: "unit",
+        offerPriceOre: amount,
+        beforePriceOre: before,
+      },
+      target: match !== undefined && gtin !== undefined
+        ? { kind: "exact-product", gtin }
+        : { kind: "none" },
+      validity: {
+        startsAt: date(offer.run_from, validFrom).toISOString(),
+        endsAt: date(offer.run_till, validUntil).toISOString(),
+      },
+    };
+    const decisionSha256 = sha256hex(stableJson(decisionPayload));
+
+    const offerKey = "official-review:" + candidateId + ":" + decisionSha256;
+    const sourceReference = "review-candidate:" + candidateId + ":v1";
+
+    const approved = await db.$client<{ id: number }[]>`INSERT INTO approved_offers (offer_key, candidate_id, source_id, source_reference, chain, geographic_scope_id, amount_ore, before_amount_ore, multibuy_quantity, multibuy_group_amount_ore, membership_requirement, valid_from, valid_until, status, version, approved_at) VALUES (${offerKey}, ${candidateId}, ${TJEK_SOURCE_ID}, ${sourceReference}, ${chain}, ${geographicScopeId}, ${amount}, ${before !== null && before >= amount ? before : null}, null, null, 'public', ${date(offer.run_from, validFrom).toISOString()}, ${date(offer.run_till, validUntil).toISOString()}, 'approved', 1, ${nowStr}) RETURNING id`;
     const offerId = approved[0]!.id;
 
-    const reviewNewValues = { channels: ["in-store"], eligibility: "public" };
-    await db.$client`INSERT INTO review_actions (candidate_id, offer_id, actor_id, action, expected_version, new_values, reason, acted_at) VALUES (${candidateId}, ${offerId}, 'tjek-worker', 'approve', 0, ${JSON.stringify(reviewNewValues)}::jsonb, 'Automated Tjek import', ${nowStr})`;
+    // Review action with V2-compatible structure
+    const reviewPreviousValues = {
+      candidateSha256,
+      contractVersion: 1,
+      reviewVersion: 0,
+    };
+    const reviewNewValues = {
+      contractVersion: 1,
+      decision: decisionPayload,
+      decisionSha256,
+      reviewVersion: 1,
+      state: "approved",
+    };
+    await db.$client`INSERT INTO review_actions (candidate_id, offer_id, actor_id, action, expected_version, previous_values, new_values, reason, acted_at, decision_boundary_version) VALUES (${candidateId}, ${offerId}, ${tjekActorId()}, 'approve', 0, ${JSON.stringify(reviewPreviousValues)}::jsonb, ${JSON.stringify(reviewNewValues)}::jsonb, 'Automated Tjek import', ${nowStr}, 2)`;
 
-    if (match !== undefined) {
-      await db.$client`INSERT INTO offer_targets (offer_id, product_id, match_method, match_confidence) VALUES (${offerId}, ${match.productId}, 'human_review', ${match.confidence})`;
+    // Offer conditions (required by public_official_offer_rows_v1)
+    await db.$client`INSERT INTO offer_conditions (offer_id, condition_type, condition_value) VALUES (${offerId}, 'channel', ${JSON.stringify({ channels: ["in-store"] })}::jsonb)`;
+
+    // Offer targets (only for matched products with resolved GTIN)
+    if (match !== undefined && gtin !== undefined) {
+      await db.$client`INSERT INTO offer_targets (offer_id, product_id, match_method, match_confidence) VALUES (${offerId}, ${match.productId}, 'exact_identifier', ${match.confidence})`;
     }
 
     await db.$client`UPDATE approved_offers SET status = 'published' WHERE id = ${offerId}`;
