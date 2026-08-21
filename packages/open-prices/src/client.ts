@@ -3,6 +3,7 @@ import type { OpenPricesApiResponse, OpenPricesListParams, OpenPricesPrice } fro
 const OPEN_PRICES_BASE_URL = "https://prices.openfoodfacts.org/api/v1";
 const MAX_PAGE_SIZE = 100;
 const MAX_PAGE = 500;
+const MAX_GTINS_PER_BATCH = 50;
 const RATE_LIMIT_MS = 1000;
 
 export interface OpenPricesClientOptions {
@@ -80,21 +81,26 @@ export class OpenPricesClient {
   async getPricesForGtins(gtins: readonly string[], signal?: AbortSignal): Promise<readonly OpenPricesPrice[]> {
     if (gtins.length === 0) return [];
     const allItems: OpenPricesPrice[] = [];
-    let page = 1;
-    while (page <= MAX_PAGE) {
-      if (signal?.aborted) {
-        throw new OpenPricesClientError("CANCELLED", "Request cancelled");
+    // Batch GTINs to stay under the Open Prices server ~4094 char request-line limit.
+    // Each GTIN is 13 digits; 50 GTINs keeps the URL well under the limit.
+    for (let offset = 0; offset < gtins.length; offset += MAX_GTINS_PER_BATCH) {
+      const batch = gtins.slice(offset, offset + MAX_GTINS_PER_BATCH);
+      let page = 1;
+      while (page <= MAX_PAGE) {
+        if (signal?.aborted) {
+          throw new OpenPricesClientError("CANCELLED", "Request cancelled");
+        }
+        const response = await this.listPrices({
+          currency: "NOK",
+          order_by: "-date",
+          page,
+          product_code__in: batch.join(","),
+          size: MAX_PAGE_SIZE,
+        }, signal);
+        allItems.push(...response.items);
+        if (page >= response.pages) break;
+        page += 1;
       }
-      const response = await this.listPrices({
-        currency: "NOK",
-        order_by: "-date",
-        page,
-        product_code__in: gtins.join(","),
-        size: MAX_PAGE_SIZE,
-      }, signal);
-      allItems.push(...response.items);
-      if (page >= response.pages) break;
-      page += 1;
     }
     return allItems;
   }

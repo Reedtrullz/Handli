@@ -185,3 +185,33 @@ describe("OpenPricesClient", () => {
     expect(elapsed).toBeGreaterThanOrEqual(900);
   });
 });
+
+describe("OpenPricesClient batching", () => {
+  it("batches GTINs to avoid exceeding request-line limit", async () => {
+    const gtins = Array.from({ length: 60 }, (_, i) =>
+      "703801000001" + String(i).padStart(2, "0").slice(-2)
+    );
+    const mockFetch = vi.fn<typeof fetch>().mockImplementation(
+      () => Promise.resolve(jsonResponse(makeApiResponse([]))),
+    );
+    const client = createClient(mockFetch);
+
+    const result = await client.getPricesForGtins(gtins);
+
+    expect(result).toHaveLength(0);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    for (const call of mockFetch.mock.calls) {
+      const url = String(call[0]);
+      expect(url.length).toBeLessThan(4094);
+    }
+
+    const firstUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const firstGtins = firstUrl.searchParams.get("product_code__in")?.split(",") ?? [];
+    expect(firstGtins.length).toBe(50);
+
+    const secondUrl = new URL(String(mockFetch.mock.calls[1]?.[0]));
+    const secondGtins = secondUrl.searchParams.get("product_code__in")?.split(",") ?? [];
+    expect(secondGtins.length).toBe(10);
+  });
+});

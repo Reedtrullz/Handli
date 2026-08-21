@@ -170,7 +170,6 @@ export function createOpenPricesHandlers(
     let persisted = 0;
 
     try {
-      console.error("[open-prices] targets:", targets.length, "gtins:", targets.slice(0,5).map(t => t.ean).join(","));
       const gtins = targets.map(({ ean }: { ean: string }) => ean);
       throwIfCancelled(signal);
 
@@ -183,9 +182,7 @@ export function createOpenPricesHandlers(
         throw new SourceAccessChangedError();
       }
 
-      console.error("[open-prices] calling API with", gtins.length, "gtins");
       const prices = await dependencies.client.getPricesForGtins(gtins, signal);
-      console.error("[open-prices] API returned", prices.length, "prices");
       throwIfCancelled(signal);
 
       const geographicScopeId = targets[0]?.geographicScopeId;
@@ -203,7 +200,6 @@ export function createOpenPricesHandlers(
       const batches = batchOutcomes(outcomes, MAX_INGESTION_BATCH_SIZE);
       for (const batch of batches) {
         throwIfCancelled(signal);
-        console.error("[open-prices] persisting batch of", batch.length);
         await dependencies.repository.persistPriceOutcomes(handle, batch, signal);
         persisted += batch.length;
       }
@@ -220,7 +216,6 @@ export function createOpenPricesHandlers(
 
       return { counters: { ...finalization.counts, failed } };
     } catch (error) {
-      console.error("[open-prices] handler error:", error instanceof Error ? error.message : String(error));
       const isCancelled =
         signal.aborted || error instanceof WorkerCancelledError;
       const isAccessChanged = error instanceof SourceAccessChangedError;
