@@ -227,7 +227,7 @@ const officialOfferWorkerSequences = [
   "extracted_offer_candidates_id_seq",
   "approved_offers_id_seq",
   "review_actions_id_seq",
-  "offer_targets_id_seq",
+  
   "offer_conditions_id_seq",
 ];
 
