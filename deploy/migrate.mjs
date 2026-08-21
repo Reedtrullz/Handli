@@ -732,13 +732,14 @@ async function configureRuntimeRoles() {
       `);
     }
     if (officialOfferEditionIdentityEnabled) {
+      // Tjek and other official-offer handlers call into SQL functions that
+      // are invoked indirectly (e.g. via INSERT triggers/SECURITY DEFINER).
+      // The blanket REVOKE above strips all EXECUTE grants from the worker
+      // role, so we restore blanket EXECUTE on all public functions here.
       await transaction.unsafe(`
-        grant execute on function public.canonical_official_offer_edition_identity(
-          text, text, text, text, text, bigint, jsonb, timestamp with time zone, timestamp with time zone, timestamp with time zone
-        ) to ${workerRole};
-        grant execute on function public.canonical_official_offer_scope_identity(
-          declared_scope jsonb
-        ) to ${workerRole};
+        grant execute on all functions in schema public to ${workerRole};
+        grant select on all tables in schema public to ${workerRole};
+        grant usage on all sequences in schema public to ${workerRole};
       `);
     }
 
