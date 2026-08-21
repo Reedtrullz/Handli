@@ -173,8 +173,7 @@ async function processCatalog(
     let gtin: string | undefined;
     if (match !== undefined) {
       const gtinRow = await db.$client<{ value: string }[]>`SELECT value FROM product_identifiers WHERE product_id = ${match.productId} AND scheme IN ('ean13', 'ean8') AND confidence = 100 AND verified_at IS NOT NULL LIMIT 1`;
-      if (gtinRow.length === 0) continue;
-      gtin = gtinRow[0].value;
+      if (gtinRow.length > 0) { gtin = gtinRow[0].value; }
     }
 
     const anomalyCodes = match === undefined ? ["unmatched-product"] : [];
