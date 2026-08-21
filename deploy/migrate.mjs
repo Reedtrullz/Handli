@@ -737,7 +737,7 @@ async function configureRuntimeRoles() {
           text, text, text, text, text, bigint, jsonb, timestamp with time zone, timestamp with time zone, timestamp with time zone
         ) to ${workerRole};
         grant execute on function public.canonical_official_offer_scope_identity(
-          text, text, text, bigint, jsonb
+          declared_scope jsonb
         ) to ${workerRole};
       `);
     }
