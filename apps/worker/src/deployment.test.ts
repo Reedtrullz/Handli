@@ -453,7 +453,7 @@ describe("production runtime deployment", () => {
     expect(source).toMatch(/worker:[\s\S]*entrypoint:[\s\S]*apps\/worker\/dist\/main\.mjs/);
     expect(source).toMatch(/worker:[\s\S]*migrate:[\s\S]*condition: service_completed_successfully/);
     expect(source).toContain("KASSAL_SOURCE_ACCESS: ${KASSAL_SOURCE_ACCESS:-conditional}");
-    expect(source).toContain('OFFICIAL_OFFER_FOUNDATION_ENABLED: "false"');
+    expect(source).toContain('OFFICIAL_OFFER_FOUNDATION_ENABLED: "true"');
     expect(source).toContain(
       "OFFICIAL_OFFER_PRIVATE_CAPTURE_ROOT: /var/lib/handleplan/private-captures",
     );

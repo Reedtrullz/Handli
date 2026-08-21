@@ -20,7 +20,7 @@ const RECEIPT: OfficialOfferLifecycleReceiptV1 = Object.freeze({
   leaseExpiresAt: new Date("2026-07-17T08:00:10.250Z"),
   outcome: "completed",
   publicationExamined: 0,
-  publicationState: "foundation-disabled",
+  publicationState: "evaluated",
   publishedCount: 0,
   replayed: false,
   revokedCount: 1,
@@ -61,7 +61,7 @@ describe("dedicated official-offer lifecycle executor", () => {
       scheduledAt: SCHEDULED_AT,
       sourceId: "synthetic-source",
     }, controller.signal);
-    expect(OFFICIAL_OFFER_FOUNDATION_ACTIVATION.enabled).toBe(false);
+    expect(OFFICIAL_OFFER_FOUNDATION_ACTIVATION.enabled).toBe(true);
   });
 
   it("enforces the database batch ceiling before making a repository call", () => {

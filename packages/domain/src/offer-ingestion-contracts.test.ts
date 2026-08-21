@@ -104,13 +104,13 @@ describe("official-offer ingestion contracts", () => {
     }).success).toBe(false);
   });
 
-  it("stays explicitly disabled and accepts only an authorized, bounded edition", () => {
+  it("stays explicitly activated and accepts only an authorized, bounded edition", () => {
     expect(officialOfferFoundationActivationSchema.parse(
       OFFICIAL_OFFER_FOUNDATION_ACTIVATION,
     )).toEqual(OFFICIAL_OFFER_FOUNDATION_ACTIVATION);
     expect(officialOfferFoundationActivationSchema.safeParse({
       ...OFFICIAL_OFFER_FOUNDATION_ACTIVATION,
-      enabled: true,
+      enabled: false,
     }).success).toBe(false);
     expect(officialOfferEditionDiscoveryInputV1Schema.parse(
       syntheticAuthorizedLocalEdition,

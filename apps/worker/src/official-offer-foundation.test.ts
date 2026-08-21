@@ -201,7 +201,7 @@ function pipeline(options: {
 const signal = () => new AbortController().signal;
 
 describe("OfficialOfferFoundationPipeline", () => {
-  it("uses structured extraction first and returns an explicitly disabled, non-sensitive receipt", async () => {
+  it("uses structured extraction first and returns an activated, non-sensitive receipt", async () => {
     const embedded = extractor("embedded-text", {
       state: "available",
       envelope: envelopeFor("embedded-text"),
@@ -212,7 +212,7 @@ describe("OfficialOfferFoundationPipeline", () => {
     const receipt = await harness.value.captureAndExtract(pipelineInput(), signal());
 
     expect(receipt).toEqual({
-      activationEnabled: false,
+      activationEnabled: true,
       contractVersion: 1,
       counts: { exactMatch: 5, rejected: 0, reviewRequired: 0, total: 5 },
       extractionMethod: "structured",

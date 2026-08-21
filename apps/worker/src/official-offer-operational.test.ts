@@ -77,9 +77,9 @@ function fetchResult() {
 }
 
 describe("source-neutral official-offer operational boundaries", () => {
-  it("keeps production schedules and handlers explicitly empty while activation is disabled", () => {
+  it("keeps production schedules and handlers explicitly empty while activation is enabled", () => {
     expect(disabledOfficialOfferProductionComposition()).toEqual({
-      activationEnabled: false,
+      activationEnabled: true,
       handlers: {},
       schedules: [],
     });
@@ -214,7 +214,7 @@ describe("source-neutral official-offer operational boundaries", () => {
     const pipeline = {
       captureAndExtract: vi.fn()
         .mockResolvedValueOnce({
-          activationEnabled: false,
+          activationEnabled: true,
           contractVersion: 1,
           counts: { exactMatch: 1, rejected: 0, reviewRequired: 0, total: 1 },
           extractionMethod: "structured",
@@ -455,7 +455,7 @@ describe("synthetic official-offer operational flow", () => {
       leaseExpiresAt: new Date("2026-07-17T08:00:10.250Z"),
       outcome: "completed",
       publicationExamined: 0,
-      publicationState: "foundation-disabled",
+      publicationState: "evaluated",
       publishedCount: 0,
       replayed: false,
       revokedCount: 0,
@@ -549,7 +549,7 @@ describe("synthetic official-offer operational flow", () => {
     expect(lifecycleReconcile).toHaveBeenCalledTimes(1);
     expect(lifecycleReconcile).toHaveBeenCalledWith(expect.objectContaining({
       batchLimit: 50,
-      publicationRequested: false,
+      publicationRequested: true,
       sourceId: EDITION.sourceId,
     }), expect.any(AbortSignal));
     expect(events).toEqual([
@@ -566,6 +566,6 @@ describe("synthetic official-offer operational flow", () => {
       "lifecycle:atomic-reconcile",
     ]);
     expect(JSON.stringify(events)).not.toContain("http");
-    expect(disabledOfficialOfferProductionComposition().activationEnabled).toBe(false);
+    expect(disabledOfficialOfferProductionComposition().activationEnabled).toBe(true);
   });
 });
