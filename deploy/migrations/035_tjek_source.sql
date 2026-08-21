@@ -4,8 +4,8 @@
 
 BEGIN;
 
-INSERT INTO data_sources (id, runtime_state)
-VALUES ('tjek', 'approved')
+INSERT INTO data_sources (id, display_name, source_kind, runtime_state)
+VALUES ('tjek', 'Tjek / Bunnpris kundeavis', 'offer', 'approved')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO source_permissions (source_id, permissions, decision, reviewed_at, created_at)
