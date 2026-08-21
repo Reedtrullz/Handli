@@ -57,12 +57,17 @@ async function computeEditionIdentitySha256(
   db: HandleplanDatabase,
   args: { sourceId: string; externalId: string; chain: string; title: string; contentKind: string; geographicScopeId: number; validFrom: Date; validUntil: Date; discoveredAt: Date },
 ): Promise<string> {
-  const row = await db.$client<{ hash: string }[]>`SELECT encode(sha256(convert_to(
+  const scopeRow = await db.$client<{ scope_kind: string; label: string; country_code: string }[]>`SELECT scope_kind, label, country_code FROM public.geographic_scopes WHERE id = ${args.geographicScopeId} AND status = 'active'`;
+    const sr = scopeRow[0];
+    if (!sr) throw new Error("Geographic scope not found for id " + args.geographicScopeId);
+    const declaredScope = sr.scope_kind === "national"
+      ? { kind: "national", countryCode: sr.country_code }
+      : { kind: "national", countryCode: sr.country_code };
+    const row = await db.$client<{ hash: string }[]>`SELECT encode(sha256(convert_to(
     public.canonical_official_offer_edition_identity(
       ${args.sourceId}, ${args.externalId}, ${args.chain}, ${args.title},
       ${args.contentKind}, ${args.geographicScopeId},
-      (SELECT public.canonical_official_offer_scope_identity(declared_geographic_scope)
-       FROM public.geographic_scopes WHERE id = ${args.geographicScopeId} AND status = 'active')::jsonb,
+      ${JSON.stringify(declaredScope)}::jsonb,
       ${args.validFrom}, ${args.validUntil}, ${args.discoveredAt}
     ), 'UTF8')), 'hex') AS hash`;
   const hash = row[0]?.hash;
