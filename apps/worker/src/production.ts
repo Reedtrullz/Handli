@@ -61,7 +61,9 @@ export const KASSALAPP_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition[]
     intervalMs: 24 * 60 * 60 * 1_000,
     kind: "catalog-refresh",
     sourceId: KASSALAPP_SOURCE_ID,
-    timeoutMs: 5 * 60 * 1_000,
+    // 500 exact-target EAN lookups at a 60 requests/minute provider budget
+    // need roughly nine minutes; leave bounded headroom for retries.
+    timeoutMs: 12 * 60 * 1_000,
   }),
   Object.freeze({
     anchorAt: "2026-08-14T00:40:00.000Z",

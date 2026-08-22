@@ -376,7 +376,13 @@ function databaseTimestamp(value: unknown): Date | undefined {
 function offerBackedSummaryFromRow(
   row: OfferBackedRow,
 ): ExactProductPlanApiProductSummary {
-  const gtin = typeof row.gtin === "string" && isValidGtin(row.gtin)
+  // Identity here is anchored by the reviewed-offer chain in SQL, not by a
+  // GTIN checksum: upstream retailers publish checksum-invalid EANs, and the
+  // review already bound this row to the canonical product. Keep the shape
+  // contract (13/8 digits) but do not re-run the checksum gate that catalog
+  // observations use.
+  const gtin = typeof row.gtin === "string"
+    && (/^\d{8}$/.test(row.gtin) || /^\d{13}$/.test(row.gtin))
     ? row.gtin
     : undefined;
   const sourceId = canonicalIdentifier(row.source_id, SOURCE_ID_MAX_LENGTH);
