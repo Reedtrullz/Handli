@@ -22,7 +22,7 @@ begin
   v_offer_select := 'select' || chr(10) ||
     pg_catalog.regexp_replace(
       v_body,
-      '^from payload_bounded[[:space:]]+where[[:space:]]+public\.assert_public_official_offer_payload_v1\([[:space:]]+payload_bounded\.total_payload_bytes[[:space:]]+\)[[:space:]]+order by payload_bounded\.product_id,[[:space:]]*payload_bounded\.valid_until,[[:space:]]*payload_bounded\.offer_id[[:space:]]+limit 501;[[:space:]]+end;$',
+      '^from payload_bounded[[:space:]]+where[[:space:]]+public\.assert_public_official_offer_payload_v1\([[:space:]]+payload_bounded\.total_payload_bytes[[:space:]]+\)[[:space:]]+order by payload_bounded\.product_id,[[:space:]]*payload_bounded\.valid_until,[[:space:]]*payload_bounded\.offer_id[[:space:]]+limit 501;[[:space:]]+end;[[:space:]]*$',
       E',\n      true as product_is_offer_backed\n    from payload_bounded\n    limit 500',
     );
 
