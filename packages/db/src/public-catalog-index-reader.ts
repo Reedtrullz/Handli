@@ -835,8 +835,17 @@ export class PostgresPublicCatalogIndexReader implements
           if (!isRecord(candidate)) {
             throw new PublicCatalogIndexReaderError("UNAVAILABLE");
           }
-          return offerBackedEligibilityRow(candidate as unknown as OfferBackedRow);
+          // A single offer-backed row with unverifiable identity (for example a
+          // checksum-invalid GTIN captured upstream) must not make the whole
+          // discovery page unavailable; drop that row and serve the rest.
+          try {
+            return offerBackedEligibilityRow(candidate as unknown as OfferBackedRow);
+          } catch (error) {
+            if (!(error instanceof PublicCatalogIndexReaderError)) throw error;
+            return null;
+          }
         })
+        .filter((row): row is OfferBackedCatalogEligibilityRow => row !== null)
         .sort((left, right) =>
           compareCatalogText(left.sort_name, right.sort_name)
           || compareCatalogText(left.gtin, right.gtin));
