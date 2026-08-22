@@ -182,6 +182,9 @@ const officialOfferEditionIdentityEnabled = migrationFiles.includes(
 const officialOfferPublicationHealthEnabled = migrationFiles.includes(
   "027_official_offer_publication_health.sql",
 );
+const offerBackedDiscoveryEnabled = migrationFiles.includes(
+  "040_offer_backed_discovery.sql",
+);
 
 const protectedAppendOnlyTables = [
   "catalog_observations",
@@ -717,6 +720,17 @@ async function configureRuntimeRoles() {
       await transaction.unsafe(`
         grant execute on function public.public_official_offer_rows_v1(
           bigint[], timestamp with time zone
+        ) to ${webRole};
+      `);
+    }
+
+    if (offerBackedDiscoveryEnabled) {
+      // Discovery may use the same reviewed-offer evidence as an identity
+      // fallback. This remains a bounded SECURITY DEFINER boundary; the web
+      // role receives no direct access to offer pipeline tables.
+      await transaction.unsafe(`
+        grant execute on function public.public_offer_backed_discovery_rows_v1(
+          timestamp with time zone
         ) to ${webRole};
       `);
     }

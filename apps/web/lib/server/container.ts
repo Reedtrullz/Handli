@@ -561,7 +561,10 @@ export function createServerContainer(env: ServerEnv): ServerContainer {
   }
 
   const connection = createDatabase(env.DATABASE_URL);
-  const publicCatalogIndex = new PostgresPublicCatalogIndexReader(connection.db);
+  const publicCatalogIndex = new PostgresPublicCatalogIndexReader(
+    connection.db,
+    true,
+  );
   const priceService = new PriceService({
     geographicDirectoryReader: new PostgresGeographicDirectoryReader(connection.db),
     officialOfferReader: new PostgresPublicOfficialOfferReader(connection.db),

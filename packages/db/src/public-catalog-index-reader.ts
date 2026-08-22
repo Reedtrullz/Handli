@@ -4,6 +4,8 @@ import {
   EXACT_PRODUCT_CATALOG_MAX_AGE_MS,
   isFiniteDate,
   isValidGtin,
+  exactProductPlanApiProductSummarySchema,
+  type ExactProductPlanApiEvidenceSource,
   type ExactProductPlanApiProductSummary,
 } from "@handleplan/domain";
 
@@ -90,6 +92,32 @@ export interface PublicCatalogCategoryFacetDirectory {
   hasMore: boolean;
 }
 
+/** Bounded projection returned by migration 040; never exposes pipeline rows. */
+interface OfferBackedRow {
+  amount_ore: unknown;
+  before_amount_ore: unknown;
+  brand: unknown;
+  captured_at: unknown;
+  chain: unknown;
+  channels: unknown;
+  display_name: unknown;
+  geographic_scope: unknown;
+  gtin: unknown;
+  identifier_verified_at: unknown;
+  membership_requirement: unknown;
+  multibuy_group_amount_ore: unknown;
+  multibuy_quantity: unknown;
+  offer_id: unknown;
+  package_amount: unknown;
+  package_unit: unknown;
+  product_id: unknown;
+  product_is_offer_backed: unknown;
+  source_display_name: unknown;
+  source_id: unknown;
+  source_record_id: unknown;
+  units_per_pack: unknown;
+}
+
 export interface PublicCatalogDiscoveryPageOptions {
   categoryId?: string;
   cursor?: PublicCatalogDiscoveryPosition;
@@ -123,6 +151,12 @@ interface CategoryFacetRow {
   product_count: unknown;
 }
 
+interface OfferBackedCatalogEligibilityRow extends CatalogEligibilityRow {
+  category_path: null;
+  sort_name: string;
+  sort_rank: number;
+}
+
 interface CanonicalCategoryPathEntry {
   depth: number;
   name: string;
@@ -138,6 +172,7 @@ const SOURCE_ID_MAX_LENGTH = 64;
 const CANONICAL_SOURCE_CATEGORY_ID = /^(?:0|[1-9][0-9]*)$/u;
 const DISCOVERY_SCAN_LIMIT_MAXIMUM = 50;
 const DISCOVERY_SORT_NAME_MAX_LENGTH = 500;
+const OFFICIAL_OFFER_SOURCE_RECORD_PREFIX = "official-source-record:";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -329,6 +364,125 @@ function searchRank(summary: ExactProductPlanApiProductSummary, query: string): 
   return 4;
 }
 
+function databaseTimestamp(value: unknown): Date | undefined {
+  const date = value instanceof Date
+    ? value
+    : typeof value === "string"
+      ? new Date(value)
+      : undefined;
+  return date !== undefined && isFiniteDate(date) ? date : undefined;
+}
+
+function offerBackedSummaryFromRow(
+  row: OfferBackedRow,
+): ExactProductPlanApiProductSummary {
+  const gtin = typeof row.gtin === "string" && isValidGtin(row.gtin)
+    ? row.gtin
+    : undefined;
+  const sourceId = canonicalIdentifier(row.source_id, SOURCE_ID_MAX_LENGTH);
+  const displayName = canonicalIdentifier(row.display_name, 240);
+  const brand = row.brand === null ? undefined : canonicalIdentifier(row.brand, 160);
+  const packageAmount = Number.isSafeInteger(row.package_amount)
+    && (row.package_amount as number) > 0
+    ? row.package_amount as number
+    : undefined;
+  const packageUnit = row.package_unit === "g"
+    || row.package_unit === "ml"
+    || row.package_unit === "piece"
+    || row.package_unit === "package"
+    ? row.package_unit
+    : undefined;
+  const unitsPerPack = Number.isSafeInteger(row.units_per_pack)
+    && (row.units_per_pack as number) > 0
+    ? row.units_per_pack as number
+    : undefined;
+  const capturedAt = databaseTimestamp(row.captured_at);
+  const verifiedAt = databaseTimestamp(row.identifier_verified_at);
+  const sourceDisplayName = canonicalIdentifier(row.source_display_name, 160);
+  const sourceRecordId = typeof row.source_record_id === "string"
+    && row.source_record_id.startsWith(OFFICIAL_OFFER_SOURCE_RECORD_PREFIX)
+    ? row.source_record_id.slice(OFFICIAL_OFFER_SOURCE_RECORD_PREFIX.length)
+    : undefined;
+  if (
+    gtin === undefined
+    || sourceId === undefined
+    || displayName === undefined
+    || unitsPerPack === undefined
+    || capturedAt === undefined
+    || verifiedAt === undefined
+    || verifiedAt.getTime() > capturedAt.getTime()
+    || sourceDisplayName === undefined
+    || !/^[0-9a-f]{64}$/u.test(sourceRecordId ?? "")
+  ) {
+    throw new PublicCatalogIndexReaderError("UNAVAILABLE");
+  }
+
+  const parsed = exactProductPlanApiProductSummarySchema.safeParse({
+    ...(brand === undefined ? {} : { brand }),
+    ...(packageAmount === undefined || packageUnit === undefined
+      ? {}
+      : { packageMeasure: { amount: packageAmount, unit: packageUnit } }),
+    catalogEvidence: {
+      observedAt: capturedAt.toISOString(),
+      source: {
+        contractVersion: 1,
+        displayName: sourceDisplayName,
+        id: sourceId,
+        sourceClass: "offer",
+        state: "approved",
+      },
+      sourceRecordId: `source-record:${sourceRecordId}`,
+    },
+    displayName,
+    gtin,
+    unitsPerPack,
+  });
+  if (!parsed.success) throw new PublicCatalogIndexReaderError("UNAVAILABLE");
+  return parsed.data;
+}
+
+function offerBackedEligibilityRow(
+  row: OfferBackedRow,
+): OfferBackedCatalogEligibilityRow {
+  if (
+    typeof row.product_is_offer_backed !== "boolean"
+    || row.product_is_offer_backed !== true
+  ) {
+    throw new PublicCatalogIndexReaderError("UNAVAILABLE");
+  }
+  const summary = offerBackedSummaryFromRow(row);
+  return {
+    brand: summary.brand ?? null,
+    canonical_product_id: row.product_id as number,
+    catalog_last_seen_at: new Date(summary.catalogEvidence.observedAt),
+    catalog_raw_record_hash:
+      summary.catalogEvidence.sourceRecordId.slice("source-record:".length),
+    catalog_runtime_state: "approved",
+    catalog_source_display_name: summary.catalogEvidence.source.displayName,
+    catalog_source_id: summary.catalogEvidence.source.id,
+    catalog_source_kind: "offer",
+    category_path: null,
+    confidence: 100,
+    display_name: summary.displayName,
+    gtin: summary.gtin,
+    package_amount: summary.packageMeasure?.amount ?? null,
+    package_unit: summary.packageMeasure?.unit ?? null,
+    permission_catalog: true,
+    permission_decision: "approved",
+    permission_id: row.offer_id as number,
+    permission_reviewed_at: new Date(summary.catalogEvidence.observedAt),
+    permission_valid_until: null,
+    scheme: summary.gtin.length === 8 ? "ean8" : "ean13",
+    sort_name: summary.displayName.toLocaleLowerCase("nb-NO"),
+    sort_rank: 0,
+    source_permission_expires_at: null,
+    source_permission_reviewed_at: new Date(summary.catalogEvidence.observedAt),
+    status: "active",
+    units_per_pack: summary.unitsPerPack,
+    verified_at: new Date(summary.catalogEvidence.observedAt),
+  };
+}
+
 function compareSearch(
   left: ExactProductPlanApiProductSummary,
   right: ExactProductPlanApiProductSummary,
@@ -341,7 +495,10 @@ function compareSearch(
 export class PostgresPublicCatalogIndexReader implements
   PublicCatalogIndexReader,
   PublicCatalogDiscoveryIndexReader {
-  constructor(private readonly db: HandleplanDatabase) {}
+  constructor(
+    private readonly db: HandleplanDatabase,
+    private readonly offerBackedDiscoveryEnabled = false,
+  ) {}
 
   browse(
     limit: number,
@@ -431,6 +588,57 @@ export class PostgresPublicCatalogIndexReader implements
     const cursorSortName = cursor?.sortName ?? null;
     const cursorGtin = cursor?.gtin ?? null;
     const client = this.db.$client;
+    const offerBackedRowsPromise = this.offerBackedDiscoveryEnabled
+      ? await client<OfferBackedRow[]>`
+        select
+          offers.offer_id,
+          offers.source_id,
+          offers.source_display_name,
+          offers.source_record_id,
+          offers.chain,
+          offers.product_id,
+          offers.amount_ore,
+          offers.before_amount_ore,
+          offers.multibuy_quantity,
+          offers.multibuy_group_amount_ore,
+          offers.membership_requirement,
+          offers.member_program_id,
+          offers.valid_from,
+          offers.valid_until,
+          offers.geographic_scope,
+          offers.channels,
+          offers.captured_at,
+          offers.product_offer_count,
+          offers.total_offer_count,
+          offers.product_is_offer_backed,
+          product.display_name,
+          product.brand,
+          product.package_amount,
+          product.package_unit,
+          product.units_per_pack,
+          identifier.value as gtin,
+          identifier.verified_at as identifier_verified_at
+        from public.public_offer_backed_discovery_rows_v1(
+          ${atIso}::timestamptz
+        ) offers
+        inner join public.canonical_products product
+          on product.id = offers.product_id
+         and product.status = 'active'
+         and product.public_state_changed_at <= ${atIso}::timestamptz
+        inner join public.product_identifiers identifier
+          on identifier.product_id = offers.product_id
+         and identifier.scheme = case char_length(identifier.value)
+           when 8 then 'ean8'::text
+           else 'ean13'::text
+         end
+         and identifier.confidence = 100
+         and identifier.verified_at is not null
+         and identifier.verified_at <= ${atIso}::timestamptz
+         and identifier.created_at <= ${atIso}::timestamptz
+         and identifier.public_state_changed_at <= ${atIso}::timestamptz
+      `
+      : Promise.resolve([]);
+
     const sqlQuery = client<DiscoveryCatalogEligibilityRow[]>`
       with ranked_catalog as (
         select
@@ -602,29 +810,87 @@ export class PostgresPublicCatalogIndexReader implements
         sort_rank,
         sort_name collate "C",
         gtin
-      limit ${limit + 1}
+      limit ${DISCOVERY_SCAN_LIMIT_MAXIMUM}
     `;
 
     try {
-      const rows = await awaitAbortableCatalogQuery(sqlQuery, signal);
+      const [rows, rawOfferBackedRows] = await Promise.all([
+        awaitAbortableCatalogQuery(sqlQuery, signal),
+        offerBackedRowsPromise,
+      ]);
       if (signal?.aborted) throw new PublicCatalogIndexReaderError("CANCELLED");
-      if (!Array.isArray(rows) || rows.length > limit + 1) {
+      if (
+        !Array.isArray(rows)
+        || !Array.isArray(rawOfferBackedRows)
+        || rows.length > DISCOVERY_SCAN_LIMIT_MAXIMUM
+      ) {
         throw new PublicCatalogIndexReaderError("UNAVAILABLE");
       }
 
       const entries: PublicCatalogDiscoveryEntry[] = [];
       const canonicalProductIds = new Set<number>();
       const gtins = new Set<string>();
-      const scannedRows = (rows as unknown[]).slice(0, limit);
-      let nextPosition: PublicCatalogDiscoveryPosition | undefined;
-      for (const rawCandidate of scannedRows) {
-        const candidate = normalizeCatalogEligibilityRow(rawCandidate);
-        if (!isRecord(candidate)) {
+      const offerRows = (rawOfferBackedRows as unknown[])
+        .map((candidate) => {
+          if (!isRecord(candidate)) {
+            throw new PublicCatalogIndexReaderError("UNAVAILABLE");
+          }
+          return offerBackedEligibilityRow(candidate as unknown as OfferBackedRow);
+        })
+        .sort((left, right) =>
+          compareCatalogText(left.sort_name, right.sort_name)
+          || compareCatalogText(left.gtin, right.gtin));
+      const scannedRows = rows as unknown[];
+      for (const row of offerRows) {
+        if (
+          !Number.isSafeInteger(row.canonical_product_id)
+          || (row.canonical_product_id as number) <= 0
+          || canonicalProductIds.has(row.canonical_product_id)
+          || gtins.has(row.gtin)
+        ) {
           throw new PublicCatalogIndexReaderError("UNAVAILABLE");
         }
-        const row = candidate as unknown as DiscoveryCatalogEligibilityRow;
+        canonicalProductIds.add(row.canonical_product_id);
+        gtins.add(row.gtin);
+      }
+      const seenCatalogKeys = new Set<string>();
+      const catalogCandidates = scannedRows.map((candidate) => {
+        const normalized = normalizeCatalogEligibilityRow(candidate);
+        if (!isRecord(normalized)) {
+          throw new PublicCatalogIndexReaderError("UNAVAILABLE");
+        }
+        const row = normalized as unknown as DiscoveryCatalogEligibilityRow;
+        const key = query !== undefined && isValidGtin(query)
+          ? `gtin:${row.gtin}`
+          : `product:${row.canonical_product_id}`;
+        if (seenCatalogKeys.has(key)) {
+          throw new PublicCatalogIndexReaderError("UNAVAILABLE");
+        }
+        seenCatalogKeys.add(key);
+        return row;
+      });
+      const offerKeySet = new Set(offerRows.map((row) =>
+        query !== undefined && isValidGtin(query)
+          ? `gtin:${row.gtin}`
+          : `product:${row.canonical_product_id}`));
+      const mergedCandidates = [
+        ...catalogCandidates,
+        ...offerRows.filter((row) => {
+          if (categoryId !== undefined) return false;
+          const key = query !== undefined && isValidGtin(query)
+            ? `gtin:${row.gtin}`
+            : `product:${row.canonical_product_id}`;
+          return !offerKeySet.has(key) || !seenCatalogKeys.has(key);
+        }),
+      ].sort((left, right) =>
+        (left.sort_rank as number) - (right.sort_rank as number)
+        || compareCatalogText(left.sort_name as string, right.sort_name as string)
+        || compareCatalogText(left.gtin as string, right.gtin as string));
+      let nextPosition: PublicCatalogDiscoveryPosition | undefined;
+      const pageCandidates = mergedCandidates.slice(0, limit);
+      for (const row of pageCandidates) {
         nextPosition = positionFromRow(row);
-        const classification = classifyCatalogRow(candidate, at);
+        const classification = classifyCatalogRow(row, at);
         if (classification === "malformed") {
           throw new PublicCatalogIndexReaderError("UNAVAILABLE");
         }
@@ -660,16 +926,16 @@ export class PostgresPublicCatalogIndexReader implements
           product,
         });
       }
+      const hasMore = mergedCandidates.length > limit;
       const sorted = entries.sort((left, right) =>
         left.catalogPosition.rank - right.catalogPosition.rank
         || compareCatalogText(left.catalogPosition.sortName, right.catalogPosition.sortName)
         || compareCatalogText(left.catalogPosition.gtin, right.catalogPosition.gtin));
-      const hasMore = rows.length > limit;
       return {
         entries: sorted,
         hasMore,
         ...(hasMore && nextPosition !== undefined ? { nextPosition } : {}),
-        scannedCount: scannedRows.length,
+        scannedCount: Math.min(mergedCandidates.length, limit),
       };
     } catch (error) {
       if (error instanceof PublicCatalogIndexReaderError) throw error;

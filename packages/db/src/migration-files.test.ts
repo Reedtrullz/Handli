@@ -104,6 +104,8 @@ describe("forward-only v1 migrations", () => {
       "036_tjek_official_offer_permission.sql",
       "037_worker_official_offer_grants.sql",
       "038_tjek_function_grants.sql",
+      "039_tjek_null_comparison_fix.sql",
+      "040_offer_backed_discovery.sql",
     ]);
   });
 
@@ -113,7 +115,7 @@ describe("forward-only v1 migrations", () => {
       .sort();
     expect(files[0]).toBe("001_price_cache.sql");
     const guardedFiles = files.slice(1);
-    expect(guardedFiles.at(-1)).toBe("038_tjek_function_grants.sql");
+    expect(guardedFiles.at(-1)).toBe("040_offer_backed_discovery.sql");
     const source = (
       await Promise.all(
         guardedFiles.map((file) => readFile(path.join(migrationsDirectory, file), "utf8")),
