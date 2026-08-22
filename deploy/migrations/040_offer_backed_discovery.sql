@@ -199,7 +199,7 @@ begin
       and review.candidate_id = candidate.id
       and review.offer_id = offer.id
       and review.action in ('approve', 'correct_and_approve')
-      and review.decision_boundary_version = 1
+      and review.decision_boundary_version = 2
       and offer.version = 1
       and review.expected_version = 0
       and review.expected_version = offer.version - 1
