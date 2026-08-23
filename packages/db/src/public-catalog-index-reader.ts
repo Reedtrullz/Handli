@@ -423,6 +423,10 @@ function offerBackedSummaryFromRow(
     throw new PublicCatalogIndexReaderError("UNAVAILABLE");
   }
 
+  // Mirror exactProductPlanApiProductSummarySchema but keep the GTIN as a
+  // shape-validated string. The public schema additionally enforces the GS1
+  // checksum, which some reviewed retailer EANs legitimately fail; identity
+  // here comes from the SQL-reviewed offer chain.
   const parsed = exactProductPlanApiProductSummarySchema.safeParse({
     ...(brand === undefined ? {} : { brand }),
     ...(packageAmount === undefined || packageUnit === undefined
@@ -443,7 +447,34 @@ function offerBackedSummaryFromRow(
     gtin,
     unitsPerPack,
   });
-  if (!parsed.success) throw new PublicCatalogIndexReaderError("UNAVAILABLE");
+  if (!parsed.success) {
+    if (parsed.error.issues.some(({ path }) => path[0] !== "gtin")) {
+      throw new PublicCatalogIndexReaderError("UNAVAILABLE");
+    }
+    if (gtin === undefined || !/^\d{8}$|^\d{13}$/.test(gtin)) {
+      throw new PublicCatalogIndexReaderError("UNAVAILABLE");
+    }
+    return {
+      ...(brand === undefined ? {} : { brand }),
+      ...(packageAmount === undefined || packageUnit === undefined
+        ? {}
+        : { packageMeasure: { amount: packageAmount, unit: packageUnit } }),
+      catalogEvidence: {
+        observedAt: capturedAt.toISOString(),
+        source: {
+          contractVersion: 1,
+          displayName: sourceDisplayName,
+          id: sourceId,
+          sourceClass: "offer",
+          state: "approved",
+        },
+        sourceRecordId: `source-record:${sourceRecordId}`,
+      },
+      displayName,
+      gtin,
+      unitsPerPack,
+    };
+  }
   return parsed.data;
 }
 
