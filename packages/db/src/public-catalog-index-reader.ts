@@ -943,16 +943,17 @@ export class PostgresPublicCatalogIndexReader implements
             throw new PublicCatalogIndexReaderError("UNAVAILABLE");
           }
           if (classification === "ineligible") continue;
-        } else if (row.status !== "active") {
-          continue;
-        }
-        const sourceId = canonicalIdentifier(row.catalog_source_id, SOURCE_ID_MAX_LENGTH);
-        const categoryPath = sourceId === undefined
-          ? undefined
-          : parseCategoryPath(row.category_path, sourceId);
-        if (categoryPath === undefined) {
-          throw new PublicCatalogIndexReaderError("UNAVAILABLE");
-        }
+       } else if (row.status !== "active") {
+         continue;
+       }
+      const isOfferBackedRow = offerBackedRowsById.has(row.canonical_product_id as number);
+       const sourceId = canonicalIdentifier(row.catalog_source_id, SOURCE_ID_MAX_LENGTH);
+       const categoryPath = sourceId === undefined
+         ? undefined
+         : parseCategoryPath(row.category_path, sourceId);
+        if (categoryPath === undefined || (isOfferBackedRow && categoryPath === null)) {
+         throw new PublicCatalogIndexReaderError("UNAVAILABLE");
+       }
         if (
           categoryId !== undefined
           && (categoryPath === null || !categoryPath.some(({ id }) => id === categoryId))
