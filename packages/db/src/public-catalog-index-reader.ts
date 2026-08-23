@@ -933,14 +933,19 @@ export class PostgresPublicCatalogIndexReader implements
         || compareCatalogText(left.sort_name as string, right.sort_name as string)
         || compareCatalogText(left.gtin as string, right.gtin as string));
       let nextPosition: PublicCatalogDiscoveryPosition | undefined;
-      const pageCandidates = mergedCandidates.slice(0, limit);
-      for (const row of pageCandidates) {
-        nextPosition = positionFromRow(row);
-        const classification = classifyCatalogRow(row, at);
-        if (classification === "malformed") {
-          throw new PublicCatalogIndexReaderError("UNAVAILABLE");
+     const pageCandidates = mergedCandidates.slice(0, limit);
+      const offerBackedRowsById = new Set(offerRows.map((row) => row.canonical_product_id));
+     for (const row of pageCandidates) {
+       nextPosition = positionFromRow(row);
+        if (!offerBackedRowsById.has(row.canonical_product_id as number)) {
+          const classification = classifyCatalogRow(row, at);
+          if (classification === "malformed") {
+            throw new PublicCatalogIndexReaderError("UNAVAILABLE");
+          }
+          if (classification === "ineligible") continue;
+        } else if (row.status !== "active") {
+          continue;
         }
-        if (classification === "ineligible") continue;
         const sourceId = canonicalIdentifier(row.catalog_source_id, SOURCE_ID_MAX_LENGTH);
         const categoryPath = sourceId === undefined
           ? undefined
