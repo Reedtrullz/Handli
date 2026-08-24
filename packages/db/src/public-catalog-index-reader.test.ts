@@ -77,6 +77,57 @@ function publicCategoryId(sourceId: string, sourceCategoryId: string): string {
   return `category:${digest}`;
 }
 
+function sequentialDatabaseWith(results: unknown[][]): {
+  captures: CapturedQuery[];
+  db: HandleplanDatabase;
+} {
+  const captures: CapturedQuery[] = [];
+  let callIndex = 0;
+  const client = (strings: TemplateStringsArray, ...parameters: unknown[]) => {
+    captures.push({ parameters, sql: strings.join("?") });
+    const rows = results[Math.min(callIndex, results.length - 1)];
+    callIndex += 1;
+    return resolvedQuery(rows);
+  };
+  return {
+    captures,
+    db: { $client: client } as unknown as HandleplanDatabase,
+  };
+}
+
+function offerBackedApiRow(overrides: Record<string, unknown> = {}) {
+  return {
+    amount_ore: 19_900,
+    before_amount_ore: null,
+    brand: "TINE",
+    captured_at: new Date("2026-07-16T10:00:00.000Z"),
+    chain: "bunnpris",
+    channels: ["in-store"],
+    display_name: "TINE Lettmelk",
+    geographic_scope: null,
+    gtin: GTIN_MILK,
+    identifier_verified_at: new Date("2026-07-16T09:00:00.000Z"),
+    member_program_id: null,
+    membership_requirement: "public",
+    multibuy_group_amount_ore: null,
+    multibuy_quantity: null,
+    offer_id: 1,
+    package_amount: 1_000,
+    package_unit: "ml",
+    product_id: 1,
+    product_is_offer_backed: true,
+    product_offer_count: 1,
+    source_display_name: "Tjek / Bunnpris kundeavis",
+    source_id: "tjek",
+    source_record_id: `official-source-record:${"2".repeat(64)}`,
+    total_offer_count: 1,
+    units_per_pack: 1,
+    valid_from: new Date("2026-07-10T00:00:00.000Z"),
+    valid_until: new Date("2026-07-24T00:00:00.000Z"),
+    ...overrides,
+  };
+}
+
 function categoryEntry(
   sourceCategoryId = "10",
   depth = 1,
@@ -188,7 +239,7 @@ describe("PostgresPublicCatalogIndexReader", () => {
     expect(captures[0]!.sql).toContain("escape '\\'");
   });
 
-  it("preserves unknown and known-empty category paths for discovery", async () => {
+  it("rejects unknown category paths for ordinary catalog rows", async () => {
     const unknownDatabase = databaseWith(() => resolvedQuery([discoveryRow()]));
     const emptyDatabase = databaseWith(() => resolvedQuery([discoveryRow({
       category_path: [],
@@ -196,11 +247,22 @@ describe("PostgresPublicCatalogIndexReader", () => {
 
     await expect(new PostgresPublicCatalogIndexReader(unknownDatabase.db)
       .readDiscoveryPage({ limit: 10 }, AT))
-      .resolves.toMatchObject({ entries: [{ categoryPath: null, product: { gtin: GTIN_MILK } }] });
+      .rejects.toEqual(readerError("UNAVAILABLE"));
     await expect(new PostgresPublicCatalogIndexReader(emptyDatabase.db)
       .readDiscoveryPage({ limit: 10 }, AT))
       .resolves.toMatchObject({ entries: [{ categoryPath: [], product: { gtin: GTIN_MILK } }] });
     expectSerializedPermissionSelection(unknownDatabase.captures[0]!.sql);
+  });
+
+  it("preserves offer-backed null category paths for discovery", async () => {
+    const { db } = sequentialDatabaseWith([
+      [offerBackedApiRow()],
+      [],
+    ]);
+
+    await expect(new PostgresPublicCatalogIndexReader(db, true)
+      .readDiscoveryPage({ limit: 10 }, AT))
+      .resolves.toMatchObject({ entries: [{ categoryPath: null, product: { gtin: GTIN_MILK } }] });
   });
 
   it("returns source-scoped opaque category IDs and filters only after latest selection", async () => {

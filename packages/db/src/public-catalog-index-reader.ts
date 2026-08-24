@@ -325,6 +325,29 @@ function positionFromRow(row: DiscoveryCatalogEligibilityRow): PublicCatalogDisc
   }) ?? (() => { throw new PublicCatalogIndexReaderError("UNAVAILABLE"); })();
 }
 
+// Offer-backed identity comes from the reviewed-offer chain, so the cursor
+// position accepts shape-valid GTINs whose GS1 checksum upstream retailers
+// sometimes publish incorrectly.
+function offerBackedPositionFromRow(
+  row: DiscoveryCatalogEligibilityRow,
+): PublicCatalogDiscoveryPosition {
+  const gtin = row.gtin;
+  const rank = row.sort_rank;
+  const sortName = row.sort_name;
+  if (typeof gtin !== "string"
+    || (!(/^\d{8}$/.test(gtin) || /^\d{13}$/.test(gtin)))
+    || !Number.isSafeInteger(rank)
+    || (rank as number) < 0
+    || (rank as number) > 4
+    || typeof sortName !== "string"
+    || sortName.length < 1
+    || sortName.length > DISCOVERY_SORT_NAME_MAX_LENGTH
+  ) {
+    throw new PublicCatalogIndexReaderError("UNAVAILABLE");
+  }
+  return { gtin, rank: rank as number, sortName };
+}
+
 function normalizeQuery(query: string): string | undefined {
   if (typeof query !== "string") return undefined;
   const normalized = query.trim();
@@ -517,6 +540,32 @@ function offerBackedEligibilityRow(
     status: "active",
     units_per_pack: summary.unitsPerPack,
     verified_at: new Date(summary.catalogEvidence.observedAt),
+  };
+}
+
+function offerBackedCatalogProductFromRow(
+  row: OfferBackedCatalogEligibilityRow,
+): ExactProductPlanApiProductSummary {
+  const packageMeasure = row.package_amount === null || row.package_unit === null
+    ? undefined
+    : { amount: row.package_amount, unit: row.package_unit as "g" | "ml" | "piece" | "package" };
+  return {
+    ...(row.brand === null ? {} : { brand: row.brand }),
+    catalogEvidence: {
+      observedAt: (row.verified_at as Date).toISOString(),
+      source: {
+        contractVersion: 1,
+        displayName: row.catalog_source_display_name,
+        id: row.catalog_source_id,
+        sourceClass: "offer",
+        state: "approved",
+      },
+      sourceRecordId: `source-record:${row.catalog_raw_record_hash}`,
+    },
+    displayName: row.display_name,
+    gtin: row.gtin,
+    ...(packageMeasure === undefined ? {} : { packageMeasure }),
+    unitsPerPack: row.units_per_pack,
   };
 }
 
@@ -872,11 +921,9 @@ export class PostgresPublicCatalogIndexReader implements
           if (!isRecord(candidate)) {
             throw new PublicCatalogIndexReaderError("UNAVAILABLE");
           }
-          // A single offer-backed row with unverifiable identity (for example a
-          // checksum-invalid GTIN captured upstream) must not make the whole
-          // discovery page unavailable; drop that row and serve the rest.
+          const apiRow = candidate as unknown as OfferBackedRow;
           try {
-            return offerBackedEligibilityRow(candidate as unknown as OfferBackedRow);
+            return offerBackedEligibilityRow(apiRow);
           } catch (error) {
             if (!(error instanceof PublicCatalogIndexReaderError)) throw error;
             return null;
@@ -935,8 +982,14 @@ export class PostgresPublicCatalogIndexReader implements
       let nextPosition: PublicCatalogDiscoveryPosition | undefined;
      const pageCandidates = mergedCandidates.slice(0, limit);
       const offerBackedRowsById = new Set(offerRows.map((row) => row.canonical_product_id));
+      const offerRowsByIdSummary = new Map(offerRows.map((row) => [
+        row.canonical_product_id as number,
+        row,
+      ]));
      for (const row of pageCandidates) {
-       nextPosition = positionFromRow(row);
+        nextPosition = offerBackedRowsById.has(row.canonical_product_id as number)
+          ? offerBackedPositionFromRow(row)
+          : positionFromRow(row);
         if (!offerBackedRowsById.has(row.canonical_product_id as number)) {
           const classification = classifyCatalogRow(row, at);
           if (classification === "malformed") {
@@ -951,9 +1004,11 @@ export class PostgresPublicCatalogIndexReader implements
        const categoryPath = sourceId === undefined
          ? undefined
          : parseCategoryPath(row.category_path, sourceId);
-        if (categoryPath === undefined || (isOfferBackedRow && categoryPath === null)) {
-         throw new PublicCatalogIndexReaderError("UNAVAILABLE");
-       }
+        // Offer-backed rows have no observed category; null is their valid
+        // category state. Catalog rows must parse to a real category path.
+        if (categoryPath === undefined || (!isOfferBackedRow && categoryPath === null)) {
+          throw new PublicCatalogIndexReaderError("UNAVAILABLE");
+        }
         if (
           categoryId !== undefined
           && (categoryPath === null || !categoryPath.some(({ id }) => id === categoryId))
@@ -961,14 +1016,16 @@ export class PostgresPublicCatalogIndexReader implements
           throw new PublicCatalogIndexReaderError("UNAVAILABLE");
         }
         if (
-          canonicalProductIds.has(row.canonical_product_id)
-          || gtins.has(row.gtin)
+          (!isOfferBackedRow && canonicalProductIds.has(row.canonical_product_id))
+          || (!isOfferBackedRow && gtins.has(row.gtin))
         ) {
           throw new PublicCatalogIndexReaderError("UNAVAILABLE");
         }
         canonicalProductIds.add(row.canonical_product_id);
         gtins.add(row.gtin);
-        const product = catalogSummaryFromRow(row);
+        const product = isOfferBackedRow
+          ? offerBackedCatalogProductFromRow(offerRowsByIdSummary.get(row.canonical_product_id as number)!)
+          : catalogSummaryFromRow(row);
         if (query !== undefined && !summaryMatchesQuery(product, query)) {
           throw new PublicCatalogIndexReaderError("UNAVAILABLE");
         }
