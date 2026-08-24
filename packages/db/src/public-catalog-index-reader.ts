@@ -396,6 +396,16 @@ function databaseTimestamp(value: unknown): Date | undefined {
   return date !== undefined && isFiniteDate(date) ? date : undefined;
 }
 
+// Bigint columns returned by SQL functions are serialized as decimal strings.
+function databasePositiveInteger(value: unknown): number | undefined {
+  const normalized = typeof value === "string" && /^(?:0|[1-9][0-9]*)$/u.test(value)
+    ? Number(value)
+    : value;
+  return Number.isSafeInteger(normalized) && (normalized as number) > 0
+    ? normalized as number
+    : undefined;
+}
+
 function offerBackedSummaryFromRow(
   row: OfferBackedRow,
 ): ExactProductPlanApiProductSummary {
@@ -504,8 +514,12 @@ function offerBackedSummaryFromRow(
 function offerBackedEligibilityRow(
   row: OfferBackedRow,
 ): OfferBackedCatalogEligibilityRow {
+  const productId = databasePositiveInteger(row.product_id);
+  const offerId = databasePositiveInteger(row.offer_id);
   if (
-    typeof row.product_is_offer_backed !== "boolean"
+    productId === undefined
+    || offerId === undefined
+    || typeof row.product_is_offer_backed !== "boolean"
     || row.product_is_offer_backed !== true
   ) {
     throw new PublicCatalogIndexReaderError("UNAVAILABLE");
@@ -513,7 +527,7 @@ function offerBackedEligibilityRow(
   const summary = offerBackedSummaryFromRow(row);
   return {
     brand: summary.brand ?? null,
-    canonical_product_id: row.product_id as number,
+    canonical_product_id: productId,
     catalog_last_seen_at: new Date(summary.catalogEvidence.observedAt),
     catalog_raw_record_hash:
       summary.catalogEvidence.sourceRecordId.slice("source-record:".length),
@@ -529,7 +543,7 @@ function offerBackedEligibilityRow(
     package_unit: summary.packageMeasure?.unit ?? null,
     permission_catalog: true,
     permission_decision: "approved",
-    permission_id: row.offer_id as number,
+    permission_id: offerId,
     permission_reviewed_at: new Date(summary.catalogEvidence.observedAt),
     permission_valid_until: null,
     scheme: summary.gtin.length === 8 ? "ean8" : "ean13",
@@ -1004,9 +1018,8 @@ export class PostgresPublicCatalogIndexReader implements
        const categoryPath = sourceId === undefined
          ? undefined
          : parseCategoryPath(row.category_path, sourceId);
-        // Offer-backed rows have no observed category; null is their valid
-        // category state. Catalog rows must parse to a real category path.
-        if (categoryPath === undefined || (!isOfferBackedRow && categoryPath === null)) {
+        // SQL NULL means category unknown; malformed paths remain unavailable.
+        if (categoryPath === undefined) {
           throw new PublicCatalogIndexReaderError("UNAVAILABLE");
         }
         if (

@@ -111,10 +111,10 @@ function offerBackedApiRow(overrides: Record<string, unknown> = {}) {
     membership_requirement: "public",
     multibuy_group_amount_ore: null,
     multibuy_quantity: null,
-    offer_id: 1,
+    offer_id: "1",
     package_amount: 1_000,
     package_unit: "ml",
-    product_id: 1,
+    product_id: "1",
     product_is_offer_backed: true,
     product_offer_count: 1,
     source_display_name: "Tjek / Bunnpris kundeavis",
@@ -239,7 +239,7 @@ describe("PostgresPublicCatalogIndexReader", () => {
     expect(captures[0]!.sql).toContain("escape '\\'");
   });
 
-  it("rejects unknown category paths for ordinary catalog rows", async () => {
+  it("preserves unknown and known-empty category paths for discovery", async () => {
     const unknownDatabase = databaseWith(() => resolvedQuery([discoveryRow()]));
     const emptyDatabase = databaseWith(() => resolvedQuery([discoveryRow({
       category_path: [],
@@ -247,7 +247,7 @@ describe("PostgresPublicCatalogIndexReader", () => {
 
     await expect(new PostgresPublicCatalogIndexReader(unknownDatabase.db)
       .readDiscoveryPage({ limit: 10 }, AT))
-      .rejects.toEqual(readerError("UNAVAILABLE"));
+      .resolves.toMatchObject({ entries: [{ categoryPath: null, product: { gtin: GTIN_MILK } }] });
     await expect(new PostgresPublicCatalogIndexReader(emptyDatabase.db)
       .readDiscoveryPage({ limit: 10 }, AT))
       .resolves.toMatchObject({ entries: [{ categoryPath: [], product: { gtin: GTIN_MILK } }] });
