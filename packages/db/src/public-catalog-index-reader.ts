@@ -976,10 +976,6 @@ export class PostgresPublicCatalogIndexReader implements
         seenCatalogKeys.add(key);
         return row;
       });
-      const offerKeySet = new Set(offerRows.map((row) =>
-        query !== undefined && isValidGtin(query)
-          ? `gtin:${row.gtin}`
-          : `product:${row.canonical_product_id}`));
       const mergedCandidates = [
         ...catalogCandidates,
         ...offerRows.filter((row) => {
@@ -987,7 +983,7 @@ export class PostgresPublicCatalogIndexReader implements
           const key = query !== undefined && isValidGtin(query)
             ? `gtin:${row.gtin}`
             : `product:${row.canonical_product_id}`;
-          return !offerKeySet.has(key) || !seenCatalogKeys.has(key);
+          return !seenCatalogKeys.has(key);
         }),
       ].sort((left, right) =>
         (left.sort_rank as number) - (right.sort_rank as number)

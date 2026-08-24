@@ -265,6 +265,25 @@ describe("PostgresPublicCatalogIndexReader", () => {
       .resolves.toMatchObject({ entries: [{ categoryPath: null, product: { gtin: GTIN_MILK } }] });
   });
 
+  it("merges enabled offer-backed rows into browse pages without catalog matches", async () => {
+    const catalogRow = discoveryRow({
+      canonical_product_id: 2,
+      display_name: "Zebra product",
+      gtin: GTIN_ALIAS,
+    });
+    const { db } = sequentialDatabaseWith([
+      [offerBackedApiRow()],
+      [catalogRow],
+    ]);
+
+    await expect(new PostgresPublicCatalogIndexReader(db, true)
+      .readDiscoveryPage({ limit: 1 }, AT))
+      .resolves.toMatchObject({
+        entries: [{ categoryPath: null, product: { gtin: GTIN_MILK } }],
+        hasMore: true,
+      });
+  });
+
   it("returns source-scoped opaque category IDs and filters only after latest selection", async () => {
     const categoryId = publicCategoryId("kassalapp", "20");
     const categoryPath = [
