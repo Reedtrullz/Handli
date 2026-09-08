@@ -522,6 +522,7 @@ function parseBackupSnapshotSessionOutput(text) {
   const snapshots = [];
   const relations = [];
   const ledgerRows = [];
+  const baselines = [];
   let readyCount = 0;
   for (const line of text.replaceAll("\r\n", "\n").split("\n")) {
     if (line.length === 0) continue;
@@ -535,6 +536,16 @@ function parseBackupSnapshotSessionOutput(text) {
       relations.push(line.slice("HP_RELATIONS\t".length));
     } else if (line.startsWith("HP_LEDGER\t")) {
       ledgerRows.push(line.slice("HP_LEDGER\t".length));
+    } else if (line.startsWith("HP_BASELINE\t")) {
+      const value = line.slice("HP_BASELINE\t".length);
+      if (value.length > 128 * 1024) fail("backup baseline provenance exceeds its bound");
+      if (value.length > 0) {
+        try {
+          baselines.push(JSON.parse(value));
+        } catch {
+          fail("backup baseline provenance is not valid JSON");
+        }
+      }
     } else {
       fail("backup snapshot session returned an unexpected response");
     }
@@ -551,6 +562,7 @@ function parseBackupSnapshotSessionOutput(text) {
   return {
     identity: parseBackupDatabaseIdentity(identities[0]),
     migrationLedger: parseLedger(ledgerRows.join("\n"), "backup source"),
+    baseline: baselines.length > 1 ? fail("backup source returned multiple baseline rows") : (baselines[0] ?? null),
     requiredRelations: relations[0],
     snapshotId: snapshots[0],
   };
@@ -635,6 +647,12 @@ export async function openBackupSnapshotSession(config) {
     "select 'HP_IDENTITY' || E'\\t' || concat_ws(E'\\t', current_database(), current_user, encode(sha256(convert_to(system_identifier::text, 'UTF8')), 'hex'), (select rolsuper from pg_roles where rolname = current_user), (select rolcreaterole from pg_roles where rolname = current_user), (select rolcreatedb from pg_roles where rolname = current_user), (select rolreplication from pg_roles where rolname = current_user), (select rolbypassrls from pg_roles where rolname = current_user), (select count(*) = 0 from pg_auth_members where member = (select oid from pg_roles where rolname = current_user)), (select count(*) = 0 from pg_database where datdba = (select oid from pg_roles where rolname = current_user))) from pg_control_system();",
     "select 'HP_SNAPSHOT' || E'\\t' || pg_export_snapshot();",
     "select 'HP_LEDGER' || E'\\t' || id || E'\\t' || checksum from handleplan_schema_migrations order by id;",
+    "select case when to_regclass('public.handleplan_schema_baselines') is null then 'false' else 'true' end as hp_baseline_exists \\gset",
+    "\\if :hp_baseline_exists",
+    "select 'HP_BASELINE' || E'\\t' || row_to_json(baseline_row)::text from (select baseline_id, manifest_sha256, artifact_sha256, covered_migrations, resulting_schema_sha256, provenance from public.handleplan_schema_baselines order by baseline_id limit 2) baseline_row;",
+    "\\else",
+    "select 'HP_BASELINE' || E'\\t';",
+    "\\endif",
     "select 'HP_RELATIONS' || E'\\t' || concat_ws(E'\\t', to_regclass('public.ingestion_runs') is not null, to_regclass('public.price_observations') is not null, to_regclass('public.source_permissions') is not null, to_regclass('public.publication_captures') is not null);",
     "select 'HP_READY';",
     "",
@@ -1616,6 +1634,75 @@ function repositoryMigrationLedger(migrationsDirectory) {
   });
 }
 
+function repositoryBaselineContract(migrationsDirectory) {
+  const bootstrapDirectory = join(migrationsDirectory, "../bootstrap");
+  const manifestPath = join(bootstrapDirectory, "040_manifest.json");
+  const artifactPath = join(bootstrapDirectory, "040_schema.sql");
+  let manifestSource;
+  let artifactSource;
+  try {
+    manifestSource = readFileSync(manifestPath, "utf8");
+    artifactSource = readFileSync(artifactPath, "utf8");
+  } catch {
+    return null;
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(manifestSource);
+  } catch {
+    fail("bootstrap manifest is not valid JSON");
+  }
+  const manifestSha256 = createHash("sha256").update(manifestSource).digest("hex");
+  const artifactSha256 = createHash("sha256").update(artifactSource).digest("hex");
+  if (
+    manifest?.baseline_id !== "handleplan-040-canonical-v1"
+    || manifest?.artifact?.path !== "deploy/bootstrap/040_schema.sql"
+    || manifest?.artifact?.sha256 !== artifactSha256
+    || !Array.isArray(manifest.covered_migrations)
+    || manifest.covered_migrations.length !== 40
+    || !SAFE_SHA256.test(manifestSha256)
+  ) {
+    fail("bootstrap manifest does not match its artifact");
+  }
+  return {
+    artifactSha256,
+    baselineId: manifest.baseline_id,
+    coveredMigrations: manifest.covered_migrations,
+    manifest,
+    manifestSha256,
+    resultingSchemaSha256: manifest.canonical_contract?.schema_catalog_sha256,
+  };
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalJson(entry)]),
+    );
+  }
+  return value;
+}
+
+function requireBaselineMatch(actual, expected, label) {
+  // Baseline coverage remains separate from the actual execution ledger.
+  if (actual === null) return;
+  if (expected === null) fail(`${label} baseline provenance is unavailable for validation`);
+  if (
+    typeof actual !== "object"
+    || actual.baseline_id !== expected.baselineId
+    || actual.manifest_sha256 !== expected.manifestSha256
+    || actual.artifact_sha256 !== expected.artifactSha256
+    || actual.resulting_schema_sha256 !== expected.resultingSchemaSha256
+    || JSON.stringify(actual.covered_migrations) !== JSON.stringify(expected.coveredMigrations)
+    || JSON.stringify(canonicalJson(actual.provenance))
+      !== JSON.stringify(canonicalJson(expected.manifest.provenance))
+  ) {
+    fail(`${label} baseline provenance does not match the reviewed artifact`);
+  }
+}
+
 function requireLedgerPrefix(actual, current, { exact, label }) {
   if (actual.length === 0 || actual.length > current.length) {
     fail(`${label} migration ledger is not a valid prefix of this source revision`);
@@ -2058,7 +2145,15 @@ function validateBackupSnapshotSession(session, config) {
     exact: true,
     label: "backup source",
   });
-  return { identity, migrationLedger, snapshotId: session.snapshotId };
+  const baselineContract = repositoryBaselineContract(config.migrationsDirectory);
+  const baseline = session.baseline ?? null;
+  requireBaselineMatch(baseline, baselineContract, "backup source");
+  return {
+    baseline,
+    identity,
+    migrationLedger,
+    snapshotId: session.snapshotId,
+  };
 }
 
 export async function createBackup({
@@ -2114,6 +2209,12 @@ export async function createBackup({
         snapshotId: sourceBefore.snapshotId,
       });
       validateArchiveList(pipeline.archiveList);
+      if (
+        sourceBefore.baseline !== null
+        && !pipeline.archiveList.includes("TABLE DATA public handleplan_schema_baselines")
+      ) {
+        fail("exported-snapshot archive is missing the baseline provenance table");
+      }
       const archivedLedger = parseExtractedLedger(pipeline.ledgerSql);
       archivedCaptureLedger = parseExtractedCaptureLedger(
         pipeline.captureLedgerSql,
@@ -2220,6 +2321,7 @@ export async function createBackup({
       schemaVersion: 2,
       source: {
         archiveSessionBinding: "postgresql-exported-snapshot-v1",
+        baseline: sourceBefore.baseline,
         database: sourceBefore.identity.database,
         migrationLedger: sourceBefore.migrationLedger,
         role: sourceBefore.identity.role,
@@ -2510,6 +2612,11 @@ function parseManifest(path) {
     || value?.source?.archiveSessionBinding !== "postgresql-exported-snapshot-v1"
     || value?.source?.schemaContract !== "handleplan-evidence-relations-v1"
     || !Array.isArray(value?.source?.migrationLedger)
+    || (
+      value?.source?.baseline !== undefined
+      && value.source.baseline !== null
+      && (typeof value.source.baseline !== "object" || Array.isArray(value.source.baseline))
+    )
   ) {
     fail("restore manifest does not satisfy the v2 backup contract");
   }
@@ -2517,7 +2624,14 @@ function parseManifest(path) {
     value.source.migrationLedger.map((entry) => `${entry?.id ?? ""}\t${entry?.checksum ?? ""}`).join("\n"),
     "manifest source",
   );
-  return { ...value, source: { ...value.source, migrationLedger } };
+  return {
+    ...value,
+    source: {
+      ...value.source,
+      baseline: value.source.baseline ?? null,
+      migrationLedger,
+    },
+  };
 }
 
 async function query(runner, config, sql, failureMessage, { maxBuffer = 64 * 1024 } = {}) {
@@ -2649,6 +2763,11 @@ export async function verifyRestore({
       fail("encrypted backup exceeds the bounded restore size limit");
     }
     const currentLedger = repositoryMigrationLedger(config.migrationsDirectory);
+    requireBaselineMatch(
+      manifest.source.baseline,
+      repositoryBaselineContract(config.migrationsDirectory),
+      "selected backup",
+    );
     requireLedgerPrefix(manifest.source.migrationLedger, currentLedger, {
       exact: false,
       label: "selected backup",
@@ -2724,6 +2843,12 @@ export async function verifyRestore({
       expectedExecutionIdentity: identityBefore,
     });
     validateArchiveList(restorePipeline.archiveList);
+    if (
+      manifest.source.baseline !== null
+      && !restorePipeline.archiveList.includes("TABLE DATA public handleplan_schema_baselines")
+    ) {
+      fail("restore archive is missing the selected baseline provenance table");
+    }
     requireRestoreExecutionProof(restorePipeline, identityBefore);
     const identityAfter = parseDatabaseIdentity(await query(
       runner,
@@ -2742,6 +2867,28 @@ export async function verifyRestore({
     ), "restored database");
     if (serializeLedger(restoredLedger) !== serializeLedger(manifest.source.migrationLedger)) {
       fail("restored migration ledger does not match the selected backup manifest");
+    }
+    const restoredBaselineExists = await query(
+      runner,
+      operationConfig,
+      "select to_regclass('public.handleplan_schema_baselines') is not null",
+      "could not read back restored baseline provenance state",
+    );
+    let restoredBaseline = null;
+    if (restoredBaselineExists === "t" || restoredBaselineExists === "true") {
+      restoredBaseline = JSON.parse(await query(
+        runner,
+        operationConfig,
+        "select row_to_json(baseline_row)::text from (select baseline_id, manifest_sha256, artifact_sha256, covered_migrations, resulting_schema_sha256, provenance from public.handleplan_schema_baselines order by baseline_id limit 2) baseline_row",
+        "could not read back restored baseline provenance",
+      ));
+    }
+    if (manifest.source.baseline === null) {
+      if (restoredBaseline !== null) {
+        fail("restored database contains unexpected baseline provenance");
+      }
+    } else if (JSON.stringify(restoredBaseline) !== JSON.stringify(manifest.source.baseline)) {
+      fail("restored baseline provenance does not match the selected backup manifest");
     }
 
     const requiredRelations = await query(

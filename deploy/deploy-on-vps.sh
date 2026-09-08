@@ -1235,6 +1235,8 @@ verify_operations_release() (
   test -z "$(find "$release_dir" -type l -print -quit)" \
     && diff -qr "$deployment_source_dir/deploy/backup" \
       "$release_dir/deploy/backup" >/dev/null \
+    && diff -qr "$deployment_source_dir/deploy/bootstrap" \
+      "$release_dir/deploy/bootstrap" >/dev/null \
     && diff -qr "$deployment_source_dir/deploy/migrations" \
       "$release_dir/deploy/migrations" >/dev/null || {
     echo "Operations release bytes do not match the exact source archive" >&2
@@ -1290,6 +1292,7 @@ prepare_operations_release() (
     trap cleanup_release_tmp EXIT HUP INT TERM
     mkdir -m 755 "$release_tmp/deploy"
     cp -R "$deployment_source_dir/deploy/backup" "$release_tmp/deploy/backup"
+    cp -R "$deployment_source_dir/deploy/bootstrap" "$release_tmp/deploy/bootstrap"
     cp -R "$deployment_source_dir/deploy/migrations" "$release_tmp/deploy/migrations"
     for operations_file in \
       compose.production.yml \

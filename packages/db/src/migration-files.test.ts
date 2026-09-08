@@ -61,6 +61,48 @@ function runMigrationWith(overrides: Record<string, string>) {
 }
 
 describe("forward-only v1 migrations", () => {
+  it("preflights and activates the reviewed baseline without blanket worker grants", async () => {
+    const runner = await readFile(migrationRunner, "utf8");
+    const baselineBranch = runner.indexOf("handleplan_schema_baselines");
+    expect(baselineBranch).toBeGreaterThan(-1);
+    expect(runner.indexOf("handleplan_schema_migrations")).toBeGreaterThan(-1);
+    expect(runner.indexOf("handleplan_schema_baselines")).toBeLessThan(
+      runner.indexOf("create table public.handleplan_schema_migrations"),
+    );
+    expect(runner).toContain("040_manifest.json");
+    expect(runner).toContain("040_schema.sql");
+    expect(runner).toContain("Baseline target must be an empty catalog");
+    expect(runner).toContain("CI_MAX_MIGRATION_ID cannot use the empty-database baseline");
+    expect(runner).not.toMatch(/grant execute on all functions in schema public to \$\{workerRole\}/u);
+    expect(runner).not.toMatch(/grant select on all tables in schema public to \$\{workerRole\}/u);
+    expect(runner).not.toMatch(/grant usage on all sequences in schema public to \$\{workerRole\}/u);
+    expect(runner).toContain("revoke insert on table approved_offers, review_actions, offer_targets, offer_conditions");
+  });
+
+  it("keeps backup provenance separate from the execution ledger", async () => {
+    const toolkit = await readFile(
+      fileURLToPath(new URL("../../../deploy/backup/toolkit.mjs", import.meta.url)),
+      "utf8",
+    );
+    expect(toolkit).toContain("HP_BASELINE");
+    expect(toolkit).toContain("handleplan_schema_baselines");
+    expect(toolkit).toContain("source.baseline");
+    expect(toolkit).toContain("Baseline coverage remains separate");
+  });
+
+  it("ships the hash-bound bootstrap through the privileged runtime and ops bundle", async () => {
+    const [dockerfile, verifier, deploy] = await Promise.all([
+      readFile(fileURLToPath(new URL("../../../Dockerfile", import.meta.url)), "utf8"),
+      readFile(fileURLToPath(new URL("../../../scripts/operations/verify-production-image.mjs", import.meta.url)), "utf8"),
+      readFile(productionDeploy, "utf8"),
+    ]);
+    expect(dockerfile).toContain("/app/.handleplan-runtime-stage/deploy/bootstrap");
+    expect(dockerfile).toContain("/app/deploy/bootstrap");
+    expect(verifier).toContain('"bootstrap"');
+    expect(deploy).toContain('"$deployment_source_dir/deploy/bootstrap"');
+    expect(deploy).toContain('"$release_dir/deploy/bootstrap"');
+  });
+
   it("creates only a missing non-login worker before migrations that grant to it", async () => {
     const runner = await readFile(migrationRunner, "utf8");
     const start = runner.indexOf("do $worker_role_prerequisite$");

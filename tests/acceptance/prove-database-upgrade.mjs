@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   closeSync,
   mkdtempSync,
@@ -17,6 +18,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
 const migrationRunner = resolve(root, "deploy/migrate.mjs");
 const sourceDatabase = "handleplan_ci_v1_03_source";
+const legacyDatabase = "handleplan_ci_v1_03_legacy040";
+const baselineDatabase = "handleplan_ci_v1_03_baseline";
 const restoreDatabase = "handleplan_ci_v1_03_restore";
 const completionClockDatabase = "handleplan_ci_v1_03_completion_clock";
 const publicationHealthPreconditionDatabase =
@@ -25,6 +28,8 @@ const pdfEvidencePreconditionDatabase =
   "handleplan_ci_v1_03_pdf_evidence_precondition";
 const proofDatabases = [
   sourceDatabase,
+  legacyDatabase,
+  baselineDatabase,
   restoreDatabase,
   completionClockDatabase,
   publicationHealthPreconditionDatabase,
@@ -72,6 +77,24 @@ const expectedMigrations = [
   "037_worker_official_offer_grants.sql",
   "038_tjek_function_grants.sql",
 ];
+const currentMigrations = [
+  ...expectedMigrations,
+  "039_tjek_null_comparison_fix.sql",
+  "040_offer_backed_discovery.sql",
+  "041_public_offer_projection_repair.sql",
+];
+const legacy040SchemaFixture = resolve(
+  root,
+  "tests/acceptance/fixtures/legacy040/legacy040-production-schema.sql",
+);
+const legacy040LedgerFixture = resolve(
+  root,
+  "tests/acceptance/fixtures/legacy040/legacy040-production-ledger.sql",
+);
+const legacy040FixtureSha256 = new Map([
+  [legacy040SchemaFixture, "beffec702f48a35a6c278b0b102b7c5074a20c7fb44765e60a0bd5fef66fda16"],
+  [legacy040LedgerFixture, "ef2de3c1cbe49dcb140c1bbffeca6f8e32e2c72144a676f21c2ea472443247ac"],
+]);
 
 assert.equal(process.env.CI, "true", "database proof requires CI=true");
 assert.ok(process.env.DATABASE_ADMIN_URL, "DATABASE_ADMIN_URL is required");
@@ -360,6 +383,7 @@ function postgresClientArgs(command, database, extraArgs) {
   return [
     "run",
     "--rm",
+    "-i",
     ...(command === "pg_restore" ? ["--interactive"] : []),
     ...(postgresClientNetwork === "host" ? ["--network", "host"] : []),
     "-e",
@@ -393,17 +417,35 @@ async function applyFixture(sql, filename) {
   await sql.begin((transaction) => transaction.unsafe(fixture));
 }
 
-async function readMigrationLedger(sql) {
+async function readMigrationLedger(sql, expected = expectedMigrations) {
   const rows = await sql`
     select id, checksum
     from handleplan_schema_migrations
     order by id
   `;
-  assert.deepEqual(rows.map((row) => row.id), expectedMigrations);
+  assert.deepEqual(rows.map((row) => row.id), expected);
   for (const row of rows) {
     assert.match(row.checksum, /^[0-9a-f]{64}$/);
   }
   return rows.map((row) => ({ id: row.id, checksum: row.checksum }));
+}
+
+async function restoreLegacy040Fixture(database) {
+  for (const fixturePath of [legacy040SchemaFixture, legacy040LedgerFixture]) {
+    assert.equal(
+      createHash("sha256").update(readFileSync(fixturePath)).digest("hex"),
+      legacy040FixtureSha256.get(fixturePath),
+      `legacy040 fixture changed: ${fixturePath}`,
+    );
+    const fixtureFd = openSync(fixturePath, "r");
+    try {
+      await runPostgresClient("psql", database, ["--file=-", "--set", "ON_ERROR_STOP=1"], {
+        stdinFd: fixtureFd,
+      });
+    } finally {
+      closeSync(fixtureFd);
+    }
+  }
 }
 
 async function verifyLegacyUpgrade(sql) {
@@ -534,6 +576,31 @@ async function verifyLegacyUpgrade(sql) {
   assert.equal(row.coverage_reason, "legacy_price_cache_missing_provenance");
   assert.equal(row.official_claim_eligible, false);
   assert.equal(row.official_claim_count, 0);
+}
+
+async function verifyBaselineActivation(sql) {
+  const [baseline] = await sql`
+    select baseline_id, manifest_sha256, artifact_sha256,
+           jsonb_array_length(covered_migrations) as covered_count,
+           resulting_schema_sha256
+    from handleplan_schema_baselines
+  `;
+  assert.equal(baseline?.baseline_id, "handleplan-040-canonical-v1");
+  assert.match(baseline?.manifest_sha256 ?? "", /^[0-9a-f]{64}$/);
+  assert.match(baseline?.artifact_sha256 ?? "", /^[0-9a-f]{64}$/);
+  assert.equal(baseline?.covered_count, 40);
+  assert.match(baseline?.resulting_schema_sha256 ?? "", /^[0-9a-f]{64}$/);
+  const ledger = await readMigrationLedger(sql, [
+    "041_public_offer_projection_repair.sql",
+  ]);
+  assert.equal(ledger.length, 1);
+  const [projection] = await sql`
+    select pg_catalog.pg_get_functiondef(
+      'public.public_official_offer_rows_v1(bigint[], timestamptz)'::regprocedure
+    ) as definition
+  `;
+  assert.match(projection?.definition ?? "", /CREATE OR REPLACE FUNCTION/iu);
+  return projection.definition;
 }
 
 async function verifyRestoreEvidence(sql) {
@@ -2007,7 +2074,7 @@ async function verifyCompletionClockMigrationUpgrade(sql, database) {
     );
   });
 
-  await runMigrations(database);
+  await runMigrations(database, "038_tjek_function_grants.sql");
 
   const [validClockAfter] = await sql`
     select status, completed_at, terminalized_at
@@ -2232,6 +2299,8 @@ const dumpPath = resolve(scratchDirectory, "database.dump");
 const createdDatabases = new Set();
 let admin;
 let source;
+let legacy;
+let baseline;
 let restored;
 let completionClock;
 let publicationHealthPrecondition;
@@ -2303,6 +2372,24 @@ try {
   await pdfEvidencePrecondition.end({ timeout: 5 });
   pdfEvidencePrecondition = undefined;
 
+  await createDatabase(admin, baselineDatabase);
+  createdDatabases.add(baselineDatabase);
+  await runMigrations(baselineDatabase);
+  baseline = postgres(urlForDatabase(baselineDatabase), { max: 1, onnotice: () => {} });
+  const cleanProjectionDefinition = await verifyBaselineActivation(baseline);
+  await baseline.end({ timeout: 5 });
+  baseline = undefined;
+  await runMigrations(baselineDatabase);
+  baseline = postgres(urlForDatabase(baselineDatabase), { max: 1, onnotice: () => {} });
+  const replayProjectionDefinition = await verifyBaselineActivation(baseline);
+  assert.equal(
+    replayProjectionDefinition,
+    cleanProjectionDefinition,
+    "baseline replay must preserve the projection definition",
+  );
+  await baseline.end({ timeout: 5 });
+  baseline = undefined;
+
   await createDatabase(admin, sourceDatabase);
   createdDatabases.add(sourceDatabase);
   await runMigrations(sourceDatabase, "001_price_cache.sql");
@@ -2326,12 +2413,11 @@ try {
   await source.end({ timeout: 5 });
   source = undefined;
 
-  await runMigrations(sourceDatabase);
-  await runMigrations(sourceDatabase);
+  await runMigrations(sourceDatabase, "038_tjek_function_grants.sql");
+  await runMigrations(sourceDatabase, "038_tjek_function_grants.sql");
 
   source = postgres(urlForDatabase(sourceDatabase), { max: 1, onnotice: () => {} });
   await verifyLegacyUpgrade(source);
-  await verifyRuntimeRolePolicy(source);
   await verifyReviewOfferInsertBoundary(source);
   await verifyTaxonomyPublicationGuards(source);
   const sourceLedger = await readMigrationLedger(source);
@@ -2341,6 +2427,35 @@ try {
   await verifyTerminalRunInsertGuards(source);
   await source.end({ timeout: 5 });
   source = undefined;
+
+  await createDatabase(admin, legacyDatabase);
+  createdDatabases.add(legacyDatabase);
+  await restoreLegacy040Fixture(legacyDatabase);
+  legacy = postgres(urlForDatabase(legacyDatabase), { max: 1, onnotice: () => {} });
+  await applyFixture(legacy, "legacy040/legacy040-canonical-seed.sql");
+  await legacy.end({ timeout: 5 });
+  legacy = undefined;
+  await runMigrations(legacyDatabase);
+  await runMigrations(legacyDatabase);
+
+  legacy = postgres(urlForDatabase(legacyDatabase), { max: 1, onnotice: () => {} });
+  const legacyLedger = await readMigrationLedger(legacy, currentMigrations);
+  assert.deepEqual(
+    legacyLedger.slice(0, expectedMigrations.length),
+    sourceLedger,
+    "authentic legacy040 ledger must remain intact while 041 is applied",
+  );
+  await verifyRuntimeRolePolicy(legacy);
+  await verifyReviewOfferInsertBoundary(legacy);
+  await verifyTaxonomyPublicationGuards(legacy);
+  const [legacyProjection] = await legacy`
+    select pg_catalog.pg_get_functiondef(
+      'public.public_official_offer_rows_v1(bigint[], timestamptz)'::regprocedure
+    ) as definition
+  `;
+  assert.match(legacyProjection?.definition ?? "", /CREATE OR REPLACE FUNCTION/iu);
+  await legacy.end({ timeout: 5 });
+  legacy = undefined;
 
   const dumpFd = openSync(dumpPath, "wx", 0o600);
   try {
@@ -2368,7 +2483,7 @@ try {
     closeSync(restoreFd);
   }
 
-  await runMigrations(restoreDatabase);
+  await runMigrations(restoreDatabase, "038_tjek_function_grants.sql");
   restored = postgres(urlForDatabase(restoreDatabase), { max: 1, onnotice: () => {} });
   await verifyLegacyUpgrade(restored);
   const restoredPublicStateFingerprint = await verifyRestoreEvidence(restored);
@@ -2378,13 +2493,13 @@ try {
     sourcePublicStateFingerprint,
     "restore must preserve database-owned public-state clocks exactly",
   );
-  await verifyRuntimeRolePolicy(restored);
   await verifyReviewOfferInsertBoundary(restored);
   await verifyTaxonomyPublicationGuards(restored);
   assert.deepEqual(await readMigrationLedger(restored), sourceLedger);
 
   proofResult = {
     sourceDatabase,
+    legacyDatabase,
     restoreDatabase,
     migrations: sourceLedger.length,
     legacyRows: 1,
@@ -2393,7 +2508,7 @@ try {
     restoredReviewActions: 1,
     restoredCatalogObservations: 1,
     restoredReviewedFamilyDecisions: 1,
-    restoredRuntimeRolePolicy: true,
+    legacyRuntimeRolePolicy: true,
     completionClockUpgradeRollback: true,
     publicationHealthUpgradeReconciliationGuard: true,
     pdfEvidenceUpgradeReconciliationGuard: true,
@@ -2420,6 +2535,14 @@ try {
   if (source) {
     await attemptCleanup("close source database connection", () =>
       source.end({ timeout: 5 }));
+  }
+  if (legacy) {
+    await attemptCleanup("close legacy database connection", () =>
+      legacy.end({ timeout: 5 }));
+  }
+  if (baseline) {
+    await attemptCleanup("close baseline database connection", () =>
+      baseline.end({ timeout: 5 }));
   }
   if (completionClock) {
     await attemptCleanup("close completion-clock database connection", () =>
