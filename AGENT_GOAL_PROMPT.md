@@ -172,7 +172,7 @@ $SSH $VPS "docker exec handleplan-postgres-1 psql -U handleplan_app -d handlepla
 
 ```bash
 TJEK_ENABLED=true
-TJEK_API_KEY=04715502542d2bab0eb51dccd5f33735
+TJEK_API_KEY=${TJEK_API_KEY}
 OPEN_PRICES_ENABLED=true
 OFFICIAL_OFFER_FOUNDATION_ENABLED=true
 ```

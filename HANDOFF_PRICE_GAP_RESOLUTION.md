@@ -309,7 +309,7 @@ WORKER_TARGET_LIMIT=500
 
 # Tjek configuration
 TJEK_ENABLED=true
-TJEK_API_KEY=04715502542d2bab0eb51dccd5f33735
+TJEK_API_KEY=${TJEK_API_KEY}
 
 # Open Prices configuration
 OPEN_PRICES_ENABLED=true
