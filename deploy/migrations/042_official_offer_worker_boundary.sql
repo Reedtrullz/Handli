@@ -965,6 +965,7 @@ begin
             from pg_catalog.jsonb_array_elements(v_candidates) as wrapper_entries(wrapper)
             where (item - 'anomalyCodes') is not distinct from
               ((wrapper_entries.wrapper -> 'candidate') - 'anomalyCodes')
+              and (wrapper_entries.wrapper -> 'anomalyCodes') @> (item -> 'anomalyCodes')
           )
      ) then
     raise exception 'official-offer extraction envelope candidate binding is invalid' using errcode = '22023';

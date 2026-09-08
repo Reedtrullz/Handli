@@ -1101,7 +1101,11 @@ describeIntegration("official-offer direct app-role boundary", () => {
     const extractionPayload = (
       candidate: Record<string, unknown>,
       anomalies: string[] = [],
-      options: { exactCanonicalProductId?: unknown; extractorVersion?: unknown } = {},
+      options: {
+        exactCanonicalProductId?: unknown;
+        extractorVersion?: unknown;
+        normalizedCandidate?: Record<string, unknown>;
+      } = {},
     ) => ({
       contractVersion: 1,
       envelope: {
@@ -1125,7 +1129,7 @@ describeIntegration("official-offer direct app-role boundary", () => {
       candidates: [{
         contractVersion: 1,
         anomalyCodes: anomalies,
-        candidate,
+        candidate: options.normalizedCandidate ?? candidate,
         disposition: anomalies.length === 0 ? "exact-match" : "review-required",
         publicationRoute: "human-review-required",
         ...(anomalies.length === 0
@@ -1140,6 +1144,22 @@ describeIntegration("official-offer direct app-role boundary", () => {
     `;
     expect(Number(positiveExtraction!.id)).toBeGreaterThan(0);
     let expectedExtractionCount = 1;
+    expect(await countExtractions()).toBe(expectedExtractionCount);
+
+    const rawAnomalyOmissionCandidate = {
+      ...validCandidate,
+      candidateKey: `direct-raw-anomaly-${randomUUID()}`,
+      anomalyCodes: ["UNMATCHED_PRODUCT"],
+    };
+    expect(extractedOfficialOfferCandidateV1Schema.safeParse(rawAnomalyOmissionCandidate).success).toBe(true);
+    await expect(worker.sql`
+      select * from public.record_official_offer_extraction_v1(
+        ${captureId}, ${JSON.stringify(extractionPayload(rawAnomalyOmissionCandidate, [], {
+          exactCanonicalProductId: "product:forged",
+          normalizedCandidate: { ...rawAnomalyOmissionCandidate, anomalyCodes: [] },
+        }))}::jsonb
+      )
+    `).rejects.toThrow();
     expect(await countExtractions()).toBe(expectedExtractionCount);
 
     const validUnionCandidates: Array<[string, Record<string, unknown>, string[]]> = [
