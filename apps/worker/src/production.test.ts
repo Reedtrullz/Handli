@@ -4,6 +4,7 @@ import {
   KASSALAPP_PRODUCTION_SCHEDULES,
   GovernedKassalappSourceAccessPolicy,
   PostgresKassalappTargetProvider,
+  PostgresOpenPricesTargetProvider,
   PostgresWorkerLeaseProvider,
   PostgresWorkerRuntimeStateStore,
   StaticKassalappSourceAccessPolicy,
@@ -17,6 +18,18 @@ const SIGNAL = new AbortController().signal;
 const EANS = ["7038010000010", "7040000000009"];
 
 describe("production worker adapters", () => {
+  it("does not assign national geography to store receipt targets", async () => {
+    const reader = {
+      getCatalogDiscoveryPage: vi.fn(),
+      getCatalogGtins: vi.fn(),
+      getNationalPriceScopeId: vi.fn(async () => 42),
+      getPriceGtins: vi.fn(),
+      getGapPriceGtins: vi.fn(async () => EANS),
+    };
+    await expect(new PostgresOpenPricesTargetProvider(reader, 2)
+      .getBenchmarkPriceTargets(SIGNAL)).resolves.toEqual(EANS.map((ean) => ({ ean })));
+    expect(reader.getNationalPriceScopeId).not.toHaveBeenCalled();
+  });
   it("ships all four deterministic Kassalapp schedules with bounded execution", () => {
     expect(KASSALAPP_PRODUCTION_SCHEDULES.map(({ kind }) => kind).sort()).toEqual([
       "benchmark-price-refresh",

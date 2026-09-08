@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import {
   MAX_OFFICIAL_OFFER_LIFECYCLE_BATCH,
   type OfficialOfferLifecycleReceiptV1,
@@ -106,4 +108,44 @@ export class OfficialOfferLifecycleJobExecutor {
     });
     return this.options.repository.reconcile(request, signal);
   }
+}
+
+/** SQL remains authoritative across restarts and competing worker processes. */
+export function createOfficialOfferLifecycleScheduler(
+  options: OfficialOfferLifecycleJobExecutorOptions,
+): (now: Date, signal?: AbortSignal) => Promise<OfficialOfferLifecycleReceiptV1 | undefined> {
+  const executor = new OfficialOfferLifecycleJobExecutor(options);
+  let completedSlot: number | undefined;
+  return async (now, signal) => {
+    signal?.throwIfAborted();
+    const slot = Math.floor(canonicalScheduledAt(now).getTime() / 900_000) * 900_000;
+    if (completedSlot === slot) return undefined;
+    const scheduledAt = new Date(slot);
+    const timeout = new AbortController();
+    const executionSignal = signal === undefined
+      ? timeout.signal
+      : AbortSignal.any([signal, timeout.signal]);
+    const timer = setTimeout(() => timeout.abort(new Error("Official-offer lifecycle timed out")), 30_000);
+    let onAbort: () => void = () => {};
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(executionSignal.reason);
+      executionSignal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      const receipt = await Promise.race([
+        executor.execute({
+          contractVersion: 1,
+          jobId: `${options.sourceId}:official-offer-lifecycle-reconcile:${scheduledAt.toISOString()}`,
+          runId: randomUUID(),
+          scheduledAt,
+        }, executionSignal),
+        cancelled,
+      ]);
+      if (receipt.outcome !== "lease-unavailable") completedSlot = slot;
+      return receipt;
+    } finally {
+      clearTimeout(timer);
+      executionSignal.removeEventListener("abort", onAbort);
+    }
+  };
 }

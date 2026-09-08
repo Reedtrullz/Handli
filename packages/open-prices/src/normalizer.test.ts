@@ -137,25 +137,31 @@ describe("normalizeOpenPricesOutcome", () => {
     expect(result.reason).toBe("UNKNOWN_CHAIN");
   });
 
-  it("accepts discounted price (price_is_discounted=true)", () => {
+  it.each([null, 39.9, 0, -1])("quarantines discounted receipts with reference price %s", (referencePrice) => {
     const price = makePrice({
       price_is_discounted: true,
-      price_without_discount: 39.9,
+      price_without_discount: referencePrice,
     });
     const result = normalizeOpenPricesOutcome(price, FETCHED_AT);
 
-    expect(result.outcomeState).toBe("accepted");
-    if (result.outcomeState !== "accepted") throw new Error("unreachable");
-    expect(result.price.amountOre).toBe(2990);
+    expect(result).toMatchObject({
+      outcomeState: "quarantined",
+      reason: "DISCOUNTED_PRICE",
+      subjectChain: "rema-1000",
+      subjectEan: "7038010000010",
+      normalizedRecord: price,
+    });
+    expect(result).not.toHaveProperty("price");
   });
 
-  it("passes through geographicScopeId when provided", () => {
-    const price = makePrice();
-    const result = normalizeOpenPricesOutcome(price, FETCHED_AT, 42);
+  it("does not assign a caller's national scope to a store receipt", () => {
+    // @ts-expect-error A request-wide scope cannot describe individual store receipts.
+    const result = normalizeOpenPricesOutcome(makePrice(), FETCHED_AT, 42);
 
     expect(result.outcomeState).toBe("accepted");
     if (result.outcomeState !== "accepted") throw new Error("unreachable");
-    expect(result.price.geographicScopeId).toBe(42);
+    expect(result.price.geographicScopeId).toBeUndefined();
+    expect(result.normalizedRecord.location_id).toBe(2728);
   });
 
   it("omits geographicScopeId when not provided", () => {

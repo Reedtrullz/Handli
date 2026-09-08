@@ -60,6 +60,17 @@ function runMigrationWith(overrides: Record<string, string>) {
 }
 
 describe("forward-only v1 migrations", () => {
+  it("creates only a missing non-login worker before migrations that grant to it", async () => {
+    const runner = await readFile(migrationRunner, "utf8");
+    const start = runner.indexOf("do $worker_role_prerequisite$");
+    const end = runner.indexOf("$worker_role_prerequisite$;", start);
+    expect(start).toBeGreaterThan(runner.indexOf("select pg_advisory_lock"));
+    expect(end).toBeLessThan(runner.indexOf("for (const id of migrationFiles)"));
+    const prerequisite = runner.slice(start, end);
+    expect(prerequisite).toContain("if not exists (select 1 from pg_roles where rolname = '${workerRole}')");
+    expect(prerequisite).toContain("create role ${workerRole} with nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls");
+    expect(prerequisite).not.toMatch(/alter role|password|grant /i);
+  });
   it("keeps the complete ordered migration set", async () => {
     const files = (await readdir(migrationsDirectory))
       .filter((file) => /^\d{3}_[a-z0-9_]+\.sql$/.test(file))

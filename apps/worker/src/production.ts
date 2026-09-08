@@ -100,13 +100,13 @@ export const OPEN_PRICES_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition
 ]);
 
 /**
- * Weekly Bunnpris Tjek catalog discovery. The schedule is declared here for
+ * Daily Tjek catalog discovery. The schedule is declared here for
  * bounded-cycle accounting; production handler composition remains opt-in.
  */
 export const TJEK_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition[] = Object.freeze([
   Object.freeze({
     anchorAt: "2026-08-14T02:15:00.000Z",
-    intervalMs: 7 * 24 * 60 * 60 * 1_000,
+    intervalMs: 24 * 60 * 60 * 1_000,
     kind: "official-offer-discovery" as const,
     sourceId: "tjek" as const,
     timeoutMs: 5 * 60 * 1_000,
@@ -171,7 +171,6 @@ export class PostgresOpenPricesTargetProvider implements OpenPricesTargetProvide
   }
 
   async getBenchmarkPriceTargets(signal: AbortSignal): Promise<readonly { ean: string; geographicScopeId?: number }[]> {
-    const geographicScopeId = await this.reader.getNationalPriceScopeId(signal);
     const chains = ["bunnpris", "extra", "rema-1000"] as const;
     const rawGtins = await this.reader.getGapPriceGtins(this.targetLimit, chains, signal);
     const unique = new Set<string>();
@@ -181,10 +180,7 @@ export class PostgresOpenPricesTargetProvider implements OpenPricesTargetProvide
     return [...unique]
       .sort((left, right) => left.localeCompare(right))
       .slice(0, this.targetLimit)
-      .map((ean) => ({
-        ean,
-        ...(geographicScopeId === undefined ? {} : { geographicScopeId }),
-      }));
+      .map((ean) => ({ ean }));
   }
 }
 
@@ -425,7 +421,7 @@ export interface OpenPricesProductionRuntimeDependencies {
 
 export interface TjekProductionRuntimeDependencies {
   apiKey?: string;
-  db: TjekHandlerDependencies["db"];
+  foundation: TjekHandlerDependencies["foundation"];
 }
 
 export interface ProductionWorkerRuntimeDependencies<RunHandle = unknown> {
@@ -468,7 +464,7 @@ export function createProductionWorkerRuntime<RunHandle = unknown>(
       })
     : {};
 
-  const tjekHandlers = dependencies.tjek !== undefined ? createTjekHandlers({ client: new TjekClient({ apiKey: dependencies.tjek.apiKey }), db: dependencies.tjek.db }) : {};
+  const tjekHandlers = dependencies.tjek !== undefined ? createTjekHandlers({ client: new TjekClient({ apiKey: dependencies.tjek.apiKey }), foundation: dependencies.tjek.foundation }) : {};
 
   const handlers = { ...kassalappHandlers, ...openPricesHandlers, ...tjekHandlers };
 

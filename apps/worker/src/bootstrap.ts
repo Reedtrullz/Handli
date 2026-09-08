@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 
 import { createDatabase } from "@handleplan/db/client";
+import { PostgresOfficialOfferLifecycleRepository } from "@handleplan/db/official-offer-lifecycle";
 import { PostgresIngestionRepository } from "@handleplan/db/ingestion";
 import { PostgresProviderRequestBudget } from "@handleplan/db/request-budget";
 import { PostgresSourceAccessReader } from "@handleplan/db/source-access";
@@ -10,7 +11,6 @@ import { PostgresWorkerJobStateRepository } from "@handleplan/db/worker-state";
 import { PostgresWorkerGtinTargetReader } from "@handleplan/db/worker-targets";
 import { KassalappClient } from "@handleplan/kassalapp";
 import { OpenPricesClient } from "@handleplan/open-prices";
-import { TjekClient } from "@handleplan/tjek";
 
 import { readWorkerProductionEnv, readWorkerRuntimeEnv } from "./env";
 import { startWorkerHealthServer, WorkerHealthMonitor } from "./health";
@@ -28,6 +28,8 @@ import {
   createProductionWorkerRuntime,
 } from "./production";
 import { superviseWorker } from "./supervisor";
+import { createOfficialOfferLifecycleScheduler } from "./official-offer-lifecycle";
+import { createTjekFoundationDependencies } from "./tjek-production";
 
 export function workerOwnerId(host = hostname(), processId = process.pid): string {
   const digest = createHash("sha256")
@@ -81,7 +83,7 @@ export async function runProductionWorkerProcess(
     });
     const health = new WorkerHealthMonitor({
       cycleIntervalMs: runtimeEnv.cycleIntervalMs,
-      maxCycleDurationMs: productionCycleBoundMs(runtimeEnv.shutdownGraceMs),
+      maxCycleDurationMs: productionCycleBoundMs(runtimeEnv.shutdownGraceMs) + 30_000,
       revision: values.APP_COMMIT_SHA ?? "",
     });
     const openPricesSourceAccessPolicy = productionEnv.openPricesEnabled
@@ -104,7 +106,7 @@ export async function runProductionWorkerProcess(
       : undefined;
 
     const tjekDependencies = productionEnv.tjekEnabled
-      ? { apiKey: productionEnv.tjekApiKey, db: connection.db }
+      ? { apiKey: productionEnv.tjekApiKey, foundation: createTjekFoundationDependencies(connection.db, productionEnv.officialOfferPrivateCaptureRoot) }
       : undefined;
 
     const runtime = createProductionWorkerRuntime({
@@ -127,9 +129,24 @@ export async function runProductionWorkerProcess(
         productionEnv.targetLimit,
       ),
     });
+    const lifecycle = productionEnv.tjekEnabled
+      ? createOfficialOfferLifecycleScheduler({
+          ownerId: workerOwnerId(),
+          repository: new PostgresOfficialOfferLifecycleRepository(connection.db),
+          sourceId: "tjek",
+        })
+      : undefined;
     const healthServer = await startWorkerHealthServer(health);
     try {
-      return await superviseWorker(runtime, {
+      return await superviseWorker({
+        get exitCode() { return runtime.exitCode; },
+        requestShutdown: () => runtime.requestShutdown(),
+        async runCycle() {
+          const result = await runtime.runCycle();
+          if (!signal.aborted) await lifecycle?.(new Date(), signal);
+          return result;
+        },
+      }, {
         cycleIntervalMs: runtimeEnv.cycleIntervalMs,
         observer: health,
         signal,

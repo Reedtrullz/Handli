@@ -198,14 +198,57 @@ describe("TjekClient", () => {
       expect(client.canExtractOffers(makeCatalog({ dealer_id: "5b11sm", type: "incito" }))).toBe(true);
     });
 
-    it("rejects paged catalogs and unknown dealers", () => {
+    it("supports known paged catalogs and rejects unknown dealers", () => {
       const client = createClient(vi.fn<typeof fetch>());
-      expect(client.canExtractOffers(makeCatalog({ dealer_id: "80742m", type: "paged" }))).toBe(false);
+      expect(client.canExtractOffers(makeCatalog({ dealer_id: "80742m", type: "paged" }))).toBe(true);
       expect(client.canExtractOffers(makeCatalog({ dealer_id: "unknown", type: "incito" }))).toBe(false);
     });
   });
 
   describe("getOffersFromCatalog", () => {
+    it.each(["80742m", "faa0Ym"])("fetches paged offers for %s preserving source conditions", async (dealerId) => {
+      const raw = { id: "offer-1", heading: "Bread", description: "Members only", pricing: { price: 20, pre_price: 30, currency: "NOK" }, quantity: { unit: { symbol: "g" }, size: { from: 750, to: 750 } }, catalog_id: "paged", dealer_id: dealerId, run_from: "2026-09-01", run_till: "2026-09-08", catalog_page: 1, images: { view: "https://example.com/image" } };
+      const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([raw]));
+      const result = await createClient(mockFetch).getOffersFromCatalog(makeCatalog({ id: "paged", dealer_id: dealerId, type: "paged", offer_count: 1 }));
+      expect(result[0]).toMatchObject({ name: "Bread", price: 20, before_price: 30, description: "Members only", currency: "NOK", raw });
+      const url = new URL(String(mockFetch.mock.calls[0][0]));
+      expect(url.pathname).toBe("/v2/offers");
+      expect(url.searchParams.get("types")).toBe("paged");
+      expect(url.searchParams.get("limit")).toBe("24");
+    });
+
+    it("paginates and fails closed when a later page fails or repeats", async () => {
+      const row = (id: string) => ({ id, heading: "Bread", pricing: { price: 20 }, catalog_id: "paged", dealer_id: "80742m", run_from: "2026-09-01", run_till: "2026-09-08" });
+      const first = Array.from({ length: 24 }, (_, i) => row(String(i)));
+      const catalog = makeCatalog({ id: "paged", dealer_id: "80742m", type: "paged", offer_count: 25 });
+      const mockFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse(first)).mockResolvedValueOnce(jsonResponse([row("24")]));
+      expect(await createClient(mockFetch).getOffersFromCatalog(catalog)).toHaveLength(25);
+      expect(new URL(String(mockFetch.mock.calls[1][0])).searchParams.get("offset")).toBe("24");
+      for (const next of [jsonResponse([row("0")]), new Response("error", { status: 500 })]) {
+        const failing = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse(first)).mockResolvedValueOnce(next);
+        await expect(createClient(failing).getOffersFromCatalog(catalog)).rejects.toThrow(TjekClientError);
+      }
+    });
+
+    it("rejects incomplete and malformed paged responses", async () => {
+      for (const body of [[], { offers: [] }, [{ id: "bad" }]]) {
+        const client = createClient(vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(body)));
+        await expect(client.getOffersFromCatalog(makeCatalog({ dealer_id: "80742m", type: "paged", offer_count: 2 }))).rejects.toThrow(TjekClientError);
+      }
+    });
+
+    it("uses endpoint completion when advertised count differs and rejects over 500 offers", async () => {
+      const row = (id: string) => ({ id, heading: "Bread", pricing: { price: 20 }, catalog_id: "paged", dealer_id: "80742m", run_from: "2026-09-01", run_till: "2026-09-08" });
+      const catalog = makeCatalog({ id: "paged", dealer_id: "80742m", type: "paged", offer_count: 120 });
+      expect(await createClient(vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([row("one")]))).getOffersFromCatalog(catalog)).toHaveLength(1);
+      const mockFetch = vi.fn<typeof fetch>().mockImplementation(async (url) => {
+        const offset = Number(new URL(String(url)).searchParams.get("offset"));
+        return jsonResponse(Array.from({ length: 24 }, (_, i) => row(String(offset + i))));
+      });
+      await expect(createClient(mockFetch).getOffersFromCatalog(catalog)).rejects.toThrow(TjekClientError);
+      expect(mockFetch).toHaveBeenCalledTimes(21);
+    });
+
     it("fetches offers via incito + offer detail flow", async () => {
       const mockFetch = vi.fn<typeof fetch>()
         .mockResolvedValueOnce(jsonResponse(INCITO_WITH_OFFERS))  // generate_incito
@@ -261,16 +304,14 @@ describe("TjekClient", () => {
       expect(mockFetch).toHaveBeenCalledOnce(); // only incito call
     });
 
-    it("skips offers that fail to fetch", async () => {
+    it("rejects catalog when an incito offer fails to fetch", async () => {
       const mockFetch = vi.fn<typeof fetch>()
         .mockResolvedValueOnce(jsonResponse(INCITO_WITH_OFFERS))
         .mockRejectedValueOnce(new Error("network"))
         .mockResolvedValueOnce(jsonResponse(OFFER_DETAIL_2));
       const client = createClientWithKey(mockFetch);
 
-      const result = await client.getOffersFromCatalog("CAT3");
-      expect(result).toHaveLength(1);
-      expect(result[0]?.name).toBe("Melk 1L");
+      await expect(client.getOffersFromCatalog("CAT3")).rejects.toThrow("network");
     });
 
     it("throws when no API key is provided", async () => {
@@ -286,7 +327,8 @@ describe("TjekClient", () => {
     it("passes API key in headers", async () => {
       const mockFetch = vi.fn<typeof fetch>()
         .mockResolvedValueOnce(jsonResponse(INCITO_WITH_OFFERS))
-        .mockResolvedValueOnce(jsonResponse(OFFER_DETAIL_1));
+        .mockResolvedValueOnce(jsonResponse(OFFER_DETAIL_1))
+        .mockResolvedValueOnce(jsonResponse(OFFER_DETAIL_2));
       const client = createClientWithKey(mockFetch);
 
       await client.getOffersFromCatalog("CAT4");
