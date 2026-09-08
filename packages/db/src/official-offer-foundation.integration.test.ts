@@ -821,3 +821,240 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
     )).toEqual({ offers: [], sources: [] });
   }, 30_000);
 });
+
+describeIntegration("official-offer direct app-role boundary", () => {
+  let admin: DatabaseConnection;
+  let worker: DatabaseConnection;
+  let sourceId: string;
+  let permissionId: number;
+  let publicationId: number;
+  let edition: Record<string, unknown>;
+  let authorization: Record<string, unknown>;
+
+  beforeAll(async () => {
+    const adminUrl = process.env.DATABASE_MIGRATION_URL;
+    const workerUrl = process.env.APP_DATABASE_URL;
+    if (!adminUrl || !workerUrl) {
+      throw new Error(
+        "DATABASE_MIGRATION_URL and APP_DATABASE_URL are required for direct app-role integration",
+      );
+    }
+    admin = createDatabase(adminUrl);
+    worker = createDatabase(workerUrl);
+    const suffix = randomUUID();
+    sourceId = `direct-boundary-${suffix}`.slice(0, 64);
+    const reviewedAt = new Date(Date.now() - 60_000).toISOString();
+    const validUntil = new Date(Date.now() + 60 * 60_000).toISOString();
+    const permissions = {
+      officialOffers: true,
+      officialOfferCapabilities: ["capture", "discover", "extract"],
+      officialOfferRightsClassifications: ["public_display"],
+    };
+    await admin.sql`
+      insert into data_sources (
+        id, display_name, source_kind, runtime_state,
+        permission_reviewed_at, permission_expires_at
+      ) values (
+        ${sourceId}, ${`Direct boundary ${sourceId}`}, 'offer', 'approved',
+        ${reviewedAt}, ${validUntil}
+      )
+    `;
+    const [permission] = await admin.sql<Array<{ id: string }>>`
+      insert into source_permissions (source_id, decision, reviewed_at, valid_until, permissions)
+      values (${sourceId}, 'approved', ${reviewedAt}, ${validUntil}, ${JSON.stringify(permissions)}::jsonb)
+      returning id
+    `;
+    permissionId = Number(permission!.id);
+    const [scope] = await admin.sql<Array<{ id: string }>>`
+      insert into geographic_scopes (scope_key, scope_kind, label, country_code)
+      values (${`direct-boundary:${suffix}`}, 'postal_set', 'Direct boundary', 'NO')
+      returning id
+    `;
+    await admin.sql`
+      insert into geographic_scope_postal_codes (scope_id, postal_code)
+      values (${scope!.id}, '0001')
+    `;
+    const now = await admin.sql<Array<{ now: string }>>`select to_char(
+      clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+    ) as now`;
+    const evaluatedAt = now[0]!.now;
+    const discoveredAt = new Date(evaluatedAt).toISOString();
+    authorization = {
+      contractVersion: 1,
+      permissionId,
+      sourceId,
+      decision: "approved",
+      capabilities: ["capture", "discover", "extract"],
+      rightsClassifications: ["public_display"],
+      reviewedAt,
+      validUntil,
+      evaluatedAt,
+    };
+    edition = {
+      contractVersion: 1,
+      sourceId,
+      externalEditionId: `direct-${suffix}`,
+      chain: "extra",
+      title: "Direct boundary edition",
+      contentKind: "structured-feed",
+      geographicScopeId: Number(scope!.id),
+      declaredGeographicScope: { kind: "postal-set", countryCode: "NO", postalCodes: ["0001"] },
+      validFrom: new Date(Date.now() - 60_000).toISOString(),
+      validUntil: new Date(Date.now() + 30 * 60_000).toISOString(),
+      discoveredAt,
+      authorization: {
+        decision: "approved",
+        capabilities: ["capture", "discover", "extract"],
+        reviewedAt,
+        validUntil,
+      },
+    };
+    const repository = new PostgresOfficialOfferFoundationRepository(admin.db);
+    const recorded = await repository.recordEdition(edition, authorization);
+    publicationId = recorded.id;
+  });
+
+  afterAll(async () => {
+    await Promise.all([admin?.close(), worker?.close()]);
+  });
+
+  it("rejects sparse, null-field, cross-source, scope-mismatched, stale, and cancelled direct calls", async () => {
+    const countPublications = async () => {
+      const [row] = await admin.sql<Array<{ count: string }>>`
+        select count(*)::text as count from publications where id = ${publicationId}
+      `;
+      return Number(row!.count);
+    };
+    const countCaptures = async () => {
+      const [row] = await admin.sql<Array<{ count: string }>>`
+        select count(*)::text as count from publication_captures where publication_id = ${publicationId}
+      `;
+      return Number(row!.count);
+    };
+    const countExtractions = async () => {
+      const [row] = await admin.sql<Array<{ count: string }>>`
+        select count(*)::text as count from extraction_runs
+        where capture_id in (select id from publication_captures where publication_id = ${publicationId})
+      `;
+      return Number(row!.count);
+    };
+    const badAuthorization = { ...authorization, reviewedAt: null };
+    await expect(worker.sql`
+      select * from public.record_official_offer_edition_v1(
+        ${JSON.stringify({ sourceId, contractVersion: 1 })}::jsonb,
+        ${JSON.stringify(badAuthorization)}::jsonb
+      )
+    `).rejects.toThrow();
+    expect(await countPublications()).toBe(1);
+
+    const captureMetadata = {
+      contractVersion: 1,
+      publicationId,
+      sourceId,
+      externalEditionId: edition.externalEditionId,
+      checksumSha256: SYNTHETIC_OFFER_CAPTURE_CHECKSUM,
+      mimeType: "application/json",
+      byteLength: 1,
+      rightsClassification: "public_display",
+      retrievedAt: new Date().toISOString(),
+    };
+    const [capture] = await admin.sql<Array<{ id: string }>>`
+      select id from public.record_official_offer_capture_v1(
+        ${JSON.stringify(captureMetadata)}::jsonb,
+        ${`official-offers/private/direct/${randomUUID()}`},
+        ${JSON.stringify(authorization)}::jsonb
+      )
+    `;
+    const captureId = Number(capture!.id);
+    await expect(worker.sql`
+      select * from public.record_official_offer_capture_v1(
+        ${JSON.stringify({ ...captureMetadata, sourceId: "other-source" })}::jsonb,
+        ${`official-offers/private/direct/${randomUUID()}`},
+        ${JSON.stringify(authorization)}::jsonb
+      )
+    `).rejects.toThrow();
+    expect(await countCaptures()).toBe(1);
+
+    const envelope = {
+      contractVersion: 1,
+      captureChecksumSha256: SYNTHETIC_OFFER_CAPTURE_CHECKSUM,
+      extractorVersion: `direct-${randomUUID()}`,
+      method: "structured",
+      layoutFingerprintSha256: SYNTHETIC_OFFER_LAYOUT_FINGERPRINT,
+      schemaFingerprintSha256: SYNTHETIC_OFFER_SCHEMA_FINGERPRINT,
+      startedAt: edition.discoveredAt,
+      completedAt: edition.discoveredAt,
+      emptyResult: "not-empty",
+      candidates: [],
+    };
+    const timing = {
+      contractVersion: 1,
+      serverStartedAt: edition.discoveredAt,
+      serverCompletedAt: edition.discoveredAt,
+    };
+    const badCandidatePayload = {
+      contractVersion: 1,
+      envelope,
+      edition,
+      timing,
+      authorization,
+      counts: {
+        envelopeSha256: "a".repeat(64),
+        exactMatch: 1,
+        persistedCandidates: 1,
+        rejected: 0,
+        reviewRequired: 0,
+        total: 1,
+        validationSha256: "b".repeat(64),
+      },
+      validationStatus: "completed",
+      candidates: [{
+        contractVersion: 1,
+        anomalyCodes: [],
+        candidate: { candidateKey: "sparse", provenance: { confidence: 100 } },
+        disposition: "exact-match",
+        publicationRoute: "human-review-required",
+      }],
+    };
+    await expect(worker.sql`
+      select * from public.record_official_offer_extraction_v1(
+        ${captureId}, ${JSON.stringify(badCandidatePayload)}::jsonb
+      )
+    `).rejects.toThrow();
+    expect(await countExtractions()).toBe(0);
+
+    await expect(worker.sql`
+      select * from public.record_official_offer_extraction_v1(
+        ${captureId}, ${JSON.stringify({
+          ...badCandidatePayload,
+          edition: {
+            ...edition,
+            declaredGeographicScope: { kind: "national", countryCode: "NO" },
+          },
+        })}::jsonb
+      )
+    `).rejects.toThrow();
+    expect(await countExtractions()).toBe(0);
+
+    const staleAuthorization = {
+      ...authorization,
+      reviewedAt: new Date(Date.parse(String(authorization.reviewedAt)) - 1).toISOString(),
+    };
+    await expect(worker.sql`
+      select * from public.record_official_offer_edition_v1(
+        ${JSON.stringify({ ...edition, externalEditionId: `stale-${randomUUID()}` })}::jsonb,
+        ${JSON.stringify(staleAuthorization)}::jsonb
+      )
+    `).rejects.toThrow();
+    expect(await countPublications()).toBe(1);
+
+    const cancelled = worker.sql`
+      select * from public.record_official_offer_extraction_v1(
+        ${captureId}, ${JSON.stringify(badCandidatePayload)}::jsonb
+      )
+    ` as unknown as PromiseLike<unknown> & { cancel(): void };
+    cancelled.cancel();
+    await expect(cancelled).rejects.toThrow();
+    expect(await countExtractions()).toBe(0);
+  }, 30_000);
+});
