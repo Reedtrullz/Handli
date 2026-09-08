@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -117,6 +118,7 @@ describe("forward-only v1 migrations", () => {
       "038_tjek_function_grants.sql",
       "039_tjek_null_comparison_fix.sql",
       "040_offer_backed_discovery.sql",
+      "041_public_offer_projection_repair.sql",
     ]);
   });
 
@@ -126,7 +128,7 @@ describe("forward-only v1 migrations", () => {
       .sort();
     expect(files[0]).toBe("001_price_cache.sql");
     const guardedFiles = files.slice(1);
-    expect(guardedFiles.at(-1)).toBe("040_offer_backed_discovery.sql");
+    expect(guardedFiles.at(-1)).toBe("041_public_offer_projection_repair.sql");
     const source = (
       await Promise.all(
         guardedFiles.map((file) => readFile(path.join(migrationsDirectory, file), "utf8")),
@@ -138,6 +140,57 @@ describe("forward-only v1 migrations", () => {
     expect(source).toContain("insert into price_observations");
     expect(source).toContain("legacy-import");
     expect(source).not.toContain("drop table price_cache");
+  });
+
+  it("pins the literal bootstrap artifact and the reviewed 041 correction", async () => {
+    const [artifact, manifest, repair] = await Promise.all([
+      readFile(fileURLToPath(new URL("../../../deploy/bootstrap/040_schema.sql", import.meta.url)), "utf8"),
+      readFile(fileURLToPath(new URL("../../../deploy/bootstrap/040_manifest.json", import.meta.url)), "utf8"),
+      readFile(path.join(migrationsDirectory, "041_public_offer_projection_repair.sql"), "utf8"),
+    ]);
+    const parsed = JSON.parse(manifest);
+    expect(createHash("sha256").update(artifact).digest("hex")).toBe(parsed.artifact.sha256);
+    expect(parsed.covered_migrations).toHaveLength(40);
+    expect(parsed.covered_migrations.at(-1).id).toBe("040_offer_backed_discovery.sql");
+    expect(parsed.correction_semantics.migration_039_execution).toMatch(/not executed/u);
+    for (const entry of parsed.covered_migrations) {
+      const checksum = createHash("sha256")
+        .update(await readFile(path.join(migrationsDirectory, entry.id)))
+        .digest("hex");
+      expect(checksum, entry.id).toBe(entry.sha256);
+    }
+    expect(artifact).not.toMatch(/^\\\\(?:restrict|unrestrict)\\b/mu);
+    expect(artifact).not.toContain("CREATE SCHEMA public");
+    expect(artifact).not.toContain("handleplan_schema_migrations");
+    expect(artifact).not.toContain("handleplan_schema_baselines");
+    expect(artifact).not.toMatch(/GRANT .* TO handleplan_(app|web|review|operations)/u);
+    expect(artifact).not.toContain("2026-07-17");
+    expect(artifact).toContain("pg_catalog.transaction_timestamp()");
+    expect(artifact).toContain("pg_catalog.clock_timestamp()");
+    expect(parsed.canonical_contract.object_counts).toEqual({
+      relations: 52,
+      columns: 499,
+      constraints: 339,
+      indexes: 105,
+      triggers: 87,
+      public_functions: 47,
+      sequences: 26,
+    });
+    expect(parsed.canonical_contract.normalized_seed_sha256)
+      .toBe("c036b0b50d92e812fdf3f262f8084021aac43082d8054dc6e311938db65b675a");
+    expect(parsed.canonical_contract.sequence_state_sha256)
+      .toBe("ecbe4ba722d6129910da88016c7cadc5727a666d4e3cd5057047786dd11f2889");
+    expect(parsed.canonical_contract.public_acl_security_sha256)
+      .toBe("22ac365288cd7414943f9f11604a3ed7c372bc297b6db976b5d84582ecbd2311");
+    expect(parsed.correction_semantics.corrected_official_function_definition_sha256)
+      .toBe("256e213b63ba618bfe2edf3fb27e3499e4ff584a0e040f6f77e2f3189d7c3e94");
+    expect(parsed.correction_semantics.offer_backed_function_definition_sha256)
+      .toBe("b98b8c64a00adaa36b3983bf9127f05c4f17403faaaa23e5882b7d961611ad12");
+    expect(repair).toContain("CREATE OR REPLACE FUNCTION public.public_official_offer_rows_v1");
+    expect(repair).toContain("PARALLEL UNSAFE");
+    expect(repair).toContain("candidate.normalized_fields #> '{candidate,exactCanonicalProductId}'");
+    expect(repair).toContain("jsonb_typeof(");
+    expect(repair).not.toMatch(/regexp_replace|pg_proc|prosrc|execute\s+/iu);
   });
 
   it("keeps unverified mirror and legacy coverage explicitly ineligible", async () => {
