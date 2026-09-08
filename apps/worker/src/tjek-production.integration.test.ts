@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDatabase } from "@handleplan/db/client";
@@ -14,14 +14,16 @@ integration("Tjek production foundation under worker role", () => {
     const connection = createDatabase(process.env.APP_DATABASE_URL!);
     const root = await mkdtemp(join(tmpdir(), "handleplan-tjek-proof-"));
     try {
-      // Synthetic authorization fixture; production permission is never modified.
+      // Synthetic authorization fixture in the disposable integration database.
+      const reviewedAt = new Date(Date.now() - 1_000).toISOString();
       await admin.sql`insert into source_permissions (source_id, decision, reviewed_at, permissions)
-        values ('tjek', 'approved', ${new Date(Date.now() - 1_000).toISOString()},
+        values ('tjek', 'approved', ${reviewedAt},
           '{"officialOffers":true,"officialOfferCapabilities":["capture","discover","extract"],"officialOfferRightsClassifications":["public_display"]}'::jsonb)`;
       await admin.sql`update data_sources source set permission_reviewed_at = permission.reviewed_at,
         permission_expires_at = permission.valid_until from source_permissions permission
         where source.id = 'tjek' and permission.id =
           (select id from source_permissions where source_id = 'tjek' order by created_at desc, id desc limit 1)`;
+      const [{ now: databaseNow }] = await admin.sql<{ now: Date }[]>`select clock_timestamp() as now`;
       const catalog = {
         id: `integration-${randomUUID()}`, dealer_id: "5b11sm",
         publication_date: new Date().toISOString().slice(0, 10),
@@ -33,8 +35,8 @@ integration("Tjek production foundation under worker role", () => {
         getAllLatestCatalogs: async () => [catalog], canExtractOffers: () => true,
         getOffersFromCatalog: async () => [{ id: "milk", name: "Synthetic milk", price: 20, currency: "NOK", before_price: null, run_from: catalog.run_from, run_till: catalog.run_till }],
       };
-      const foundation = createTjekFoundationDependencies(connection.db, root);
-      const handler = createTjekHandlers({ client: client as never, foundation })[TJEK_JOB_KIND]!;
+      const foundation = createTjekFoundationDependencies(connection.db, await realpath(root));
+      const handler = createTjekHandlers({ client: client as never, foundation, clock: () => new Date(databaseNow) })[TJEK_JOB_KIND]!;
       const context = { signal: new AbortController().signal, sourceId: "tjek", jobId: "integration", runId: randomUUID(), fenceToken: "integration", kind: TJEK_JOB_KIND };
       const first = await handler(context);
       expect(first.counters?.persisted).toBe(1);

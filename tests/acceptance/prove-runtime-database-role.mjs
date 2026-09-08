@@ -46,9 +46,17 @@ const webTableSelects = [
   "reviewed_family_membership_public",
 ];
 const workerReadOnlyTables = [
+  "approved_offers",
   "data_sources",
+  "extracted_offer_candidates",
+  "extraction_runs",
   "geographic_scopes",
   "handleplan_schema_migrations",
+  "offer_conditions",
+  "offer_targets",
+  "publication_captures",
+  "publications",
+  "review_actions",
   "source_permissions",
 ];
 const workerAppendTables = [
@@ -463,9 +471,13 @@ async function assertExactSequenceAndFunctionGrants(client, role) {
       `${name}(${argumentsList})`).sort(),
     role === workerRole ? [
       "official_offer_lifecycle_reconcile_v1(p_source_id text, p_job_id text, p_run_id text, p_scheduled_at timestamp with time zone, p_owner_id text, p_batch_limit integer, p_publication_requested boolean)",
+      "record_official_offer_capture_v1(p_metadata jsonb, p_blob_key text, p_authorization jsonb)",
+      "record_official_offer_edition_v1(p_edition jsonb, p_authorization jsonb)",
+      "record_official_offer_extraction_v1(p_capture_id bigint, p_payload jsonb)",
     ] : role === webRole
       ? [
         "claim_public_api_request_budget(p_route_key text)",
+        "public_offer_backed_discovery_rows_v1(p_evaluation_as_of timestamp with time zone)",
         "public_official_offer_rows_v1(p_product_ids bigint[], p_evaluation_as_of timestamp with time zone)",
       ]
       : role === reviewRole ? [
@@ -507,6 +519,20 @@ try {
   await admin.unsafe(`create database "${proofDatabase}"`);
   createdDatabase = true;
 
+  const migrationEnvironment = {
+    ...process.env,
+    DATABASE_MIGRATION_URL: urlForDatabase(proofDatabase),
+    APP_DATABASE_PASSWORD: process.env.APP_DATABASE_PASSWORD,
+    MIGRATIONS_DIR: process.env.MIGRATIONS_DIR,
+    OPERATIONS_DATABASE_PASSWORD: process.env.OPERATIONS_DATABASE_PASSWORD,
+    WEB_DATABASE_PASSWORD: process.env.WEB_DATABASE_PASSWORD,
+    REVIEW_DATABASE_PASSWORD: process.env.REVIEW_DATABASE_PASSWORD,
+  };
+  // The baseline path intentionally requires a genuinely empty catalog.
+  // Bootstrap it before adding the hostile search-path schema used by the
+  // placement assertions below, then rerun migrations against that state.
+  await run(process.execPath, [migrationRunner], migrationEnvironment);
+
   const hostileSchema = "handleplan_hostile_path";
   const preMigration = postgres(urlForDatabase(proofDatabase), {
     connect_timeout: 10,
@@ -523,15 +549,6 @@ try {
     await preMigration.end({ timeout: 5 });
   }
 
-  const migrationEnvironment = {
-    ...process.env,
-    DATABASE_MIGRATION_URL: urlForDatabase(proofDatabase),
-    APP_DATABASE_PASSWORD: process.env.APP_DATABASE_PASSWORD,
-    MIGRATIONS_DIR: process.env.MIGRATIONS_DIR,
-    OPERATIONS_DATABASE_PASSWORD: process.env.OPERATIONS_DATABASE_PASSWORD,
-    WEB_DATABASE_PASSWORD: process.env.WEB_DATABASE_PASSWORD,
-    REVIEW_DATABASE_PASSWORD: process.env.REVIEW_DATABASE_PASSWORD,
-  };
   await run(process.execPath, [migrationRunner], migrationEnvironment);
 
   const ownershipAdmin = postgres(urlForDatabase(proofDatabase), {
@@ -1864,7 +1881,7 @@ try {
     family_membership_private_access: false,
     worker_lease_write: true,
     source_health_append: true,
-    private_pipeline_access: false,
+    private_pipeline_access: true,
     worker_results_append: true,
     worker_results_rewrite: false,
     budget_select: true,
@@ -1877,11 +1894,17 @@ try {
     elevated_role: false,
   });
   const rollbackReadiness = await runtime`
-    select id from handleplan_schema_migrations where id = '011_catalog_observations.sql'
+    select
+      to_regclass('public.handleplan_schema_baselines') is not null as baseline_exists,
+      exists (
+        select 1
+        from handleplan_schema_migrations
+        where id = '011_catalog_observations.sql'
+      ) as legacy_row
   `;
   assert.equal(
-    rollbackReadiness.length,
-    1,
+    rollbackReadiness[0]?.baseline_exists || rollbackReadiness[0]?.legacy_row,
+    true,
     "legacy rollback role must retain migration-ledger readiness reads",
   );
 
@@ -2642,9 +2665,19 @@ try {
   });
 
   const webMigrations = await web`
-    select id from handleplan_schema_migrations where id = '022_public_official_offer_projection.sql'
+    select
+      to_regclass('public.handleplan_schema_baselines') is not null as baseline_exists,
+      exists (
+        select 1
+        from handleplan_schema_migrations
+        where id = '022_public_official_offer_projection.sql'
+      ) as legacy_row
   `;
-  assert.equal(webMigrations.length, 1, "web readiness must read the migration ledger");
+  assert.equal(
+    webMigrations[0]?.baseline_exists || webMigrations[0]?.legacy_row,
+    true,
+    "web readiness must read the migration ledger",
+  );
   const webEvidence = await web`
     select observation.amount_ore, product.display_name, coverage.state
     from price_observations observation
@@ -2964,9 +2997,10 @@ try {
     /terminal worker job identity/i,
     "worker role must not write unimplemented public-status pipelines",
   );
+  await runtime`select id from publication_captures limit 1`;
   await expectDenied(
-    () => runtime`select id from publication_captures limit 1`,
-    "worker role must not read private capture pipelines",
+    () => runtime`update publication_captures set blob_key = blob_key where false`,
+    "worker role must not rewrite private capture pipelines",
   );
   await expectDenied(
     () => runtime`select family_id from reviewed_family_membership_public limit 1`,

@@ -174,7 +174,9 @@ const extractionValidationContext = {
 describe("PostgresOfficialOfferFoundationRepository", () => {
   it("records an authorized edition idempotently without persisting authorization details", async () => {
     const database = scriptedDatabase((sql) =>
-      sql.includes("insert into publications") ? [publicationRow] : []);
+      sql.includes("record_official_offer_edition_v1")
+        ? [{ created: true, id: publicationRow.id, status: publicationRow.status }]
+        : []);
     const repository = new PostgresOfficialOfferFoundationRepository(database.db);
 
     await expect(repository.recordEdition(
@@ -185,29 +187,16 @@ describe("PostgresOfficialOfferFoundationRepository", () => {
       id: 42,
       status: "discovered",
     });
-    const insert = database.calls.find(({ sql }) => sql.includes("insert into publications"));
-    expect(insert?.sql).toContain("on conflict (source_id, external_id) do nothing");
-    expect(insert?.sql).not.toContain("authorization");
+    const insert = database.calls.find(({ sql }) => sql.includes("record_official_offer_edition_v1"));
+    expect(insert?.sql).toContain("record_official_offer_edition_v1");
+    expect(database.calls.some(({ sql }) => sql.includes("insert into publications"))).toBe(false);
     expect(insert?.sql).not.toContain("private_reference");
-    const authorizationQuery = database.calls.find(({ sql }) =>
-      sql.includes("from data_sources source"));
-    expect(authorizationQuery?.sql).toContain(
-      "order by current_permission.created_at desc, current_permission.id desc",
-    );
-    expect(authorizationQuery?.sql).not.toContain(
-      "order by current_permission.reviewed_at desc",
-    );
-    const scopeQuery = database.calls.find(({ sql }) =>
-      sql.includes("from geographic_scopes scope"));
-    expect(scopeQuery?.sql).toContain("limit 101");
-    expect(scopeQuery?.sql).toContain("limit 10001");
-    expect(scopeQuery?.sql).toContain("limit 1001");
   });
 
   it("rejects an edition identity collision instead of rewriting scope or validity", async () => {
     let insertAttempted = false;
     const database = scriptedDatabase((sql) => {
-      if (sql.includes("insert into publications")) {
+      if (sql.includes("record_official_offer_edition_v1")) {
         insertAttempted = true;
         return [];
       }
@@ -238,7 +227,14 @@ describe("PostgresOfficialOfferFoundationRepository", () => {
           external_id: syntheticAuthorizedLocalEdition.externalEditionId,
         }];
       }
-      if (sql.includes("insert into publication_captures")) return [captureRow];
+      if (sql.includes("record_official_offer_capture_v1")) {
+        return [{
+          blob_key: captureRow.blob_key,
+          created: true,
+          id: captureRow.id,
+          retrieved_at: captureRow.retrieved_at,
+        }];
+      }
       return [];
     });
     const repository = new PostgresOfficialOfferFoundationRepository(database.db);
@@ -254,9 +250,9 @@ describe("PostgresOfficialOfferFoundationRepository", () => {
       retrievedAt: captureMetadata.retrievedAt,
     });
     const captureInsert = database.calls.find(({ sql }) =>
-      sql.includes("insert into publication_captures"));
-    expect(captureInsert?.sql).toContain("on conflict (publication_id, checksum) do nothing");
-    expect(captureInsert?.sql).not.toContain("raw_bytes");
+      sql.includes("record_official_offer_capture_v1"));
+    expect(captureInsert?.sql).toContain("record_official_offer_capture_v1");
+    expect(database.calls.some(({ sql }) => sql.includes("insert into publication_captures"))).toBe(false);
   });
 
   it("persists one terminal extraction per capture/version and only unique typed candidates", async () => {
@@ -288,13 +284,13 @@ describe("PostgresOfficialOfferFoundationRepository", () => {
       if (sql.includes("from publication_captures capture")) {
         return [captureBindingRow];
       }
-      if (sql.includes("insert into extraction_runs")) {
+      if (sql.includes("record_official_offer_extraction_v1")) {
         extractionInsertCount += 1;
-        const counts = findJsonObjectParameter(values, "envelopeSha256");
+        const payload = findJsonObjectParameter(values, "counts");
+        const counts = payload?.counts;
         if (persistedCounts === undefined) persistedCounts = counts;
-        return extractionInsertCount === 1 ? [extractionRow(persistedCounts)] : [];
+        return [{ counts: persistedCounts, created: extractionInsertCount === 1, id: extractionRow(persistedCounts).id, status: "completed" }];
       }
-      if (sql.includes("from extraction_runs")) return [extractionRow(persistedCounts)];
       return [];
     });
     const repository = new PostgresOfficialOfferFoundationRepository(database.db);
@@ -326,9 +322,9 @@ describe("PostgresOfficialOfferFoundationRepository", () => {
       status: "completed",
     });
     expect(database.calls.filter(({ sql }) =>
-      sql.includes("insert into extracted_offer_candidates"))).toHaveLength(5);
-    expect(database.calls.find(({ sql }) => sql.includes("insert into extraction_runs"))?.sql)
-      .toContain("on conflict (capture_id, extractor_version) do nothing");
+      sql.includes("insert into extracted_offer_candidates"))).toHaveLength(0);
+    expect(database.calls.filter(({ sql }) =>
+      sql.includes("record_official_offer_extraction_v1"))).toHaveLength(2);
     expect(persistedCounts).toMatchObject({
       envelopeSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
       validationSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
@@ -375,8 +371,9 @@ describe("PostgresOfficialOfferFoundationRepository", () => {
       if (sql.includes("from publication_captures capture")) {
         return [captureBindingRow];
       }
-      if (sql.includes("insert into extraction_runs")) {
-        const attemptedCounts = findJsonObjectParameter(values, "envelopeSha256");
+      if (sql.includes("record_official_offer_extraction_v1")) {
+        const payload = findJsonObjectParameter(values, "counts");
+        const attemptedCounts = payload?.counts;
         if (firstInsert) {
           firstInsert = false;
           persistedCounts = attemptedCounts;
@@ -384,7 +381,6 @@ describe("PostgresOfficialOfferFoundationRepository", () => {
         }
         return [];
       }
-      if (sql.includes("from extraction_runs")) return [extractionRow()];
       return [];
     });
     const repository = new PostgresOfficialOfferFoundationRepository(database.db);
@@ -450,24 +446,14 @@ describe("PostgresOfficialOfferFoundationRepository", () => {
     const completion = new Date("2026-07-12T12:01:02.000Z");
     const database = scriptedDatabase((sql, values) => {
       if (sql.includes("from publication_captures capture")) return [captureBindingRow];
-      if (sql.includes("insert into extraction_runs")) {
-        persistedCounts = findJsonObjectParameter(values, "envelopeSha256");
+      if (sql.includes("record_official_offer_extraction_v1")) {
+        const payload = findJsonObjectParameter(values, "counts");
+        persistedCounts = payload?.counts;
         return [{
+          counts: persistedCounts,
+          created: true,
           id: "127",
           status: validation.status,
-          started_at: new Date(extractionTiming.serverStartedAt),
-          completed_at: completion,
-          counts: persistedCounts,
-          error_class: null,
-          extraction_method: envelope.method,
-          extraction_permission_id: "11",
-          ocr_permission_id: null,
-          permission_capabilities: authorizationFence.capabilities,
-          source_started_at: new Date(envelope.startedAt),
-          source_completed_at: new Date(envelope.completedAt),
-          empty_result: envelope.emptyResult,
-          empty_confirmation: envelope.emptyConfirmation,
-          empty_confirmation_observed_at: completion,
         }];
       }
       return [];
@@ -482,8 +468,8 @@ describe("PostgresOfficialOfferFoundationRepository", () => {
       extractionTiming,
       authorizationFence,
     )).resolves.toMatchObject({ created: true, id: 127, status: "completed" });
-    const insert = database.calls.find(({ sql }) => sql.includes("insert into extraction_runs"));
-    expect(insert?.sql).toContain("empty_confirmation_observed_at");
+    const insert = database.calls.find(({ sql }) => sql.includes("record_official_offer_extraction_v1"));
+    expect(insert?.sql).toContain("record_official_offer_extraction_v1");
     expect(JSON.stringify(insert?.values)).not.toContain("confirmedAt");
   });
 

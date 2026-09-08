@@ -231,6 +231,9 @@ const officialOfferLifecycleRuntimeEnabled = migrationFiles.includes(
 const officialOfferEditionIdentityEnabled = migrationFiles.includes(
   "038_tjek_function_grants.sql",
 );
+const officialOfferFoundationWorkerBoundaryEnabled = migrationFiles.includes(
+  "042_official_offer_worker_boundary.sql",
+);
 const officialOfferPublicationHealthEnabled = migrationFiles.includes(
   "027_official_offer_publication_health.sql",
 );
@@ -701,9 +704,11 @@ async function configureRuntimeRoles() {
       grant usage on sequence ${identifiers(runtimeSequences)} to ${workerRole};
       grant select on table ${identifiers(officialOfferWorkerReadTables)}
         to ${workerRole};
+      ${officialOfferFoundationWorkerBoundaryEnabled ? "" : `
       grant insert on table ${identifiers(officialOfferWorkerWriteTables)}
         to ${workerRole};
       grant usage on sequence ${identifiers(officialOfferWorkerWriteSequences)} to ${workerRole};
+      `}
 
       grant select on table ${identifiers(webReadOnlyTables)} to ${webRole};
       grant select on table latest_price_evidence to ${webRole};
@@ -831,7 +836,20 @@ async function configureRuntimeRoles() {
       // Keep the worker boundary explicit. The blanket grants formerly used
       // here also exposed review/governance functions and every application
       // table to the worker role.
-      await transaction.unsafe(`
+      await transaction.unsafe(officialOfferFoundationWorkerBoundaryEnabled ? `
+        revoke all on function public.canonical_official_offer_edition_identity(
+          text, text, text, text, text, bigint, jsonb,
+          timestamp with time zone, timestamp with time zone, timestamp with time zone
+        ) from ${workerRole};
+        revoke all on function public.canonical_official_offer_scope_identity(jsonb)
+          from ${workerRole};
+        grant execute on function public.record_official_offer_edition_v1(jsonb, jsonb)
+          to ${workerRole};
+        grant execute on function public.record_official_offer_capture_v1(jsonb, text, jsonb)
+          to ${workerRole};
+        grant execute on function public.record_official_offer_extraction_v1(bigint, jsonb)
+          to ${workerRole};
+      ` : `
         grant execute on function public.canonical_official_offer_edition_identity(
           text, text, text, text, text, bigint, jsonb,
           timestamp with time zone, timestamp with time zone, timestamp with time zone

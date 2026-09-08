@@ -125,6 +125,7 @@ const currentMigrations = [
   "039_tjek_null_comparison_fix.sql",
   "040_offer_backed_discovery.sql",
   "041_public_offer_projection_repair.sql",
+  "042_official_offer_worker_boundary.sql",
 ];
 const legacy040SchemaFixture = resolve(
   root,
@@ -660,8 +661,9 @@ async function verifyBaselineActivation(sql) {
   assert.match(baseline?.resulting_schema_sha256 ?? "", /^[0-9a-f]{64}$/);
   const ledger = await readMigrationLedger(sql, [
     "041_public_offer_projection_repair.sql",
+    "042_official_offer_worker_boundary.sql",
   ]);
-  assert.equal(ledger.length, 1);
+  assert.equal(ledger.length, 2);
   const [projection] = await sql`
     select pg_catalog.pg_get_functiondef(
       'public.public_official_offer_rows_v1(bigint[], timestamptz)'::regprocedure
@@ -1342,6 +1344,26 @@ async function verifyRuntimeRolePolicy(sql) {
       ) as worker_offer_permission_governance_execute,
       has_function_privilege(
         'handleplan_app',
+        'record_official_offer_edition_v1(jsonb,jsonb)',
+        'EXECUTE'
+      ) as worker_offer_edition_boundary_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'record_official_offer_capture_v1(jsonb,text,jsonb)',
+        'EXECUTE'
+      ) as worker_offer_capture_boundary_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'record_official_offer_extraction_v1(bigint,jsonb)',
+        'EXECUTE'
+      ) as worker_offer_extraction_boundary_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'official_offer_worker_assert_fence_v1(text,bigint,jsonb,jsonb,text,text,text,text,text)',
+        'EXECUTE'
+      ) as worker_offer_boundary_helper_execute,
+      has_function_privilege(
+        'handleplan_app',
         'assert_public_official_offer_payload_v1(bigint)',
         'EXECUTE'
       ) as worker_public_offer_payload_execute,
@@ -1702,13 +1724,17 @@ async function verifyRuntimeRolePolicy(sql) {
     worker_offer_conditions_insert: false,
     worker_offer_conditions_update: false,
     worker_offer_conditions_delete: false,
-    worker_offer_edition_identity_execute: true,
-    worker_offer_scope_identity_execute: true,
+    worker_offer_edition_identity_execute: false,
+    worker_offer_scope_identity_execute: false,
     worker_private_review_candidate_execute: false,
     worker_private_review_decide_v1_execute: false,
     worker_private_review_evidence_execute: false,
     worker_private_review_decide_v2_execute: false,
     worker_offer_permission_governance_execute: false,
+    worker_offer_edition_boundary_execute: true,
+    worker_offer_capture_boundary_execute: true,
+    worker_offer_extraction_boundary_execute: true,
+    worker_offer_boundary_helper_execute: false,
     worker_public_offer_payload_execute: false,
     worker_membership_program_execute: false,
     worker_public_offer_projection_execute: false,
@@ -2999,7 +3025,7 @@ process.exit(child.status ?? 1);
   assert.equal(restoreResult.evidence.status, "archive-restored-schema-verified");
   const restored = postgres(localDatabaseUrl(restoreDatabase, 55443, restoreRole, restoreContainerPassword), { max: 1, onnotice: () => {} });
   const [ledgerCount] = await restored`select count(*)::integer as count from handleplan_schema_migrations`;
-  assert.equal(ledgerCount.count, label === "baseline" ? 1 : 41);
+  assert.equal(ledgerCount.count, label === "baseline" ? 2 : 42);
   const [baselineState] = await restored`
     select to_regclass('public.handleplan_schema_baselines') is not null as exists
   `;

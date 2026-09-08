@@ -1,0 +1,604 @@
+-- The worker may persist official-offer evidence only through these three
+-- source-fenced entry points.  Existing trigger checks remain authoritative;
+-- these functions add the missing transaction boundary around the lock,
+-- authorization fence, and state transition.
+
+create function public.official_offer_worker_assert_fence_v1(
+  p_source_id text,
+  p_permission_id bigint,
+  p_capabilities jsonb,
+  p_rights_classifications jsonb,
+  p_required_capability text,
+  p_rights_classification text,
+  p_reviewed_at text,
+  p_valid_until text,
+  p_evaluated_at text
+)
+returns void
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  v_permission_id bigint;
+  v_reviewed_at text;
+  v_valid_until text;
+  v_evaluated_at text;
+begin
+  if p_source_id is null
+     or pg_catalog.length(p_source_id) not between 1 and 64
+     or p_permission_id is null
+     or p_permission_id not between 1 and 9007199254740991
+     or p_required_capability is null
+     or p_required_capability not in ('capture', 'discover', 'extract', 'ocr')
+     or p_reviewed_at is null
+     or p_reviewed_at !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.(\d{3}|\d{6})Z$'
+     or p_evaluated_at is null
+     or p_evaluated_at !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.(\d{3}|\d{6})Z$'
+     or (p_valid_until is not null
+       and p_valid_until !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.(\d{3}|\d{6})Z$')
+     or pg_catalog.jsonb_typeof(p_capabilities) is distinct from 'array'
+     or pg_catalog.jsonb_typeof(p_rights_classifications) is distinct from 'array' then
+    raise exception 'official-offer worker authorization payload is invalid'
+      using errcode = '22023';
+  end if;
+
+  v_reviewed_at := case when pg_catalog.length(p_reviewed_at) = 24
+    then pg_catalog.left(p_reviewed_at, 23) || '000Z' else p_reviewed_at end;
+  v_valid_until := case when p_valid_until is null then null when pg_catalog.length(p_valid_until) = 24
+    then pg_catalog.left(p_valid_until, 23) || '000Z' else p_valid_until end;
+  v_evaluated_at := case when pg_catalog.length(p_evaluated_at) = 24
+    then pg_catalog.left(p_evaluated_at, 23) || '000Z' else p_evaluated_at end;
+  if pg_catalog.to_char(v_reviewed_at::timestamptz at time zone 'UTC',
+      'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') <> v_reviewed_at
+     or pg_catalog.to_char(v_evaluated_at::timestamptz at time zone 'UTC',
+      'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') <> v_evaluated_at
+     or (v_valid_until is not null and pg_catalog.to_char(
+       v_valid_until::timestamptz at time zone 'UTC',
+       'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') <> v_valid_until) then
+    raise exception 'official-offer worker authorization timestamp is not canonical'
+      using errcode = '22023';
+  end if;
+
+  perform public.assert_current_official_offer_permission(
+    p_source_id,
+    p_permission_id,
+    p_capabilities,
+    p_required_capability,
+    p_rights_classification
+  );
+
+  select permission.id
+  into v_permission_id
+  from public.data_sources source
+  inner join public.source_permissions permission
+    on permission.id = (
+      select current_permission.id
+      from public.source_permissions current_permission
+      where current_permission.source_id = source.id
+        and current_permission.created_at <= pg_catalog.clock_timestamp()
+      order by current_permission.created_at desc, current_permission.id desc
+      limit 1
+    )
+  where source.id = p_source_id
+    and source.runtime_state = 'approved'
+    and source.public_state_changed_at <= v_evaluated_at::timestamptz
+    and source.permission_reviewed_at = permission.reviewed_at
+    and source.permission_expires_at is not distinct from permission.valid_until
+    and permission.id = p_permission_id
+    and permission.decision = 'approved'
+    and permission.reviewed_at = v_reviewed_at::timestamptz
+    and permission.valid_until is not distinct from v_valid_until::timestamptz
+    and permission.created_at <= v_evaluated_at::timestamptz
+    and permission.reviewed_at <= v_evaluated_at::timestamptz
+    and (permission.valid_until is null or permission.valid_until > pg_catalog.clock_timestamp())
+    and v_evaluated_at::timestamptz between
+      pg_catalog.clock_timestamp() - interval '5 seconds'
+      and pg_catalog.clock_timestamp() + interval '5 seconds'
+    and permission.permissions @> '{"officialOffers": true}'::jsonb
+    and permission.permissions -> 'officialOfferCapabilities' = p_capabilities
+    and permission.permissions -> 'officialOfferRightsClassifications' = p_rights_classifications;
+
+  if v_permission_id is distinct from p_permission_id then
+    raise exception 'official-offer worker authorization fence is stale'
+      using errcode = '42501';
+  end if;
+end;
+$$;
+
+create function public.record_official_offer_edition_v1(
+  p_edition jsonb,
+  p_authorization jsonb
+)
+returns table(created boolean, id bigint, status text)
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  v_source_id text;
+  v_external_id text;
+  v_chain text;
+  v_title text;
+  v_content_kind text;
+  v_scope_id bigint;
+  v_declared_scope jsonb;
+  v_valid_from timestamptz;
+  v_valid_until timestamptz;
+  v_discovered_at timestamptz;
+  v_existing public.publications%rowtype;
+  v_created boolean;
+begin
+  if pg_catalog.jsonb_typeof(p_edition) is distinct from 'object'
+     or pg_catalog.jsonb_typeof(p_authorization) is distinct from 'object'
+     or pg_catalog.pg_column_size(p_edition) > 65536
+     or pg_catalog.pg_column_size(p_authorization) > 16384
+     or p_edition ->> 'contractVersion' is distinct from '1'
+     or p_authorization ->> 'contractVersion' is distinct from '1'
+     or p_authorization ->> 'decision' is distinct from 'approved' then
+    raise exception 'official-offer edition payload is invalid' using errcode = '22023';
+  end if;
+
+  v_source_id := p_edition ->> 'sourceId';
+  v_external_id := p_edition ->> 'externalEditionId';
+  v_chain := p_edition ->> 'chain';
+  v_title := p_edition ->> 'title';
+  v_content_kind := p_edition ->> 'contentKind';
+  v_scope_id := (p_edition ->> 'geographicScopeId')::bigint;
+  v_declared_scope := p_edition -> 'declaredGeographicScope';
+  v_valid_from := (p_edition ->> 'validFrom')::timestamptz;
+  v_valid_until := (p_edition ->> 'validUntil')::timestamptz;
+  v_discovered_at := (p_edition ->> 'discoveredAt')::timestamptz;
+
+  if v_source_id is null or pg_catalog.length(v_source_id) > 64
+     or v_external_id is null or pg_catalog.length(v_external_id) > 160
+     or v_chain is null or pg_catalog.length(v_chain) > 32
+     or v_title is null or pg_catalog.length(v_title) > 240
+     or v_content_kind is null or v_content_kind not in ('structured-feed', 'publication')
+     or v_scope_id is null or v_scope_id not between 1 and 9007199254740991
+     or v_declared_scope is null
+     or v_valid_from is null or v_valid_until is null or v_discovered_at is null then
+    raise exception 'official-offer edition payload is invalid' using errcode = '22023';
+  end if;
+
+  if p_edition -> 'authorization' ->> 'decision' is distinct from 'approved'
+     or p_authorization ->> 'sourceId' is distinct from v_source_id
+     or p_edition -> 'authorization' -> 'capabilities'
+       is distinct from p_authorization -> 'capabilities'
+     or p_edition -> 'authorization' ->> 'reviewedAt'
+       is distinct from p_authorization ->> 'reviewedAt'
+     or p_edition -> 'authorization' -> 'validUntil'
+       is distinct from p_authorization -> 'validUntil' then
+    raise exception 'official-offer edition authorization fence mismatch'
+      using errcode = '42501';
+  end if;
+
+  perform public.official_offer_worker_assert_fence_v1(
+    v_source_id,
+    (p_authorization ->> 'permissionId')::bigint,
+    p_authorization -> 'capabilities',
+    p_authorization -> 'rightsClassifications',
+    'discover', null,
+    p_authorization ->> 'reviewedAt',
+    p_authorization ->> 'validUntil',
+    p_authorization ->> 'evaluatedAt'
+  );
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(v_source_id, 7229164304)
+  );
+
+  insert into public.publications (
+    source_id, external_id, chain, title, valid_from, valid_until,
+    geographic_scope_id, status, discovered_at, content_kind,
+    declared_geographic_scope, edition_identity_sha256, discovery_permission_id
+  ) values (
+    v_source_id, v_external_id, v_chain, v_title, v_valid_from, v_valid_until,
+    v_scope_id, 'discovered', v_discovered_at, v_content_kind, v_declared_scope,
+    pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+      public.canonical_official_offer_edition_identity(
+        v_source_id, v_external_id, v_chain, v_title, v_content_kind, v_scope_id,
+        v_declared_scope, v_valid_from, v_valid_until, v_discovered_at
+      ), 'UTF8')), 'hex'),
+    (p_authorization ->> 'permissionId')::bigint
+  )
+  on conflict (source_id, external_id) do nothing
+  returning public.publications.* into v_existing;
+  v_created := found;
+
+  if not v_created then
+    select publication.* into v_existing
+    from public.publications publication
+    where publication.source_id = v_source_id
+      and publication.external_id = v_external_id
+    limit 1 for update;
+  end if;
+  if v_existing.id is null then
+    raise exception 'official-offer edition persistence did not return a publication'
+      using errcode = '40001';
+  end if;
+
+  perform public.official_offer_worker_assert_fence_v1(
+    v_source_id,
+    (p_authorization ->> 'permissionId')::bigint,
+    p_authorization -> 'capabilities',
+    p_authorization -> 'rightsClassifications',
+    'discover', null,
+    p_authorization ->> 'reviewedAt',
+    p_authorization ->> 'validUntil',
+    p_authorization ->> 'evaluatedAt'
+  );
+  return query select v_created, v_existing.id, v_existing.status::text;
+end;
+$$;
+
+create function public.record_official_offer_capture_v1(
+  p_metadata jsonb,
+  p_blob_key text,
+  p_authorization jsonb
+)
+returns table(blob_key text, created boolean, id bigint, retrieved_at timestamptz)
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  v_publication public.publications%rowtype;
+  v_capture public.publication_captures%rowtype;
+  v_created boolean;
+  v_source_id text;
+  v_external_id text;
+  v_publication_id bigint;
+  v_checksum text;
+  v_mime_type text;
+  v_byte_length integer;
+  v_rights text;
+begin
+  if pg_catalog.jsonb_typeof(p_metadata) is distinct from 'object'
+     or pg_catalog.jsonb_typeof(p_authorization) is distinct from 'object'
+     or pg_catalog.pg_column_size(p_metadata) > 16384
+     or pg_catalog.pg_column_size(p_authorization) > 16384
+     or p_metadata ->> 'contractVersion' is distinct from '1'
+     or p_authorization ->> 'contractVersion' is distinct from '1'
+     or p_authorization ->> 'decision' is distinct from 'approved'
+     or p_blob_key is null or pg_catalog.length(p_blob_key) not between 1 and 1024
+     or p_blob_key ~ '(^/|\.\.)'
+     or p_blob_key !~ '^[A-Za-z0-9_./:-]+$' then
+    raise exception 'official-offer capture payload is invalid' using errcode = '22023';
+  end if;
+  v_publication_id := (p_metadata ->> 'publicationId')::bigint;
+  v_source_id := p_metadata ->> 'sourceId';
+  v_external_id := p_metadata ->> 'externalEditionId';
+  v_checksum := p_metadata ->> 'checksumSha256';
+  v_mime_type := p_metadata ->> 'mimeType';
+  v_byte_length := (p_metadata ->> 'byteLength')::integer;
+  v_rights := p_metadata ->> 'rightsClassification';
+  if v_publication_id is null or v_publication_id not between 1 and 9007199254740991
+     or v_source_id is null or pg_catalog.length(v_source_id) > 64
+     or v_external_id is null or pg_catalog.length(v_external_id) > 160
+     or v_checksum is null or v_checksum !~ '^[0-9a-f]{64}$'
+     or v_mime_type is null or pg_catalog.length(v_mime_type) not between 1 and 120
+     or v_byte_length is null or v_byte_length not between 1 and 52428800
+     or v_rights is null or v_rights not in ('extract_only', 'private_review', 'public_display') then
+    raise exception 'official-offer capture payload is invalid' using errcode = '22023';
+  end if;
+  if p_authorization ->> 'sourceId' is distinct from v_source_id then
+    raise exception 'official-offer capture authorization source mismatch'
+      using errcode = '42501';
+  end if;
+
+  perform public.official_offer_worker_assert_fence_v1(
+    v_source_id,
+    (p_authorization ->> 'permissionId')::bigint,
+    p_authorization -> 'capabilities',
+    p_authorization -> 'rightsClassifications',
+    'capture', v_rights,
+    p_authorization ->> 'reviewedAt',
+    p_authorization ->> 'validUntil',
+    p_authorization ->> 'evaluatedAt'
+  );
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(v_source_id, 7229164304)
+  );
+
+  select publication.* into v_publication
+  from public.publications publication
+  where publication.id = v_publication_id
+  limit 1 for update;
+  if v_publication.id is null
+     or v_publication.source_id <> v_source_id
+     or v_publication.external_id <> v_external_id then
+    raise exception 'official-offer capture does not match its publication'
+      using errcode = '40001';
+  end if;
+
+  insert into public.publication_captures (
+    publication_id, blob_key, checksum, mime_type, byte_length,
+    rights_classification, retrieved_at, capture_permission_id,
+    capture_permission_capabilities
+  ) values (
+    v_publication_id, p_blob_key, v_checksum, v_mime_type, v_byte_length,
+    v_rights, pg_catalog.clock_timestamp(),
+    (p_authorization ->> 'permissionId')::bigint,
+    p_authorization -> 'capabilities'
+  )
+  on conflict (publication_id, checksum) do nothing
+  returning public.publication_captures.* into v_capture;
+  v_created := found;
+  if not v_created then
+    select capture.* into v_capture
+    from public.publication_captures capture
+    where capture.publication_id = v_publication_id
+      and capture.checksum = v_checksum
+    limit 1 for update;
+  end if;
+  if v_capture.id is null then
+    raise exception 'official-offer capture persistence did not return a capture'
+      using errcode = '40001';
+  end if;
+
+  update public.publications
+  set status = case when status = 'discovered' then 'captured' else status end,
+      updated_at = pg_catalog.clock_timestamp()
+  where public.publications.id = v_publication_id;
+
+  perform public.official_offer_worker_assert_fence_v1(
+    v_source_id,
+    (p_authorization ->> 'permissionId')::bigint,
+    p_authorization -> 'capabilities',
+    p_authorization -> 'rightsClassifications',
+    'capture', v_rights,
+    p_authorization ->> 'reviewedAt',
+    p_authorization ->> 'validUntil',
+    p_authorization ->> 'evaluatedAt'
+  );
+  return query select p_blob_key, v_created, v_capture.id, v_capture.retrieved_at;
+end;
+$$;
+
+create function public.record_official_offer_extraction_v1(
+  p_capture_id bigint,
+  p_payload jsonb
+)
+returns table(counts jsonb, created boolean, id bigint, status text)
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  v_capture public.publication_captures%rowtype;
+  v_publication public.publications%rowtype;
+  v_extraction public.extraction_runs%rowtype;
+  v_created boolean;
+  v_envelope jsonb := p_payload -> 'envelope';
+  v_edition jsonb := p_payload -> 'edition';
+  v_authorization jsonb := p_payload -> 'authorization';
+  v_ocr_authorization jsonb := p_payload -> 'ocrAuthorization';
+  v_source_id text;
+  v_external_id text;
+  v_scope_id bigint;
+  v_chain text;
+  v_title text;
+  v_content_kind text;
+  v_declared_scope jsonb;
+  v_valid_from timestamptz;
+  v_valid_until timestamptz;
+  v_discovered_at timestamptz;
+  v_status text;
+  v_error_class text;
+  v_counts jsonb := p_payload -> 'counts';
+  v_candidates jsonb := p_payload -> 'candidates';
+  v_server_started_at timestamptz;
+  v_source_started_at timestamptz;
+  v_source_completed_at timestamptz;
+  v_method text;
+  v_capture_checksum text;
+  v_extractor_version text;
+  v_empty_result text;
+  v_empty_confirmation jsonb;
+  v_expected_identity text;
+begin
+  if pg_catalog.jsonb_typeof(p_payload) is distinct from 'object'
+     or pg_catalog.pg_column_size(p_payload) > 4 * 1024 * 1024
+     or p_payload ->> 'contractVersion' is distinct from '1'
+     or p_capture_id is null or p_capture_id not between 1 and 9007199254740991
+     or pg_catalog.jsonb_typeof(v_envelope) is distinct from 'object'
+     or pg_catalog.jsonb_typeof(v_edition) is distinct from 'object'
+     or pg_catalog.jsonb_typeof(v_authorization) is distinct from 'object'
+     or v_envelope ->> 'contractVersion' is distinct from '1'
+     or v_edition ->> 'contractVersion' is distinct from '1'
+     or v_authorization ->> 'contractVersion' is distinct from '1'
+     or p_payload -> 'timing' ->> 'contractVersion' is distinct from '1'
+     or (v_ocr_authorization is not null
+       and v_ocr_authorization ->> 'contractVersion' is distinct from '1')
+     or pg_catalog.jsonb_typeof(v_counts) is distinct from 'object'
+     or pg_catalog.jsonb_typeof(v_candidates) is distinct from 'array'
+     or pg_catalog.jsonb_array_length(v_candidates) > 500 then
+    raise exception 'official-offer extraction payload is invalid' using errcode = '22023';
+  end if;
+
+  v_source_id := v_edition ->> 'sourceId';
+  v_external_id := v_edition ->> 'externalEditionId';
+  v_chain := v_edition ->> 'chain';
+  v_title := v_edition ->> 'title';
+  v_content_kind := v_edition ->> 'contentKind';
+  v_scope_id := (v_edition ->> 'geographicScopeId')::bigint;
+  v_declared_scope := v_edition -> 'declaredGeographicScope';
+  v_valid_from := (v_edition ->> 'validFrom')::timestamptz;
+  v_valid_until := (v_edition ->> 'validUntil')::timestamptz;
+  v_discovered_at := (v_edition ->> 'discoveredAt')::timestamptz;
+  v_method := v_envelope ->> 'method';
+  v_extractor_version := v_envelope ->> 'extractorVersion';
+  v_empty_result := v_envelope ->> 'emptyResult';
+  v_empty_confirmation := v_envelope -> 'emptyConfirmation';
+  v_source_started_at := (v_envelope ->> 'startedAt')::timestamptz;
+  v_source_completed_at := (v_envelope ->> 'completedAt')::timestamptz;
+  v_capture_checksum := v_envelope ->> 'captureChecksumSha256';
+  v_server_started_at := (p_payload -> 'timing' ->> 'serverStartedAt')::timestamptz;
+  v_status := p_payload ->> 'validationStatus';
+  v_error_class := p_payload ->> 'validationErrorClass';
+
+  if v_source_id is null or v_external_id is null or v_scope_id is null
+     or v_chain is null or v_title is null or v_content_kind is null
+     or v_valid_from is null or v_valid_until is null or v_discovered_at is null
+     or v_method is null or v_method not in ('structured', 'embedded-text', 'ocr')
+     or v_extractor_version is null or pg_catalog.length(v_extractor_version) > 80
+     or v_empty_result is null or v_empty_result not in ('not-empty', 'confirmed-empty', 'unexpected-empty')
+     or v_source_started_at is null or v_source_completed_at is null
+     or v_server_started_at is null
+     or v_status is null or v_status not in ('completed', 'degraded', 'failed')
+     or (v_error_class is not null and v_error_class not in
+       ('INVALID_CONTRACT', 'LAYOUT_DRIFT', 'SCHEMA_DRIFT', 'UNEXPECTED_EMPTY')) then
+    raise exception 'official-offer extraction payload is invalid' using errcode = '22023';
+  end if;
+  if v_authorization ->> 'sourceId' is distinct from v_source_id then
+    raise exception 'official-offer extraction authorization source mismatch'
+      using errcode = '42501';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(v_source_id, 7229164304)
+  );
+  perform public.official_offer_worker_assert_fence_v1(
+    v_source_id,
+    (v_authorization ->> 'permissionId')::bigint,
+    v_authorization -> 'capabilities',
+    v_authorization -> 'rightsClassifications',
+    'extract', null,
+    v_authorization ->> 'reviewedAt',
+    v_authorization ->> 'validUntil',
+    v_authorization ->> 'evaluatedAt'
+  );
+  if v_method = 'ocr' then
+    if pg_catalog.jsonb_typeof(v_ocr_authorization) is distinct from 'object' then
+      raise exception 'OCR extraction requires an OCR authorization fence'
+        using errcode = '42501';
+    end if;
+    perform public.official_offer_worker_assert_fence_v1(
+      v_source_id,
+      (v_ocr_authorization ->> 'permissionId')::bigint,
+      v_ocr_authorization -> 'capabilities',
+      v_ocr_authorization -> 'rightsClassifications',
+      'ocr', null,
+      v_ocr_authorization ->> 'reviewedAt',
+      v_ocr_authorization ->> 'validUntil',
+      v_ocr_authorization ->> 'evaluatedAt'
+    );
+  elsif v_ocr_authorization is not null then
+    raise exception 'non-OCR extraction cannot carry OCR authorization'
+      using errcode = '42501';
+  end if;
+
+  select capture.* into v_capture
+  from public.publication_captures capture
+  where capture.id = p_capture_id
+  limit 1 for update;
+  select publication.* into v_publication
+  from public.publications publication
+  where publication.id = v_capture.publication_id
+  limit 1 for update;
+  if v_capture.id is null or v_publication.id is null
+     or v_capture.checksum <> v_capture_checksum
+     or v_publication.source_id <> v_source_id
+     or v_publication.external_id <> (v_edition ->> 'externalEditionId')
+     or v_publication.chain <> v_chain
+     or v_publication.title <> v_title
+     or v_publication.content_kind <> v_content_kind
+     or v_publication.geographic_scope_id <> v_scope_id
+     or v_publication.declared_geographic_scope is distinct from v_declared_scope
+     or v_publication.valid_from <> v_valid_from
+     or v_publication.valid_until <> v_valid_until
+     or v_publication.discovered_at <> v_discovered_at
+     or v_capture.capture_permission_id is null then
+    raise exception 'official-offer extraction provenance does not match its capture'
+      using errcode = '40001';
+  end if;
+  perform public.official_offer_worker_assert_fence_v1(
+    v_source_id,
+    (v_authorization ->> 'permissionId')::bigint,
+    v_authorization -> 'capabilities',
+    v_authorization -> 'rightsClassifications',
+    'extract', v_capture.rights_classification,
+    v_authorization ->> 'reviewedAt',
+    v_authorization ->> 'validUntil',
+    v_authorization ->> 'evaluatedAt'
+  );
+
+  v_expected_identity := pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+    public.canonical_official_offer_edition_identity(
+      v_publication.source_id, v_publication.external_id, v_publication.chain,
+      v_publication.title, v_publication.content_kind,
+      v_publication.geographic_scope_id, v_publication.declared_geographic_scope,
+      v_publication.valid_from, v_publication.valid_until, v_publication.discovered_at
+    ), 'UTF8')), 'hex');
+  if v_publication.edition_identity_sha256 is distinct from v_expected_identity then
+    raise exception 'official-offer publication identity is invalid'
+      using errcode = '40001';
+  end if;
+
+  insert into public.extraction_runs (
+    capture_id, extractor_version, status, started_at, completed_at, counts,
+    error_class, extraction_method, extraction_permission_id, ocr_permission_id,
+    permission_capabilities, source_started_at, source_completed_at, empty_result,
+    empty_confirmation, empty_confirmation_observed_at
+  ) values (
+    p_capture_id, v_extractor_version, v_status, v_server_started_at,
+    pg_catalog.clock_timestamp(), v_counts, v_error_class, v_method,
+    (v_authorization ->> 'permissionId')::bigint,
+    case when v_method = 'ocr' then (v_ocr_authorization ->> 'permissionId')::bigint else null end,
+    v_authorization -> 'capabilities', v_source_started_at, v_source_completed_at,
+    v_empty_result, v_empty_confirmation, null
+  )
+  on conflict (capture_id, extractor_version) do nothing
+  returning public.extraction_runs.* into v_extraction;
+  v_created := found;
+  if not v_created then
+    select extraction.* into v_extraction
+    from public.extraction_runs extraction
+    where extraction.capture_id = p_capture_id
+      and extraction.extractor_version = v_extractor_version
+    limit 1 for update;
+  end if;
+  if v_extraction.id is null then
+    raise exception 'official-offer extraction persistence did not return a run'
+      using errcode = '40001';
+  end if;
+
+  if v_created then
+    insert into public.extracted_offer_candidates (
+      extraction_run_id, candidate_key, normalized_fields, confidence,
+      status, anomaly_codes
+    )
+    select
+      v_extraction.id,
+      candidate.item -> 'candidate' ->> 'candidateKey',
+      candidate.item,
+      ((candidate.item -> 'candidate' -> 'provenance' ->> 'confidence')::smallint),
+      case when candidate.item ->> 'publicationRoute' = 'human-review-required'
+        then 'pending' else 'rejected' end,
+      candidate.item -> 'anomalyCodes'
+    from pg_catalog.jsonb_array_elements(v_candidates) as candidate(item);
+  end if;
+
+  perform public.official_offer_worker_assert_fence_v1(
+    v_source_id,
+    (v_authorization ->> 'permissionId')::bigint,
+    v_authorization -> 'capabilities',
+    v_authorization -> 'rightsClassifications',
+    'extract', v_capture.rights_classification,
+    v_authorization ->> 'reviewedAt',
+    v_authorization ->> 'validUntil',
+    v_authorization ->> 'evaluatedAt'
+  );
+  return query select v_counts, v_created, v_extraction.id, v_extraction.status::text;
+end;
+$$;
+
+revoke all on function public.official_offer_worker_assert_fence_v1(
+  text, bigint, jsonb, jsonb, text, text, text, text, text
+) from public, handleplan_app;
+revoke all on function public.record_official_offer_edition_v1(jsonb, jsonb)
+  from public, handleplan_app;
+revoke all on function public.record_official_offer_capture_v1(jsonb, text, jsonb)
+  from public, handleplan_app;
+revoke all on function public.record_official_offer_extraction_v1(bigint, jsonb)
+  from public, handleplan_app;
