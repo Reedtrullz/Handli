@@ -169,6 +169,7 @@ begin
                          'pricing', 'eligibility', 'validity', 'geographicScope',
                          'channels', 'provenance', 'anomalyCodes'))
      or v_candidate -> 'contractVersion' is distinct from '1'::jsonb
+     or pg_catalog.jsonb_typeof(v_candidate -> 'candidateKey') is distinct from 'string'
      or v_candidate ->> 'candidateKey' is null
      or pg_catalog.length(pg_catalog.btrim(v_candidate ->> 'candidateKey')) not between 1 and 160
      or v_wrapper_anomalies <> v_anomalies then
@@ -177,19 +178,21 @@ begin
 
   if pg_catalog.jsonb_typeof(v_anomalies) is distinct from 'array'
      or pg_catalog.jsonb_array_length(v_anomalies) > 20
-     or exists (select 1 from pg_catalog.jsonb_array_elements_text(v_anomalies) code
-       where code not in ('AMBIGUOUS_PRODUCT', 'BEFORE_PRICE_BELOW_OFFER',
-                          'DUPLICATE_CANDIDATE_KEY', 'DUPLICATE_OFFER',
-                          'EXTRACTOR_ANOMALY', 'LAYOUT_DRIFT', 'OCR_REVIEW_REQUIRED',
-                          'PACKAGE_UNKNOWN', 'SCHEMA_DRIFT', 'SCOPE_MISMATCH',
-                          'UNEXPECTED_EMPTY', 'UNKNOWN_SCOPE', 'UNMATCHED_PRODUCT',
-                          'UNREADABLE_DATE', 'VALIDITY_OUTSIDE_EDITION'))
+     or exists (select 1 from pg_catalog.jsonb_array_elements(v_anomalies) code
+       where pg_catalog.jsonb_typeof(code) is distinct from 'string'
+         or code #>> '{}' not in ('AMBIGUOUS_PRODUCT', 'BEFORE_PRICE_BELOW_OFFER',
+                                  'DUPLICATE_CANDIDATE_KEY', 'DUPLICATE_OFFER',
+                                  'EXTRACTOR_ANOMALY', 'LAYOUT_DRIFT', 'OCR_REVIEW_REQUIRED',
+                                  'PACKAGE_UNKNOWN', 'SCHEMA_DRIFT', 'SCOPE_MISMATCH',
+                                  'UNEXPECTED_EMPTY', 'UNKNOWN_SCOPE', 'UNMATCHED_PRODUCT',
+                                  'UNREADABLE_DATE', 'VALIDITY_OUTSIDE_EDITION'))
      or (select count(*) from pg_catalog.jsonb_array_elements_text(v_anomalies))
        <> (select count(distinct value) from pg_catalog.jsonb_array_elements_text(v_anomalies)) then
     raise exception 'official-offer candidate anomaly contract is invalid' using errcode = '22023';
   end if;
 
   if pg_catalog.jsonb_typeof(v_product) is distinct from 'object'
+     or pg_catalog.jsonb_typeof(v_product -> 'kind') is distinct from 'string'
      or v_product ->> 'kind' not in ('exact-identifier', 'unresolved-label') then
     raise exception 'official-offer candidate product contract is invalid' using errcode = '22023';
   end if;
@@ -198,6 +201,7 @@ begin
     if (select count(*) from pg_catalog.jsonb_object_keys(v_product)) <> 3
        or exists (select 1 from pg_catalog.jsonb_object_keys(v_product) key
          where key not in ('kind', 'scheme', 'value'))
+       or pg_catalog.jsonb_typeof(v_product -> 'scheme') is distinct from 'string'
        or v_product ->> 'scheme' is distinct from 'gtin'
        or v_product ->> 'value' is null
        or (v_product ->> 'value') !~ '^(?:[0-9]{8}|[0-9]{13})$' then
@@ -207,9 +211,9 @@ begin
     if (select count(*) from pg_catalog.jsonb_object_keys(v_product)) not between 2 and 3
        or exists (select 1 from pg_catalog.jsonb_object_keys(v_product) key
          where key not in ('kind', 'label', 'brand'))
-       or v_product ->> 'label' is null
+       or pg_catalog.jsonb_typeof(v_product -> 'label') is distinct from 'string'
        or pg_catalog.length(pg_catalog.btrim(v_product ->> 'label')) not between 1 and 240
-       or (v_product ? 'brand' and (v_product ->> 'brand') is null)
+       or (v_product ? 'brand' and pg_catalog.jsonb_typeof(v_product -> 'brand') is distinct from 'string')
        or (v_product ? 'brand' and pg_catalog.length(pg_catalog.btrim(v_product ->> 'brand')) not between 1 and 160)
        or p_candidate ? 'exactCanonicalProductId' then
       raise exception 'official-offer candidate unresolved product is invalid' using errcode = '22023';
@@ -217,6 +221,7 @@ begin
   end if;
 
   if pg_catalog.jsonb_typeof(v_package) is distinct from 'object'
+     or pg_catalog.jsonb_typeof(v_package -> 'state') is distinct from 'string'
      or v_package ->> 'state' not in ('parsed', 'unknown') then
     raise exception 'official-offer candidate package contract is invalid' using errcode = '22023';
   end if;
@@ -230,18 +235,20 @@ begin
        or (v_package ->> 'unitsPerPack') !~ '^[1-9][0-9]*$'
        or (v_package ->> 'amount')::numeric > 1000000
        or (v_package ->> 'unitsPerPack')::numeric > 10000
+       or pg_catalog.jsonb_typeof(v_package -> 'unit') is distinct from 'string'
        or v_package ->> 'unit' not in ('g', 'ml', 'piece', 'package') then
       raise exception 'official-offer candidate parsed package is invalid' using errcode = '22023';
     end if;
   elsif (select count(*) from pg_catalog.jsonb_object_keys(v_package)) <> 2
      or exists (select 1 from pg_catalog.jsonb_object_keys(v_package) key
        where key not in ('state', 'reasonCode'))
-     or v_package ->> 'reasonCode' is null
+     or pg_catalog.jsonb_typeof(v_package -> 'reasonCode') is distinct from 'string'
      or v_package ->> 'reasonCode' not in ('MISSING', 'UNREADABLE', 'UNSUPPORTED_UNIT') then
     raise exception 'official-offer candidate unknown package is invalid' using errcode = '22023';
   end if;
 
   if pg_catalog.jsonb_typeof(v_pricing) is distinct from 'object'
+     or pg_catalog.jsonb_typeof(v_pricing -> 'kind') is distinct from 'string'
      or v_pricing ->> 'kind' not in ('unit', 'multibuy') then
     raise exception 'official-offer candidate pricing contract is invalid' using errcode = '22023';
   end if;
@@ -285,18 +292,23 @@ begin
   end if;
 
   if pg_catalog.jsonb_typeof(v_eligibility) is distinct from 'object'
+     or pg_catalog.jsonb_typeof(v_eligibility -> 'kind') is distinct from 'string'
      or v_eligibility ->> 'kind' not in ('public', 'member')
-     or (v_eligibility ->> 'kind' = 'public' and (select count(*) from pg_catalog.jsonb_object_keys(v_eligibility)) <> 1)
+     or (v_eligibility ->> 'kind' = 'public'
+       and ((select count(*) from pg_catalog.jsonb_object_keys(v_eligibility)) <> 1
+         or exists (select 1 from pg_catalog.jsonb_object_keys(v_eligibility) key
+           where key is distinct from 'kind')))
      or (v_eligibility ->> 'kind' = 'member'
        and ((select count(*) from pg_catalog.jsonb_object_keys(v_eligibility)) <> 2
          or exists (select 1 from pg_catalog.jsonb_object_keys(v_eligibility) key
            where key not in ('kind', 'programId'))
-         or v_eligibility ->> 'programId' is null
+         or pg_catalog.jsonb_typeof(v_eligibility -> 'programId') is distinct from 'string'
          or pg_catalog.length(pg_catalog.btrim(v_eligibility ->> 'programId')) not between 1 and 200)) then
     raise exception 'official-offer candidate eligibility contract is invalid' using errcode = '22023';
   end if;
 
   if pg_catalog.jsonb_typeof(v_validity) is distinct from 'object'
+     or pg_catalog.jsonb_typeof(v_validity -> 'state') is distinct from 'string'
      or v_validity ->> 'state' not in ('parsed', 'unreadable') then
     raise exception 'official-offer candidate validity contract is invalid' using errcode = '22023';
   end if;
@@ -317,13 +329,14 @@ begin
   elsif (select count(*) from pg_catalog.jsonb_object_keys(v_validity)) <> 2
      or exists (select 1 from pg_catalog.jsonb_object_keys(v_validity) key
        where key not in ('state', 'reasonCode'))
-     or v_validity ->> 'reasonCode' is null
+     or pg_catalog.jsonb_typeof(v_validity -> 'reasonCode') is distinct from 'string'
      or v_validity ->> 'reasonCode' not in ('MISSING', 'OCR_AMBIGUOUS', 'UNSUPPORTED_FORMAT')
      or not (v_anomalies ? 'UNREADABLE_DATE') then
     raise exception 'official-offer candidate unreadable validity is invalid' using errcode = '22023';
   end if;
 
   if pg_catalog.jsonb_typeof(v_scope) is distinct from 'object'
+     or pg_catalog.jsonb_typeof(v_scope -> 'kind') is distinct from 'string'
      or v_scope ->> 'kind' not in ('national', 'regions', 'postal-set', 'stores', 'unknown') then
     raise exception 'official-offer candidate scope contract is invalid' using errcode = '22023';
   end if;
@@ -340,6 +353,9 @@ begin
        or v_scope ->> 'countryCode' !~ '^[A-Z]{2}$'
        or pg_catalog.jsonb_typeof(v_scope -> 'regionCodes') is distinct from 'array'
        or pg_catalog.jsonb_array_length(v_scope -> 'regionCodes') not between 1 and 100
+       or exists (select 1 from pg_catalog.jsonb_array_elements(v_scope -> 'regionCodes') member(value)
+         where pg_catalog.jsonb_typeof(member.value) is distinct from 'string'
+           or pg_catalog.length(pg_catalog.btrim(member.value #>> '{}')) not between 1 and 200)
        or (select count(*) from pg_catalog.jsonb_array_elements_text(v_scope -> 'regionCodes'))
          <> (select count(distinct value) from pg_catalog.jsonb_array_elements_text(v_scope -> 'regionCodes')) then
       raise exception 'official-offer candidate region scope is invalid' using errcode = '22023';
@@ -359,12 +375,15 @@ begin
     if (select count(*) from pg_catalog.jsonb_object_keys(v_scope)) <> 2
        or pg_catalog.jsonb_typeof(v_scope -> 'storeIds') is distinct from 'array'
        or pg_catalog.jsonb_array_length(v_scope -> 'storeIds') not between 1 and 1000
+       or exists (select 1 from pg_catalog.jsonb_array_elements(v_scope -> 'storeIds') member(value)
+         where pg_catalog.jsonb_typeof(member.value) is distinct from 'string'
+           or pg_catalog.length(pg_catalog.btrim(member.value #>> '{}')) not between 1 and 200)
        or (select count(*) from pg_catalog.jsonb_array_elements_text(v_scope -> 'storeIds'))
          <> (select count(distinct value) from pg_catalog.jsonb_array_elements_text(v_scope -> 'storeIds')) then
       raise exception 'official-offer candidate store scope is invalid' using errcode = '22023';
     end if;
   elsif (select count(*) from pg_catalog.jsonb_object_keys(v_scope)) <> 2
-     or v_scope ->> 'reason' is null
+     or pg_catalog.jsonb_typeof(v_scope -> 'reason') is distinct from 'string'
      or pg_catalog.length(pg_catalog.btrim(v_scope ->> 'reason')) not between 1 and 500
      or not (v_anomalies ? 'UNKNOWN_SCOPE') then
     raise exception 'official-offer candidate unknown scope is invalid' using errcode = '22023';
@@ -376,9 +395,10 @@ begin
 
   if pg_catalog.jsonb_typeof(v_provenance) is distinct from 'object'
      or (select count(*) from pg_catalog.jsonb_object_keys(v_provenance)) <> 3
+     or pg_catalog.jsonb_typeof(v_provenance -> 'method') is distinct from 'string'
      or v_provenance ->> 'method' is distinct from p_method
      or v_provenance ->> 'method' not in ('structured', 'embedded-text', 'ocr')
-     or v_provenance ->> 'evidenceLocator' is null
+     or pg_catalog.jsonb_typeof(v_provenance -> 'evidenceLocator') is distinct from 'string'
      or pg_catalog.length(pg_catalog.btrim(v_provenance ->> 'evidenceLocator')) not between 1 and 200
      or pg_catalog.jsonb_typeof(v_provenance -> 'confidence') is distinct from 'number'
      or (v_provenance ->> 'confidence') !~ '^(?:0|[1-9][0-9]?|100)$'
@@ -388,8 +408,9 @@ begin
   end if;
   if pg_catalog.jsonb_typeof(v_candidate -> 'channels') is distinct from 'array'
      or pg_catalog.jsonb_array_length(v_candidate -> 'channels') not between 1 and 2
-     or exists (select 1 from pg_catalog.jsonb_array_elements_text(v_candidate -> 'channels') channel
-       where channel is null or channel not in ('in-store', 'online'))
+     or exists (select 1 from pg_catalog.jsonb_array_elements(v_candidate -> 'channels') channel(value)
+       where pg_catalog.jsonb_typeof(channel.value) is distinct from 'string'
+         or channel.value #>> '{}' not in ('in-store', 'online'))
      or (select count(*) from pg_catalog.jsonb_array_elements_text(v_candidate -> 'channels'))
          <> (select count(distinct value) from pg_catalog.jsonb_array_elements_text(v_candidate -> 'channels')) then
     raise exception 'official-offer candidate channels are invalid' using errcode = '22023';
@@ -399,7 +420,9 @@ begin
   end if;
 
   v_value := p_candidate ->> 'disposition';
-  if v_value not in ('exact-match', 'rejected', 'review-required')
+  if pg_catalog.jsonb_typeof(p_candidate -> 'disposition') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_candidate -> 'publicationRoute') is distinct from 'string'
+     or v_value not in ('exact-match', 'rejected', 'review-required')
      or (v_value = 'exact-match' and pg_catalog.jsonb_array_length(v_anomalies) <> 0)
      or (v_value = 'review-required' and pg_catalog.jsonb_array_length(v_anomalies) = 0)
      or (v_value = 'rejected' and not (v_anomalies ?| array['BEFORE_PRICE_BELOW_OFFER', 'DUPLICATE_CANDIDATE_KEY']))

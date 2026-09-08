@@ -992,6 +992,82 @@ describeIntegration("official-offer direct app-role boundary", () => {
       serverStartedAt: edition.discoveredAt,
       serverCompletedAt: edition.discoveredAt,
     };
+    const validCandidate = {
+      ...syntheticStructuredOfferCandidates[0]!,
+      candidateKey: `direct-complete-${randomUUID()}`,
+      validity: {
+        state: "parsed",
+        startsAt: edition.validFrom,
+        endsAt: edition.validUntil,
+      },
+      geographicScope: edition.declaredGeographicScope,
+    };
+    const extractionPayload = (candidate: Record<string, unknown>, anomalies: string[] = []) => ({
+      contractVersion: 1,
+      envelope: {
+        ...envelope,
+        extractorVersion: `direct-${randomUUID()}`,
+        candidates: [candidate],
+      },
+      edition,
+      timing,
+      authorization,
+      counts: {
+        envelopeSha256: "a".repeat(64),
+        exactMatch: anomalies.length === 0 ? 1 : 0,
+        persistedCandidates: 1,
+        rejected: 0,
+        reviewRequired: anomalies.length === 0 ? 0 : 1,
+        total: 1,
+        validationSha256: "b".repeat(64),
+      },
+      validationStatus: anomalies.length === 0 ? "completed" : "degraded",
+      candidates: [{
+        contractVersion: 1,
+        anomalyCodes: anomalies,
+        candidate,
+        disposition: anomalies.length === 0 ? "exact-match" : "review-required",
+        publicationRoute: "human-review-required",
+        ...(anomalies.length === 0 ? { exactCanonicalProductId: "product:direct" } : {}),
+      }],
+    });
+    const [positiveExtraction] = await worker.sql<Array<{ id: string }>>`
+      select id from public.record_official_offer_extraction_v1(
+        ${captureId}, ${JSON.stringify(extractionPayload(validCandidate))}::jsonb
+      )
+    `;
+    expect(Number(positiveExtraction!.id)).toBeGreaterThan(0);
+    expect(await countExtractions()).toBe(1);
+
+    const nullUnionCases: Array<[string, Record<string, unknown>]> = [
+      ["product null discriminator", {
+        ...validCandidate,
+        product: { ...(validCandidate.product as Record<string, unknown>), kind: null },
+      }],
+      ["package missing discriminator", (() => {
+        const { state: _state, ...packageWithoutState } = validCandidate.package as Record<string, unknown>;
+        return { ...validCandidate, package: packageWithoutState };
+      })()],
+      ["package null unit", {
+        ...validCandidate,
+        package: { ...(validCandidate.package as Record<string, unknown>), unit: null },
+      }],
+      ["eligibility empty object", { ...validCandidate, eligibility: {} },],
+      ["regions empty identifier", {
+        ...validCandidate,
+        geographicScope: { kind: "regions", countryCode: "NO", regionCodes: [""] },
+      }],
+      ["channels empty array element", { ...validCandidate, channels: [""] },],
+    ];
+    for (const [label, candidate] of nullUnionCases) {
+      const anomalies = label === "regions empty identifier" ? ["SCOPE_MISMATCH"] : [];
+      await expect(worker.sql`
+        select * from public.record_official_offer_extraction_v1(
+          ${captureId}, ${JSON.stringify(extractionPayload(candidate, anomalies))}::jsonb
+        )
+      `).rejects.toThrow();
+      expect(await countExtractions(), label).toBe(1);
+    }
     const badCandidatePayload = {
       contractVersion: 1,
       envelope,
@@ -1021,7 +1097,7 @@ describeIntegration("official-offer direct app-role boundary", () => {
         ${captureId}, ${JSON.stringify(badCandidatePayload)}::jsonb
       )
     `).rejects.toThrow();
-    expect(await countExtractions()).toBe(0);
+    expect(await countExtractions()).toBe(1);
 
     await expect(worker.sql`
       select * from public.record_official_offer_extraction_v1(
@@ -1034,7 +1110,7 @@ describeIntegration("official-offer direct app-role boundary", () => {
         })}::jsonb
       )
     `).rejects.toThrow();
-    expect(await countExtractions()).toBe(0);
+    expect(await countExtractions()).toBe(1);
 
     const staleAuthorization = {
       ...authorization,
@@ -1055,6 +1131,6 @@ describeIntegration("official-offer direct app-role boundary", () => {
     ` as unknown as PromiseLike<unknown> & { cancel(): void };
     cancelled.cancel();
     await expect(cancelled).rejects.toThrow();
-    expect(await countExtractions()).toBe(0);
+    expect(await countExtractions()).toBe(1);
   }, 30_000);
 });
