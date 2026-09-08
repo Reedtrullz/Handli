@@ -159,7 +159,7 @@ describe("forward-only v1 migrations", () => {
         .digest("hex");
       expect(checksum, entry.id).toBe(entry.sha256);
     }
-    expect(artifact).not.toMatch(/^\\\\(?:restrict|unrestrict)\\b/mu);
+    expect(artifact).not.toMatch(/^\\(?:restrict|unrestrict)\\b/mu);
     expect(artifact).not.toContain("CREATE SCHEMA public");
     expect(artifact).not.toContain("handleplan_schema_migrations");
     expect(artifact).not.toContain("handleplan_schema_baselines");
@@ -177,11 +177,11 @@ describe("forward-only v1 migrations", () => {
       sequences: 26,
     });
     expect(parsed.canonical_contract.normalized_seed_sha256)
-      .toBe("c036b0b50d92e812fdf3f262f8084021aac43082d8054dc6e311938db65b675a");
+      .toBe("3ec6e86709734a1adea946c6702f2fb40d5e4dae48abd86bb63f5c14169bcd3a");
     expect(parsed.canonical_contract.sequence_state_sha256)
-      .toBe("ecbe4ba722d6129910da88016c7cadc5727a666d4e3cd5057047786dd11f2889");
+      .toBe("73b72c9fd5fdb4e0b34c683d95673a2475bf3dfa8b4940c89b4ce1bd399d6279");
     expect(parsed.canonical_contract.public_acl_security_sha256)
-      .toBe("22ac365288cd7414943f9f11604a3ed7c372bc297b6db976b5d84582ecbd2311");
+      .toBe("5e959cc908463fd52a6b9a3724c2caba269d74c328b28684db1484a62190ea35");
     expect(parsed.correction_semantics.corrected_official_function_definition_sha256)
       .toBe("256e213b63ba618bfe2edf3fb27e3499e4ff584a0e040f6f77e2f3189d7c3e94");
     expect(parsed.correction_semantics.offer_backed_function_definition_sha256)

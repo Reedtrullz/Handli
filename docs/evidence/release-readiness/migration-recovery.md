@@ -196,21 +196,22 @@ the Tjek source's permission pointer equals the latest permission row, that
 reference timestamps satisfy the existing publication constraints, and that
 the artifact contains no product, price, offer, approval, or capture rows.
 
-The canonical schema digest is computed from the artifact catalog representation
-after installation, excluding owner names, ACL grantee names, and the two
-runner-owned metadata relations. It includes relation/column definitions,
-constraints, indexes, triggers, function definitions, function security flags,
-and sequence definitions. The manifest separately records a normalized seed
-digest, sequence-state digest, and PUBLIC-ACL/security digest. Owner shape is
-checked per object as `owned_by_installer`; the installer role name is not part
-of a digest. Runtime-role ACLs are checked as a separate denial invariant and
-are intentionally absent from the artifact. The artifact hash is over exact
-bytes; the manifest hash is recorded by the future runner and is not embedded
-in either the artifact or its own digest.
+The canonical schema digest is the SHA-256 of the artifact's normalized
+PostgreSQL 16.10 schema-only dump after removing only the random
+`\\restrict`/`\\unrestrict` session guards. The retained proof bundle also
+records the canonical-history dump, its exact raw diff, and a line-kind check
+that bounds canonical/artifact deparser differences to constraint/index
+definitions. The manifest separately records a normalized seed digest,
+sequence-state digest, and PUBLIC-ACL/security digest. Owner shape is checked
+per object as `owned_by_installer`; the installer role name is not part of a
+digest. Runtime-role ACLs are checked as a separate denial invariant and are
+intentionally absent from the artifact. The artifact hash is over exact bytes;
+the manifest hash is recorded by the future runner and is not embedded in
+either the artifact or its own digest.
 
 The two independent disposable installs used for Task 2B1 produced the same
 normalized artifact bytes (SHA-256
-`57cdaa0681c9e044e4a35e8b3413f2f0960b71e210f63b3f1afacd460cc5111d`). Their
+`8febf33b13e7260e746e624714e8ee5e054b039f45df673da1cf8b1569198c7e`). Their
 normalized seed, sequence-state, PUBLIC-ACL/security, and installer-owner
 contracts matched. Both installs retained two Tjek permission rows while the
 `data_sources.permission_reviewed_at` pointer did not equal the latest row,
@@ -223,11 +224,13 @@ structural catalog counts plus exact function definitions/security flags,
 owner shape, ACL/security digest, seed digest, and sequence state rather than
 using a raw textual constraint dump as a false exactness claim.
 
-The canonical comparison used the following digest boundaries: normalized seed
-`c036b0b50d92e812fdf3f262f8084021aac43082d8054dc6e311938db65b675a`, sequence
-state `ecbe4ba722d6129910da88016c7cadc5727a666d4e3cd5057047786dd11f2889`,
+The canonical comparison used the following digest boundaries: schema
+`b097f01ca5b22001f797056ea395a0039789fb89ae5970c675d5b25956b152a9`,
+normalized seed
+`3ec6e86709734a1adea946c6702f2fb40d5e4dae48abd86bb63f5c14169bcd3a`, sequence
+state `73b72c9fd5fdb4e0b34c683d95673a2475bf3dfa8b4940c89b4ce1bd399d6279`,
 and PUBLIC/security ACL
-`22ac365288cd7414943f9f11604a3ed7c372bc297b6db976b5d84582ecbd2311`. Seed
+`5e959cc908463fd52a6b9a3724c2caba269d74c328b28684db1484a62190ea35`. Seed
 normalization replaces only the enumerated historical clock columns with
 `__installer_transaction_timestamp__`; fixed dates such as taxonomy
 `published_at` remain literal. ACL normalization removes owner names and

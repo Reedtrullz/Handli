@@ -3,7 +3,7 @@
   "baseline_id": "handleplan-040-canonical-v1",
   "artifact": {
     "path": "deploy/bootstrap/040_schema.sql",
-    "sha256": "57cdaa0681c9e044e4a35e8b3413f2f0960b71e210f63b3f1afacd460cc5111d",
+    "sha256": "8febf33b13e7260e746e624714e8ee5e054b039f45df673da1cf8b1569198c7e",
     "format": "literal-postgresql-sql",
     "runner_owned_metadata_excluded": [
       "public.handleplan_schema_migrations",
@@ -191,10 +191,10 @@
     "offer_backed_function_definition_sha256": "b98b8c64a00adaa36b3983bf9127f05c4f17403faaaa23e5882b7d961611ad12"
   },
   "canonical_contract": {
-    "schema_catalog_sha256": "5add5eb6e060c8343fc4947bb4460bde803c430b9458c6d3f720870bc81943ce",
-    "normalized_seed_sha256": "c036b0b50d92e812fdf3f262f8084021aac43082d8054dc6e311938db65b675a",
-    "sequence_state_sha256": "ecbe4ba722d6129910da88016c7cadc5727a666d4e3cd5057047786dd11f2889",
-    "public_acl_security_sha256": "22ac365288cd7414943f9f11604a3ed7c372bc297b6db976b5d84582ecbd2311",
+    "schema_catalog_sha256": "b097f01ca5b22001f797056ea395a0039789fb89ae5970c675d5b25956b152a9",
+    "normalized_seed_sha256": "3ec6e86709734a1adea946c6702f2fb40d5e4dae48abd86bb63f5c14169bcd3a",
+    "sequence_state_sha256": "73b72c9fd5fdb4e0b34c683d95673a2475bf3dfa8b4940c89b4ce1bd399d6279",
+    "public_acl_security_sha256": "5e959cc908463fd52a6b9a3724c2caba269d74c328b28684db1484a62190ea35",
     "object_counts": {
       "relations": 52,
       "columns": 499,

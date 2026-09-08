@@ -70,9 +70,10 @@ immutable 040. It matched the artifact on all structural counts, both function
 hashes, and these normalized contracts:
 
 ```text
-seed:          c036b0b50d92e812fdf3f262f8084021aac43082d8054dc6e311938db65b675a
-sequence:      ecbe4ba722d6129910da88016c7cadc5727a666d4e3cd5057047786dd11f2889
-ACL/security:  22ac365288cd7414943f9f11604a3ed7c372bc297b6db976b5d84582ecbd2311
+schema:        b097f01ca5b22001f797056ea395a0039789fb89ae5970c675d5b25956b152a9
+seed:          3ec6e86709734a1adea946c6702f2fb40d5e4dae48abd86bb63f5c14169bcd3a
+sequence:      73b72c9fd5fdb4e0b34c683d95673a2475bf3dfa8b4940c89b4ce1bd399d6279
+ACL/security:  5e959cc908463fd52a6b9a3724c2caba269d74c328b28684db1484a62190ea35
 ```
 
 Seed normalization replaced only historically clock-generated columns with
@@ -85,7 +86,7 @@ The exact tracked bytes are:
 
 ```text
 deploy/bootstrap/040_schema.sql
-57cdaa0681c9e044e4a35e8b3413f2f0960b71e210f63b3f1afacd460cc5111d
+8febf33b13e7260e746e624714e8ee5e054b039f45df673da1cf8b1569198c7e
 deploy/bootstrap/040_manifest.json
 0a0ae7c9d46b2e20bfcbc4abd672cf9f2a8dbe5279b4237322d64f44c5c38b5c
 deploy/migrations/041_public_offer_projection_repair.sql
@@ -116,6 +117,38 @@ No runner, backup, role-reconciliation, migration activation, production
 database, or 2B2 ACL mutation was performed. Task 2B2/Task 4 must remove the
 legacy blanket worker grants before activating the baseline route and must
 record baseline provenance separately from the historical execution ledger.
+
+## Fix round 1 review evidence
+
+Independent review found one final-blank-line drift between the recorded
+artifact hash and committed bytes and a metacommand guard that matched two
+backslashes. The manifest now pins the committed artifact hash
+`8febf33b13e7260e746e624714e8ee5e054b039f45df673da1cf8b1569198c7e`, and the
+focused test matches one literal PostgreSQL backslash. The focused test passed
+33/33 after these edits.
+
+The previously ephemeral canonical proof is retained in
+`docs/evidence/release-readiness/task-2B1-proof/` and is rerunnable with
+`scripts/release/prove-040-bootstrap.mjs`. It creates two independent
+canonical-history installs and two independent artifact installs, retains both
+raw dumps and their exact diffs, and records exact catalog/seed/sequence/
+PUBLIC-security/owner/denial readbacks. The two generated canonical schema
+outputs are byte-identical with SHA-256
+`a481183f674e97e0b00a114be1b0e1261b602422edc0d313a6e6e6ee1c46e598`. The raw
+canonical/canonical diff contains only the random `pg_dump` restrict guards;
+the canonical/artifact raw and normalized diffs are retained separately. The
+canonical/artifact normalized diff contains 132 changed constraint/index
+definition lines, all checked by an exact line-kind boundary in
+`canonical-artifact.diff.check.json`; the differences are PostgreSQL 16.10
+deparser cast/parenthesis forms. Independent canonical and artifact round-trip
+outputs are each byte-identical, so this does not use a broad text
+normalization to erase differences. The normalized output removes only the
+two operational restrict lines. The readback
+matched 52/499/339/105/87/47/26 object counts, both function hashes, normalized
+seed, sequence, PUBLIC/security ACL, and installer-owner contracts between
+canonical history and artifact. Canonical history retained 26 runtime ACL rows;
+the artifact retained zero. No timestamp or semantic date was normalized
+beyond the enumerated historical clock columns.
 
 **Commit:** recorded by the parent task after independent artifact review.
 The immutable Tjek superseding permission preserves the migration's literal

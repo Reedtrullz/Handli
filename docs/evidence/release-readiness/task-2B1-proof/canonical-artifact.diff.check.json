@@ -1,0 +1,8 @@
+{
+  "changed_lines": 132,
+  "allowed_definition_lines": true,
+  "allowed_kinds": [
+    "constraint_deparser",
+    "index_deparser"
+  ]
+}
