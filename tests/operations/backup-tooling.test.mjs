@@ -54,6 +54,7 @@ function fixture() {
     "restore-work",
     "restore-evidence",
     "migrations",
+    "bootstrap",
   ]) {
     const path = join(root, name);
     mkdirSync(path, { mode: name === "migrations" ? 0o755 : 0o700 });
@@ -91,6 +92,53 @@ function migrationLedger(values) {
       .digest("hex"),
     id,
   }));
+}
+
+function installBaselineContract(values) {
+  const artifact = join(values.directories.bootstrap, "040_schema.sql");
+  writeFileSync(artifact, "-- baseline fixture artifact\n", { mode: 0o644 });
+  const artifactSha256 = sha256File(artifact);
+  const coveredMigrations = Array.from({ length: 40 }, (_, index) => ({
+    id: `${String(index + 1).padStart(3, "0")}_fixture.sql`,
+    sha256: "a".repeat(64),
+  }));
+  const manifest = {
+    baseline_id: "handleplan-040-canonical-v1",
+    artifact: {
+      path: "deploy/bootstrap/040_schema.sql",
+      sha256: artifactSha256,
+    },
+    covered_migrations: coveredMigrations,
+    canonical_contract: { schema_catalog_sha256: "c".repeat(64) },
+    provenance: { fixture: "backup-tooling-test" },
+  };
+  const manifestPath = join(values.directories.bootstrap, "040_manifest.json");
+  writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, { mode: 0o644 });
+  return {
+    artifact_sha256: artifactSha256,
+    baseline_id: manifest.baseline_id,
+    covered_migrations: coveredMigrations,
+    manifest_sha256: sha256File(manifestPath),
+    provenance: manifest.provenance,
+    resulting_schema_sha256: manifest.canonical_contract.schema_catalog_sha256,
+  };
+}
+
+function baselineSql(row) {
+  return [
+    "COPY public.handleplan_schema_baselines (baseline_id, manifest_sha256, artifact_sha256, covered_migrations, resulting_schema_sha256, provenance, recorded_at) FROM stdin;",
+    [
+      row.baseline_id,
+      row.manifest_sha256,
+      row.artifact_sha256,
+      JSON.stringify(row.covered_migrations),
+      row.resulting_schema_sha256,
+      JSON.stringify(row.provenance),
+      "2026-07-17 10:00:00+00",
+    ].join("\t"),
+    "\\.",
+    "",
+  ].join("\n");
 }
 
 function sourceSnapshotSession(values, overrides = {}) {
@@ -168,13 +216,14 @@ function captureQueryText(entries = [CAPTURE_ENTRY]) {
   )).join("\n");
 }
 
-function archiveList() {
+function archiveList({ baseline = false } = {}) {
   return [
     "1; 0 0 TABLE public ingestion_runs owner",
     "2; 0 0 TABLE public price_observations owner",
     "3; 0 0 TABLE public publication_captures owner",
     "4; 0 0 TABLE public source_permissions owner",
     "5; 0 0 TABLE DATA public handleplan_schema_migrations owner",
+    ...(baseline ? ["6; 0 0 TABLE DATA public handleplan_schema_baselines owner"] : []),
     "",
   ].join("\n");
 }
@@ -683,6 +732,102 @@ test("backup pins source identity, validates the streamed archive, and uploads m
     assert.equal(JSON.parse(readFileSync(result.evidenceManifest, "utf8")).backupId, BACKUP_ID);
   } finally {
     rmSync(values.root, { force: true, recursive: true });
+  }
+});
+
+test("backup canonicalizes physical ledger order but rejects duplicate archive rows", async () => {
+  for (const duplicate of [false, true]) {
+    const values = fixture();
+    try {
+      const environment = backupEnvironment(values);
+      installCapture(values);
+      const ledger = migrationLedger(values);
+      const physicalLedger = duplicate
+        ? [...ledger, ledger[0]]
+        : [...ledger].reverse();
+      const adapter = realpathSync(environment.HANDLEPLAN_BACKUP_UPLOAD_ADAPTER);
+      const runner = (executable) => {
+        if (executable === adapter) return "";
+        assert.fail("unexpected non-upload command");
+      };
+      const pipelineRunner = async (config) => {
+        writeFileSync(config.encryptedPath, "age authenticated fixture", { mode: 0o600 });
+        return {
+          archiveList: archiveList(),
+          captureLedgerSql: captureLedgerSql(),
+          ledgerSql: ledgerSql(physicalLedger),
+        };
+      };
+      const operation = createBackup({
+        capturePipelineRunner: async (config) => {
+          writeFileSync(config.encryptedPath, "age authenticated capture fixture", { mode: 0o600 });
+          return { ciphertextBytes: Buffer.byteLength("age authenticated capture fixture") };
+        },
+        environment,
+        now: () => new Date(CREATED_AT),
+        pipelineRunner,
+        randomSuffix: () => "0123456789abcdef",
+        runner,
+        sourceSessionRunner: sourceSnapshotSession(values).runner,
+      });
+      if (duplicate) {
+        await assert.rejects(operation, /not unique and ordered/u);
+      } else {
+        const result = await operation;
+        assert.deepEqual(result.manifest.source.migrationLedger, ledger);
+      }
+    } finally {
+      rmSync(values.root, { force: true, recursive: true });
+    }
+  }
+});
+
+test("backup rejects missing or altered archived baseline provenance before publication", async () => {
+  for (const [label, archivedBaseline] of [
+    ["missing", ""],
+    ["altered", "altered"],
+  ]) {
+    const values = fixture();
+    try {
+      const baseline = installBaselineContract(values);
+      const environment = backupEnvironment(values);
+      installCapture(values);
+      const ledger = migrationLedger(values);
+      const sourceSession = sourceSnapshotSession(values, { baseline });
+      let uploadCalls = 0;
+      let captureCalls = 0;
+      const runner = () => {
+        uploadCalls += 1;
+        return "";
+      };
+      await assert.rejects(createBackup({
+        capturePipelineRunner: async () => {
+          captureCalls += 1;
+          return { ciphertextBytes: 1 };
+        },
+        environment,
+        pipelineRunner: async (config) => {
+          assert.equal(config.includeBaseline, true);
+          writeFileSync(config.encryptedPath, "age authenticated fixture", { mode: 0o600 });
+          return {
+            archiveList: archiveList({ baseline: true }),
+            baselineSql: archivedBaseline === "altered"
+              ? baselineSql({ ...baseline, artifact_sha256: "b".repeat(64) })
+              : "",
+            captureLedgerSql: captureLedgerSql(),
+            ledgerSql: ledgerSql(ledger),
+          };
+        },
+        randomSuffix: () => "0123456789abcdef",
+        runner,
+        sourceSessionRunner: sourceSession.runner,
+      }), /exported-snapshot archive baseline provenance does not match its source session/u);
+      assert.equal(uploadCalls, 0, `${label} baseline must fail before publication`);
+      assert.equal(captureCalls, 0, `${label} baseline must fail before capture packaging`);
+      assert.equal(sourceSession.state.closed, true);
+    } finally {
+      rmSync(values.root, { force: true, recursive: true });
+    }
   }
 });
 

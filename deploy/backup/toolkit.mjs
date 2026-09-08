@@ -644,7 +644,7 @@ export async function openBackupSnapshotSession(config) {
   const sql = [
     "\\set ON_ERROR_STOP on",
     "begin transaction isolation level repeatable read read only;",
-    "select 'HP_IDENTITY' || E'\\t' || concat_ws(E'\\t', current_database(), current_user, encode(sha256(convert_to(system_identifier::text, 'UTF8')), 'hex'), (select rolsuper from pg_roles where rolname = current_user), (select rolcreaterole from pg_roles where rolname = current_user), (select rolcreatedb from pg_roles where rolname = current_user), (select rolreplication from pg_roles where rolname = current_user), (select rolbypassrls from pg_roles where rolname = current_user), (select count(*) = 0 from pg_auth_members where member = (select oid from pg_roles where rolname = current_user)), (select count(*) = 0 from pg_database where datdba = (select oid from pg_roles where rolname = current_user))) from pg_control_system();",
+    "select 'HP_IDENTITY' || E'\\t' || concat_ws(E'\\t', current_database(), current_user, encode(sha256(convert_to(system_identifier::text, 'UTF8')), 'hex'), ((select rolsuper from pg_roles where rolname = current_user))::text, ((select rolcreaterole from pg_roles where rolname = current_user))::text, ((select rolcreatedb from pg_roles where rolname = current_user))::text, ((select rolreplication from pg_roles where rolname = current_user))::text, ((select rolbypassrls from pg_roles where rolname = current_user))::text, ((select count(*) = 0 from pg_auth_members where member = (select oid from pg_roles where rolname = current_user)))::text, ((select count(*) = 0 from pg_database where datdba = (select oid from pg_roles where rolname = current_user)))::text) from pg_control_system();",
     "select 'HP_SNAPSHOT' || E'\\t' || pg_export_snapshot();",
     "select 'HP_LEDGER' || E'\\t' || id || E'\\t' || checksum from handleplan_schema_migrations order by id;",
     "select case when to_regclass('public.handleplan_schema_baselines') is null then 'false' else 'true' end as hp_baseline_exists \\gset",
@@ -653,7 +653,7 @@ export async function openBackupSnapshotSession(config) {
     "\\else",
     "select 'HP_BASELINE' || E'\\t';",
     "\\endif",
-    "select 'HP_RELATIONS' || E'\\t' || concat_ws(E'\\t', to_regclass('public.ingestion_runs') is not null, to_regclass('public.price_observations') is not null, to_regclass('public.source_permissions') is not null, to_regclass('public.publication_captures') is not null);",
+    "select 'HP_RELATIONS' || E'\\t' || concat_ws(E'\\t', (to_regclass('public.ingestion_runs') is not null)::text, (to_regclass('public.price_observations') is not null)::text, (to_regclass('public.source_permissions') is not null)::text, (to_regclass('public.publication_captures') is not null)::text);",
     "select 'HP_READY';",
     "",
   ].join("\n");
@@ -757,6 +757,7 @@ export async function runEncryptedDumpPipeline(config) {
   const ledgerExtract = spawn(config.pgRestoreBinary, [
     "--data-only",
     "--table=handleplan_schema_migrations",
+    "--file=-",
   ], {
     env: { HOME: process.env.HOME ?? "/nonexistent", LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
     stdio: ["pipe", "pipe", "ignore"],
@@ -764,17 +765,30 @@ export async function runEncryptedDumpPipeline(config) {
   const captureExtract = spawn(config.pgRestoreBinary, [
     "--data-only",
     "--table=publication_captures",
+    "--file=-",
   ], {
     env: { HOME: process.env.HOME ?? "/nonexistent", LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
     stdio: ["pipe", "pipe", "ignore"],
   });
+  const baselineExtract = config.includeBaseline
+    ? spawn(config.pgRestoreBinary, [
+      "--data-only",
+      "--table=handleplan_schema_baselines",
+      "--file=-",
+    ], {
+      env: { HOME: process.env.HOME ?? "/nonexistent", LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
+      stdio: ["pipe", "pipe", "ignore"],
+    })
+    : null;
   children.push(pgDump, age, archiveList, ledgerExtract, captureExtract);
+  if (baselineExtract) children.push(baselineExtract);
   for (const stream of [
     pgDump.stdout,
     age.stdin,
     archiveList.stdin,
     ledgerExtract.stdin,
     captureExtract.stdin,
+    ...(baselineExtract ? [baselineExtract.stdin] : []),
   ]) {
     stream.on("error", () => stopAll());
   }
@@ -786,11 +800,15 @@ export async function runEncryptedDumpPipeline(config) {
     config.maxCaptureLedgerBytes,
     stopAll,
   );
+  const baselineOutput = baselineExtract
+    ? collectBounded(baselineExtract.stdout, 256 * 1024, stopAll)
+    : Promise.resolve("");
   const completions = children.map((child) => childCompletion(child, stopAll));
   pgDump.stdout.pipe(age.stdin);
   pgDump.stdout.pipe(archiveList.stdin);
   pgDump.stdout.pipe(ledgerExtract.stdin);
   pgDump.stdout.pipe(captureExtract.stdin);
+  if (baselineExtract) pgDump.stdout.pipe(baselineExtract.stdin);
 
   let oversized = false;
   const sizeGuard = setInterval(() => {
@@ -811,11 +829,12 @@ export async function runEncryptedDumpPipeline(config) {
   }, config.commandTimeoutMs);
   timeout.unref();
   try {
-    const [statusesResult, listResult, ledgerResult, captureLedgerResult] = await Promise.allSettled([
+    const [statusesResult, listResult, ledgerResult, captureLedgerResult, baselineResult] = await Promise.allSettled([
       Promise.all(completions),
       archiveListOutput,
       ledgerOutput,
       captureLedgerOutput,
+      baselineOutput,
     ]);
     if (timedOut) fail("streaming backup pipeline exceeded its timeout");
     if (oversized) fail("streaming backup pipeline exceeded its artifact limit");
@@ -823,10 +842,11 @@ export async function runEncryptedDumpPipeline(config) {
     const listText = fulfilledValue(listResult);
     const ledgerText = fulfilledValue(ledgerResult);
     const captureLedgerSql = fulfilledValue(captureLedgerResult);
+    const baselineSql = fulfilledValue(baselineResult);
     if (statuses.some((success) => !success)) {
       fail("streaming pg_dump encryption or archive validation failed");
     }
-    return { archiveList: listText, captureLedgerSql, ledgerSql: ledgerText };
+    return { archiveList: listText, baselineSql, captureLedgerSql, ledgerSql: ledgerText };
   } finally {
     clearInterval(sizeGuard);
     clearTimeout(timeout);
@@ -1720,6 +1740,31 @@ function requireLedgerPrefix(actual, current, { exact, label }) {
   }
 }
 
+function requireBaselineAwareLedger(actual, current, baseline, { exact, label }) {
+  if (baseline === null) {
+    requireLedgerPrefix(actual, current, { exact, label });
+    return;
+  }
+  const coveredIds = new Set(
+    (baseline.covered_migrations ?? []).map((entry) => entry?.id),
+  );
+  const forward = current.filter(({ id }) => !coveredIds.has(id));
+  if (actual.length === 0 || actual.length > forward.length) {
+    fail(`${label} migration ledger is not a valid post-baseline suffix`);
+  }
+  for (let index = 0; index < actual.length; index += 1) {
+    if (
+      actual[index].id !== forward[index].id
+      || actual[index].checksum !== forward[index].checksum
+    ) {
+      fail(`${label} migration ledger is not a valid post-baseline suffix`);
+    }
+  }
+  if (exact && actual.length !== forward.length) {
+    fail(`${label} migration ledger is not current for this baseline revision`);
+  }
+}
+
 function parseExtractedLedger(sqlText) {
   if (Buffer.byteLength(sqlText) > 256 * 1024) {
     fail("dump migration ledger exceeds its extraction bound");
@@ -1748,7 +1793,102 @@ function parseExtractedLedger(sqlText) {
     rows.push(`${fields[0]}\t${fields[1]}`);
   }
   if (!ended) fail("custom archive migration-ledger COPY block is unterminated");
-  return parseLedger(rows.join("\n"), "custom archive");
+  return parseLedger(rows.sort((left, right) => left.localeCompare(right)).join("\n"), "custom archive");
+}
+
+function decodeCopyField(value) {
+  let decoded = "";
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== "\\") {
+      decoded += value[index];
+      continue;
+    }
+    const escaped = value[index + 1];
+    if (escaped === undefined) fail("custom archive baseline row has an incomplete escape");
+    index += 1;
+    decoded += ({
+      b: "\b",
+      f: "\f",
+      n: "\n",
+      r: "\r",
+      t: "\t",
+      v: "\v",
+    })[escaped] ?? escaped;
+  }
+  return decoded;
+}
+
+function parseExtractedBaseline(sqlText) {
+  if (typeof sqlText !== "string" || Buffer.byteLength(sqlText) > 256 * 1024) {
+    fail("dump baseline provenance exceeds its bound");
+  }
+  const lines = sqlText.replaceAll("\r\n", "\n").split("\n");
+  const copyPattern = /^COPY (?:public\.)?handleplan_schema_baselines \(([^)]+)\) FROM stdin;$/u;
+  const copyIndex = lines.findIndex((line) => copyPattern.test(line));
+  if (copyIndex < 0) return null;
+  const header = copyPattern.exec(lines[copyIndex]);
+  const columns = header[1].split(", ");
+  const requiredColumns = [
+    "baseline_id",
+    "manifest_sha256",
+    "artifact_sha256",
+    "covered_migrations",
+    "resulting_schema_sha256",
+    "provenance",
+  ];
+  if (
+    columns.length === 0
+    || new Set(columns).size !== columns.length
+    || requiredColumns.some((column) => !columns.includes(column))
+  ) {
+    fail("custom archive baseline provenance columns are invalid");
+  }
+  const rows = [];
+  let ended = false;
+  for (const line of lines.slice(copyIndex + 1)) {
+    if (line === "\\.") {
+      ended = true;
+      break;
+    }
+    rows.push(line.split("\t").map(decodeCopyField));
+  }
+  if (!ended) fail("custom archive baseline provenance COPY block is unterminated");
+  if (rows.length === 0) return null;
+  if (rows.length !== 1) fail("custom archive contains multiple baseline provenance rows");
+  const row = rows[0];
+  if (row.length !== columns.length) fail("custom archive baseline provenance row is invalid");
+  const value = (column) => row[columns.indexOf(column)];
+  let coveredMigrations;
+  let provenance;
+  try {
+    coveredMigrations = JSON.parse(value("covered_migrations"));
+    provenance = JSON.parse(value("provenance"));
+  } catch {
+    fail("custom archive baseline provenance JSON is invalid");
+  }
+  if (
+    !SAFE_ID.test(value("baseline_id") ?? "")
+    || !SAFE_SHA256.test(value("manifest_sha256") ?? "")
+    || !SAFE_SHA256.test(value("artifact_sha256") ?? "")
+    || !SAFE_SHA256.test(value("resulting_schema_sha256") ?? "")
+    || !Array.isArray(coveredMigrations)
+    || provenance === null
+    || typeof provenance !== "object"
+  ) {
+    fail("custom archive baseline provenance row is invalid");
+  }
+  return {
+    artifact_sha256: value("artifact_sha256"),
+    baseline_id: value("baseline_id"),
+    covered_migrations: coveredMigrations,
+    manifest_sha256: value("manifest_sha256"),
+    provenance,
+    resulting_schema_sha256: value("resulting_schema_sha256"),
+  };
+}
+
+function baselineRowsEqual(left, right) {
+  return JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right));
 }
 
 function parseExtractedCaptureLedger(sqlText, maximumBytes) {
@@ -2141,13 +2281,15 @@ function validateBackupSnapshotSession(session, config) {
     serializeLedger(session.migrationLedger ?? []),
     "backup source",
   );
-  requireLedgerPrefix(migrationLedger, repositoryMigrationLedger(config.migrationsDirectory), {
-    exact: true,
-    label: "backup source",
-  });
   const baselineContract = repositoryBaselineContract(config.migrationsDirectory);
   const baseline = session.baseline ?? null;
   requireBaselineMatch(baseline, baselineContract, "backup source");
+  requireBaselineAwareLedger(
+    migrationLedger,
+    repositoryMigrationLedger(config.migrationsDirectory),
+    baseline,
+    { exact: true, label: "backup source" },
+  );
   return {
     baseline,
     identity,
@@ -2205,6 +2347,7 @@ export async function createBackup({
       sourceBefore = validateBackupSnapshotSession(sourceSession, operationConfig);
       const pipeline = await pipelineRunner({
         ...operationConfig,
+        includeBaseline: sourceBefore.baseline !== null,
         encryptedPath,
         snapshotId: sourceBefore.snapshotId,
       });
@@ -2216,12 +2359,16 @@ export async function createBackup({
         fail("exported-snapshot archive is missing the baseline provenance table");
       }
       const archivedLedger = parseExtractedLedger(pipeline.ledgerSql);
+      const archivedBaseline = parseExtractedBaseline(pipeline.baselineSql ?? "");
       archivedCaptureLedger = parseExtractedCaptureLedger(
         pipeline.captureLedgerSql,
         config.maxCaptureLedgerBytes,
       );
       if (serializeLedger(archivedLedger) !== serializeLedger(sourceBefore.migrationLedger)) {
         fail("exported-snapshot archive migration ledger does not match its source session");
+      }
+      if (!baselineRowsEqual(archivedBaseline, sourceBefore.baseline)) {
+        fail("exported-snapshot archive baseline provenance does not match its source session");
       }
     } finally {
       if (typeof sourceSession?.close === "function") {
@@ -2712,7 +2859,7 @@ const CLEAN_ROOM_CATALOG_QUERY = [
 
 const CLEAN_ROOM_CATALOG_VECTOR = "0\t0\t0\t0\t0\t0";
 
-const RESTORE_IDENTITY_QUERY = "select concat_ws(E'\\t', current_database(), current_user, encode(sha256(convert_to(system_identifier::text, 'UTF8')), 'hex'), (select pg_get_userbyid(datdba) = current_user from pg_database where datname = current_database()), (select rolsuper from pg_roles where rolname = current_user), (select rolcreaterole from pg_roles where rolname = current_user), (select rolcreatedb from pg_roles where rolname = current_user), (select rolreplication from pg_roles where rolname = current_user), (select rolbypassrls from pg_roles where rolname = current_user), (select count(*) = 0 from pg_auth_members where member = (select oid from pg_roles where rolname = current_user)), (select count(*) = 0 from pg_database where datdba = (select oid from pg_roles where rolname = current_user) and datname <> current_database())) from pg_control_system()";
+const RESTORE_IDENTITY_QUERY = "select concat_ws(E'\\t', current_database(), current_user, encode(sha256(convert_to(system_identifier::text, 'UTF8')), 'hex'), ((select pg_get_userbyid(datdba) = current_user from pg_database where datname = current_database()))::text, ((select rolsuper from pg_roles where rolname = current_user))::text, ((select rolcreaterole from pg_roles where rolname = current_user))::text, ((select rolcreatedb from pg_roles where rolname = current_user))::text, ((select rolreplication from pg_roles where rolname = current_user))::text, ((select rolbypassrls from pg_roles where rolname = current_user))::text, ((select count(*) = 0 from pg_auth_members where member = (select oid from pg_roles where rolname = current_user)))::text, ((select count(*) = 0 from pg_database where datdba = (select oid from pg_roles where rolname = current_user) and datname <> current_database()))::text) from pg_control_system()";
 
 export async function verifyRestore({
   capturePipelineRunner = runPrivateCaptureArchiveVerification,
@@ -2768,10 +2915,12 @@ export async function verifyRestore({
       repositoryBaselineContract(config.migrationsDirectory),
       "selected backup",
     );
-    requireLedgerPrefix(manifest.source.migrationLedger, currentLedger, {
-      exact: false,
-      label: "selected backup",
-    });
+    requireBaselineAwareLedger(
+      manifest.source.migrationLedger,
+      currentLedger,
+      manifest.source.baseline ?? null,
+      { exact: false, label: "selected backup" },
+    );
 
     const pinnedServiceFile = join(scratch, "pg_service.conf");
     copyBoundedPrivate(config.pgServiceFile, pinnedServiceFile, 64 * 1024, "libpq service file");
@@ -2894,7 +3043,7 @@ export async function verifyRestore({
     const requiredRelations = await query(
       runner,
       operationConfig,
-      "select concat_ws(E'\\t', to_regclass('public.ingestion_runs') is not null, to_regclass('public.price_observations') is not null, to_regclass('public.source_permissions') is not null, to_regclass('public.publication_captures') is not null)",
+      "select concat_ws(E'\\t', (to_regclass('public.ingestion_runs') is not null)::text, (to_regclass('public.price_observations') is not null)::text, (to_regclass('public.source_permissions') is not null)::text, (to_regclass('public.publication_captures') is not null)::text)",
       "could not verify required restored relations",
     );
     if (requiredRelations !== "true\ttrue\ttrue\ttrue") {

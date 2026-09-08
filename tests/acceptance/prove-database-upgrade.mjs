@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
   cpSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   openSync,
+  realpathSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -16,6 +19,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import postgres from "postgres";
+import { createBackup, verifyRestore } from "../../deploy/backup/toolkit.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
@@ -45,6 +49,16 @@ const bootstrapUnknownChecksumDatabase =
   "handleplan_ci_v1_03_bootstrap_unknown_checksum";
 const bootstrapPartial038Database =
   "handleplan_ci_v1_03_bootstrap_partial_038";
+const baselineBackupRestoreDatabase =
+  "handleplan_restore_drill_b2b_baseline";
+const legacyBackupRestoreDatabase =
+  "handleplan_restore_drill_b2b_legacy";
+const restoreContainerName = "handleplan-task2b2-m1-restore-postgres";
+const restoreContainerPassword = "ci_restore_admin_url_safe_000000000001";
+const dockerBinary = process.env.DOCKER_BIN
+  ?? ["/opt/homebrew/bin/docker", "/usr/local/bin/docker"].find((candidate) => existsSync(candidate))
+  ?? "docker";
+let restoreContainerStarted = false;
 const proofDatabases = [
   sourceDatabase,
   legacyDatabase,
@@ -61,6 +75,8 @@ const proofDatabases = [
   bootstrapNonemptyDatabase,
   bootstrapUnknownChecksumDatabase,
   bootstrapPartial038Database,
+  baselineBackupRestoreDatabase,
+  legacyBackupRestoreDatabase,
 ];
 const postgresImage =
   "postgres:16.10-alpine@sha256:ab8380566c3ea09690a9ecaa85a59d82bfc6eb86744151a2a54335866c83a3e9";
@@ -2729,6 +2745,269 @@ async function verifyBootstrapFailureCases(admin) {
   await partial038.end({ timeout: 5 });
 }
 
+function writeExecutable(path, source) {
+  writeFileSync(path, `#!${process.execPath}\n${source}\n`, { mode: 0o700 });
+  chmodSync(path, 0o700);
+  return path;
+}
+
+function localDatabaseUrl(database, port, role, password) {
+  return `postgresql://${encodeURIComponent(role)}:${encodeURIComponent(password)}@127.0.0.1:${port}/${database}`;
+}
+
+async function startRestoreContainer() {
+  let existing = false;
+  try {
+    await run("docker", ["inspect", restoreContainerName]);
+    existing = true;
+  } catch {
+    // The run-local container name is available.
+  }
+  if (existing) {
+    throw new Error(`refusing to replace pre-existing container ${restoreContainerName}`);
+  }
+  await run("docker", [
+    "run", "-d", "--name", restoreContainerName,
+    "-e", `POSTGRES_PASSWORD=${restoreContainerPassword}`,
+    "-p", "127.0.0.1:55443:5432",
+    postgresImage,
+  ]);
+  restoreContainerStarted = true;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    try {
+      await run("docker", ["exec", restoreContainerName, "pg_isready", "-U", "postgres"]);
+      await run("docker", [
+        "exec", restoreContainerName, "psql", "-U", "postgres", "-d", "postgres",
+        "-v", "ON_ERROR_STOP=1", "-Atc", "select 1",
+      ]);
+      return;
+    } catch {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+    }
+  }
+  throw new Error("disposable restore PostgreSQL container did not become ready");
+}
+
+function backupPgWrapper(path, database, role, password, command) {
+  return writeExecutable(path, `
+import { spawnSync } from "node:child_process";
+const args = process.argv.slice(2).filter((value) => !value.startsWith("--dbname=service="));
+const connectionArgs = ${JSON.stringify(command === "pg_restore" ? [] : ["-U", role, "-d", database])};
+const child = spawnSync(${JSON.stringify(dockerBinary)}, [
+  "exec", "-i", "handleplan-task2b2-postgres", "env", ${JSON.stringify(`PGPASSWORD=${password}`)},
+  ${JSON.stringify(command)}, ...connectionArgs, ...args,
+], { stdio: "inherit" });
+process.exit(child.status ?? 1);
+`);
+}
+
+function passThroughAgeWrapper(path) {
+  return writeExecutable(path, `
+import { readFileSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+if (args.includes("--encrypt")) {
+  const outputIndex = args.indexOf("--output");
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  writeFileSync(args[outputIndex + 1], Buffer.concat(chunks), { mode: 0o600 });
+} else {
+  process.stdout.write(readFileSync(args.at(-1)));
+}
+`);
+}
+
+function uploadAdapter(path, storeDirectory) {
+  return writeExecutable(path, `
+import { copyFileSync } from "node:fs";
+import { basename, join } from "node:path";
+const key = process.env.HANDLEPLAN_BACKUP_UPLOAD_OBJECT_KEY;
+copyFileSync(process.env.HANDLEPLAN_BACKUP_UPLOAD_SOURCE_FILE, join(${JSON.stringify(storeDirectory)}, key.replaceAll("/", "__")));
+`);
+}
+
+function downloadAdapter(path, storeDirectory) {
+  return writeExecutable(path, `
+import { copyFileSync } from "node:fs";
+import { join } from "node:path";
+const key = process.env.HANDLEPLAN_RESTORE_DOWNLOAD_OBJECT_KEY;
+copyFileSync(join(${JSON.stringify(storeDirectory)}, key.replaceAll("/", "__")), process.env.HANDLEPLAN_RESTORE_DOWNLOAD_DESTINATION_FILE);
+`);
+}
+
+async function prepareBackupSource(admin, database, backupPassword) {
+  await admin.unsafe(`
+    do $backup_role$
+    begin
+      if not exists (select 1 from pg_catalog.pg_roles where rolname = 'handleplan_backup') then
+        create role handleplan_backup login nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
+      end if;
+    end
+    $backup_role$;
+    alter role handleplan_backup login password '${backupPassword}';
+    grant connect on database "${database}" to handleplan_backup;
+  `);
+  const source = postgres(urlForDatabase(database), { max: 1, onnotice: () => {} });
+  await source.unsafe(`
+    grant usage on schema public to handleplan_backup;
+    grant select on all tables in schema public to handleplan_backup;
+    grant usage, select on all sequences in schema public to handleplan_backup;
+  `);
+  await source.end({ timeout: 5 });
+}
+
+async function runBackupRoundtrip(admin, sourceDatabase, restoreDatabase, label) {
+  if (!restoreContainerStarted) await startRestoreContainer();
+  const backupPassword = "ci_backup_url_safe_000000000000000001";
+  const restoreRole = `handleplan_restore_drill_${label}_owner`;
+  const restoreAdminUrl = localDatabaseUrl("postgres", 55443, "postgres", restoreContainerPassword);
+  const restoreAdmin = postgres(restoreAdminUrl, { max: 1, onnotice: () => {} });
+  await restoreAdmin.unsafe(`
+    do $restore_role$
+    begin
+      if not exists (select 1 from pg_catalog.pg_roles where rolname = '${restoreRole}') then
+        create role ${restoreRole} login nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
+      end if;
+    end
+    $restore_role$;
+    alter role ${restoreRole} login password '${restoreContainerPassword}';
+  `);
+  const [restoreServer] = await restoreAdmin`
+    select encode(sha256(convert_to(system_identifier::text, 'UTF8')), 'hex') as server_id
+    from pg_control_system()
+  `;
+  await restoreAdmin.end({ timeout: 5 });
+  await run("docker", [
+    "exec", restoreContainerName, "psql", "-U", "postgres", "-d", "postgres",
+    "-v", "ON_ERROR_STOP=1", "-c", `create database "${restoreDatabase}" owner "${restoreRole}"`,
+  ]);
+
+  const rootDirectory = resolve(scratchDirectory, `backup-roundtrip-${label}`);
+  const directories = {};
+  for (const name of ["backup-work", "backup-evidence", "captures", "restore-work", "restore-evidence"]) {
+    directories[name] = resolve(rootDirectory, name);
+    mkdirSync(directories[name], { mode: 0o700, recursive: true });
+    chmodSync(directories[name], 0o700);
+  }
+  for (const name of Object.keys(directories)) directories[name] = realpathSync(directories[name]);
+  const storeDirectory = resolve(rootDirectory, "store");
+  mkdirSync(storeDirectory, { mode: 0o700 });
+  chmodSync(storeDirectory, 0o700);
+  const canonicalStoreDirectory = realpathSync(storeDirectory);
+  const backupPgpass = resolve(rootDirectory, "backup.pgpass");
+  const restorePgpass = resolve(rootDirectory, "restore.pgpass");
+  const backupService = resolve(rootDirectory, "backup.pg_service.conf");
+  const restoreService = resolve(rootDirectory, "restore.pg_service.conf");
+  writeFileSync(backupPgpass, `*:*:*:handleplan_backup:${backupPassword}\n`, { mode: 0o600 });
+  writeFileSync(restorePgpass, `*:*:*:${restoreRole}:${restoreContainerPassword}\n`, { mode: 0o600 });
+  writeFileSync(backupService, `[handleplan_backup]\nhost=/var/run/postgresql\ndbname=${sourceDatabase}\nuser=handleplan_backup\n`, { mode: 0o600 });
+  writeFileSync(restoreService, `[${restoreDatabase}]\nhost=/var/run/postgresql\ndbname=${restoreDatabase}\nuser=${restoreRole}\n`, { mode: 0o600 });
+  const recipients = resolve(rootDirectory, "recipients.txt");
+  const identity = resolve(rootDirectory, "identity.txt");
+  writeFileSync(recipients, "local-pass-through\n", { mode: 0o600 });
+  writeFileSync(identity, "local-pass-through\n", { mode: 0o600 });
+  const age = passThroughAgeWrapper(resolve(rootDirectory, "age.mjs"));
+  const upload = uploadAdapter(resolve(rootDirectory, "upload.mjs"), canonicalStoreDirectory);
+  const download = downloadAdapter(resolve(rootDirectory, "download.mjs"), canonicalStoreDirectory);
+  const backupPsql = backupPgWrapper(resolve(rootDirectory, "backup-psql.mjs"), sourceDatabase, "handleplan_backup", backupPassword, "psql");
+  const backupDump = backupPgWrapper(resolve(rootDirectory, "backup-pg_dump.mjs"), sourceDatabase, "handleplan_backup", backupPassword, "pg_dump");
+  const backupRestore = backupPgWrapper(resolve(rootDirectory, "backup-pg_restore.mjs"), sourceDatabase, "handleplan_backup", backupPassword, "pg_restore");
+  const restorePsql = writeExecutable(resolve(rootDirectory, "restore-psql.mjs"), `
+import { spawnSync } from "node:child_process";
+const args = process.argv.slice(2).filter((value) => !value.startsWith("--dbname=service="));
+const child = spawnSync(${JSON.stringify(dockerBinary)}, ["exec", "-i", ${JSON.stringify(restoreContainerName)}, "env", ${JSON.stringify(`PGPASSWORD=${restoreContainerPassword}`)}, "psql", "-U", ${JSON.stringify(restoreRole)}, "-d", ${JSON.stringify(restoreDatabase)}, ...args], { stdio: "inherit" });
+process.exit(child.status ?? 1);
+`);
+  const restorePgRestore = writeExecutable(resolve(rootDirectory, "restore-pg_restore.mjs"), `
+import { spawnSync } from "node:child_process";
+const args = process.argv.slice(2).filter((value) => !value.startsWith("--dbname=service="));
+const child = spawnSync(${JSON.stringify(dockerBinary)}, ["exec", "-i", ${JSON.stringify(restoreContainerName)}, "env", ${JSON.stringify(`PGPASSWORD=${restoreContainerPassword}`)}, "pg_restore", ...args], { stdio: "inherit" });
+process.exit(child.status ?? 1);
+`);
+  const sourceAdmin = postgres(localDatabaseUrl("postgres", 55442, "handleplan", "ci_admin_url_safe_0000000000000001"), { max: 1 });
+  const [server] = await sourceAdmin`
+    select encode(sha256(convert_to(system_identifier::text, 'UTF8')), 'hex') as server_id
+    from pg_control_system()
+  `;
+  await sourceAdmin.end({ timeout: 5 });
+  const backupEnvironment = {
+    CI: "true",
+    HANDLEPLAN_BACKUP_AGE_BIN: age,
+    HANDLEPLAN_BACKUP_AGE_RECIPIENTS_FILE: recipients,
+    HANDLEPLAN_BACKUP_COMMAND_TIMEOUT_MS: "120000",
+    HANDLEPLAN_BACKUP_CAPTURE_ROOT: directories.captures,
+    HANDLEPLAN_BACKUP_ENABLED: "true",
+    HANDLEPLAN_BACKUP_EVIDENCE_DIR: directories["backup-evidence"],
+    HANDLEPLAN_BACKUP_EXPECTED_DATABASE: sourceDatabase,
+    HANDLEPLAN_BACKUP_EXPECTED_CAPTURE_OWNER_UID: String(process.getuid()),
+    HANDLEPLAN_BACKUP_EXPECTED_ROLE: "handleplan_backup",
+    HANDLEPLAN_BACKUP_EXPECTED_SERVER_ID_SHA256: server.server_id,
+    HANDLEPLAN_BACKUP_MAX_ARTIFACT_BYTES: "1073741824",
+    HANDLEPLAN_BACKUP_MAX_CAPTURE_ARTIFACT_BYTES: "1073741824",
+    HANDLEPLAN_BACKUP_MAX_CAPTURE_FILES: "1000",
+    HANDLEPLAN_BACKUP_MAX_CAPTURE_LEDGER_BYTES: "1048576",
+    HANDLEPLAN_BACKUP_MAX_CAPTURE_PLAINTEXT_BYTES: "1073741824",
+    HANDLEPLAN_BACKUP_MIGRATIONS_DIR: process.env.MIGRATIONS_DIR,
+    HANDLEPLAN_BACKUP_PGDUMP_BIN: backupDump,
+    HANDLEPLAN_BACKUP_PGPASS_FILE: backupPgpass,
+    HANDLEPLAN_BACKUP_PGRESTORE_BIN: backupRestore,
+    HANDLEPLAN_BACKUP_PGSERVICE: "handleplan_backup",
+    HANDLEPLAN_BACKUP_PGSERVICE_FILE: backupService,
+    HANDLEPLAN_BACKUP_PSQL_BIN: backupPsql,
+    HANDLEPLAN_BACKUP_RETENTION_DAYS: "35",
+    HANDLEPLAN_BACKUP_UPLOAD_ADAPTER: upload,
+    HANDLEPLAN_BACKUP_WORK_DIR: directories["backup-work"],
+  };
+  const backup = await createBackup({ environment: backupEnvironment });
+  const encodedDatabaseKey = backup.manifest.database.objectKey.replaceAll("/", "__");
+  const encryptedFile = resolve(rootDirectory, "selected-database.dump.age");
+  cpSync(resolve(canonicalStoreDirectory, encodedDatabaseKey), encryptedFile);
+  chmodSync(encryptedFile, 0o600);
+  const restoreEnvironment = {
+    HANDLEPLAN_RESTORE_AGE_BIN: age,
+    HANDLEPLAN_RESTORE_AGE_IDENTITY_FILE: identity,
+    HANDLEPLAN_RESTORE_CLUSTER_ACK: "server-identity-reviewed-nonproduction",
+    HANDLEPLAN_RESTORE_COMMAND_TIMEOUT_MS: "120000",
+    HANDLEPLAN_RESTORE_DOWNLOAD_ADAPTER: download,
+    HANDLEPLAN_RESTORE_DRILL_ENABLED: "true",
+    HANDLEPLAN_RESTORE_ENCRYPTED_FILE: encryptedFile,
+    HANDLEPLAN_RESTORE_EVIDENCE_DIR: directories["restore-evidence"],
+    HANDLEPLAN_RESTORE_EXPECTED_BACKUP_ID: backup.backupId,
+    HANDLEPLAN_RESTORE_EXPECTED_CAPTURE_CIPHERTEXT_SHA256: backup.manifest.captures.sha256,
+    HANDLEPLAN_RESTORE_EXPECTED_CAPTURE_OBJECT_KEY: backup.manifest.captures.objectKey,
+    HANDLEPLAN_RESTORE_EXPECTED_CIPHERTEXT_SHA256: backup.manifest.database.sha256,
+    HANDLEPLAN_RESTORE_EXPECTED_DATABASE: restoreDatabase,
+    HANDLEPLAN_RESTORE_EXPECTED_MANIFEST_SHA256: backup.manifestSha256,
+    HANDLEPLAN_RESTORE_EXPECTED_OBJECT_KEY: backup.manifest.database.objectKey,
+    HANDLEPLAN_RESTORE_EXPECTED_ROLE: restoreRole,
+    HANDLEPLAN_RESTORE_EXPECTED_SERVER_ID_SHA256: restoreServer.server_id,
+    HANDLEPLAN_RESTORE_ISOLATION_ACK: "isolated-disposable-nonproduction-database",
+    HANDLEPLAN_RESTORE_MANIFEST_FILE: backup.evidenceManifest,
+    HANDLEPLAN_RESTORE_MAX_ARTIFACT_BYTES: "1073741824",
+    HANDLEPLAN_RESTORE_MAX_CAPTURE_ARTIFACT_BYTES: "1073741824",
+    HANDLEPLAN_RESTORE_MAX_CAPTURE_FILES: "1000",
+    HANDLEPLAN_RESTORE_MAX_CAPTURE_PLAINTEXT_BYTES: "1073741824",
+    HANDLEPLAN_RESTORE_MIGRATIONS_DIR: process.env.MIGRATIONS_DIR,
+    HANDLEPLAN_RESTORE_PGPASS_FILE: restorePgpass,
+    HANDLEPLAN_RESTORE_PGRESTORE_BIN: restorePgRestore,
+    HANDLEPLAN_RESTORE_PGSERVICE: restoreDatabase,
+    HANDLEPLAN_RESTORE_PGSERVICE_FILE: restoreService,
+    HANDLEPLAN_RESTORE_PSQL_BIN: restorePsql,
+    HANDLEPLAN_RESTORE_TEMPLATE_ACK: "created-from-template0-for-this-drill",
+    HANDLEPLAN_RESTORE_WORK_DIR: directories["restore-work"],
+  };
+  const restoreResult = await verifyRestore({ environment: restoreEnvironment });
+  assert.equal(restoreResult.evidence.status, "archive-restored-schema-verified");
+  const restored = postgres(localDatabaseUrl(restoreDatabase, 55443, restoreRole, restoreContainerPassword), { max: 1, onnotice: () => {} });
+  const [ledgerCount] = await restored`select count(*)::integer as count from handleplan_schema_migrations`;
+  assert.equal(ledgerCount.count, label === "baseline" ? 1 : 41);
+  const [baselineState] = await restored`
+    select to_regclass('public.handleplan_schema_baselines') is not null as exists
+  `;
+  assert.equal(baselineState.exists, label === "baseline");
+  await restored.end({ timeout: 5 });
+  return { backup, restoreResult };
+}
+
 const scratchDirectory = mkdtempSync(resolve(tmpdir(), "handleplan-v1-03-"));
 const dumpPath = resolve(scratchDirectory, "database.dump");
 const createdDatabases = new Set();
@@ -2896,6 +3175,21 @@ try {
   await legacy.end({ timeout: 5 });
   legacy = undefined;
 
+  await prepareBackupSource(admin, baselineDatabase, "ci_backup_url_safe_000000000000000001");
+  await prepareBackupSource(admin, legacyDatabase, "ci_backup_url_safe_000000000000000001");
+  await runBackupRoundtrip(
+    admin,
+    baselineDatabase,
+    baselineBackupRestoreDatabase,
+    "baseline",
+  );
+  await runBackupRoundtrip(
+    admin,
+    legacyDatabase,
+    legacyBackupRestoreDatabase,
+    "legacy",
+  );
+
   const dumpFd = openSync(dumpPath, "wx", 0o600);
   try {
     await runPostgresClient(
@@ -2988,6 +3282,11 @@ try {
     }
     await attemptCleanup("close admin database connection", () =>
       admin.end({ timeout: 5 }));
+  }
+  if (restoreContainerStarted) {
+    await attemptCleanup("remove disposable restore PostgreSQL container", () =>
+      run("docker", ["rm", "-f", restoreContainerName]));
+    restoreContainerStarted = false;
   }
   await attemptCleanup("remove dump scratch directory", () => {
     rmSync(scratchDirectory, { force: true, recursive: true });
