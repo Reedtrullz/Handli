@@ -1,7 +1,7 @@
 {
   "contractVersion": 1,
   "generatedFrom": "installed frozen pnpm dependency manifests",
-  "inventorySha256": "f83334eabda4b4c8a2492af97cf908a8b053bc7035a3b0fb7cc31b05a7b543cc",
+  "inventorySha256": "61f70edd001a7a75d85fa5c019d4563d2306403d823f4a9e688f48ed7eaebb0b",
   "licenseCounts": {
     "0BSD": 1,
     "Apache-2.0": 29,
@@ -11,14 +11,14 @@
     "CC-BY-4.0": 1,
     "CC0-1.0": 2,
     "ISC": 16,
-    "MIT": 380,
+    "MIT": 379,
     "MIT-0": 2,
     "MPL-2.0": 3,
     "Python-2.0": 1,
     "Unlicense": 1
   },
-  "lockfileSha256": "8990081df6681e6a97186af52536a7d274acfad21274145e21ef1584cb7d5f1a",
-  "packageCount": 452,
+  "lockfileSha256": "2282d13840740844c67e9a0bead8bb713bbc4757aa7ff20def2a681cd815ea67",
+  "packageCount": 451,
   "packages": [
     {
       "license": "MIT",
@@ -648,7 +648,7 @@
     {
       "license": "Apache-2.0",
       "name": "baseline-browser-mapping",
-      "version": "2.10.43"
+      "version": "2.11.21"
     },
     {
       "license": "MIT",
@@ -673,7 +673,7 @@
     {
       "license": "MIT",
       "name": "browserslist",
-      "version": "4.28.6"
+      "version": "4.28.9"
     },
     {
       "license": "MIT",
@@ -703,7 +703,7 @@
     {
       "license": "CC-BY-4.0",
       "name": "caniuse-lite",
-      "version": "1.0.30001805"
+      "version": "1.0.30001810"
     },
     {
       "license": "MIT",
@@ -863,7 +863,7 @@
     {
       "license": "ISC",
       "name": "electron-to-chromium",
-      "version": "1.5.389"
+      "version": "1.5.423"
     },
     {
       "license": "MIT",
@@ -1073,7 +1073,7 @@
     {
       "license": "BSD-3-Clause",
       "name": "fast-uri",
-      "version": "3.1.5"
+      "version": "3.1.7"
     },
     {
       "license": "ISC",
@@ -1618,7 +1618,7 @@
     {
       "license": "MIT",
       "name": "node-releases",
-      "version": "2.0.51"
+      "version": "2.0.54"
     },
     {
       "license": "MIT",
@@ -1744,11 +1744,6 @@
       "license": "MIT",
       "name": "possible-typed-array-names",
       "version": "1.1.0"
-    },
-    {
-      "license": "MIT",
-      "name": "postcss",
-      "version": "8.5.19"
     },
     {
       "license": "MIT",
@@ -2178,7 +2173,7 @@
     {
       "license": "MIT",
       "name": "update-browserslist-db",
-      "version": "1.2.3"
+      "version": "1.3.2"
     },
     {
       "license": "BSD-2-Clause",

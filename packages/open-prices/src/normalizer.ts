@@ -64,13 +64,11 @@ function normalizedRecord(record: object): Readonly<Record<string, unknown>> {
 export function normalizeOpenPricesOutcome(
   price: OpenPricesPrice,
   fetchedAt: Date,
-  geographicScopeId?: number,
 ): OpenPricesPriceIngestionOutcome {
   const sourceRecordId = `op-${price.id}`;
   const ean = price.product_code?.trim();
   if (ean === undefined || ean === "" || !isValidGtin(ean)) {
     return {
-      geographicScopeId,
       normalizedRecord: normalizedRecord(price),
       outcomeState: "quarantined",
       reason: "INVALID_GTIN",
@@ -81,7 +79,6 @@ export function normalizeOpenPricesOutcome(
   }
   if (typeof price.price !== "number" || price.price <= 0 || !Number.isFinite(price.price)) {
     return {
-      geographicScopeId,
       normalizedRecord: normalizedRecord(price),
       outcomeState: "quarantined",
       reason: "INVALID_PRICE",
@@ -93,7 +90,6 @@ export function normalizeOpenPricesOutcome(
   }
   if (price.currency !== "NOK") {
     return {
-      geographicScopeId,
       normalizedRecord: normalizedRecord(price),
       outcomeState: "quarantined",
       reason: "UNSUPPORTED_CURRENCY",
@@ -108,7 +104,6 @@ export function normalizeOpenPricesOutcome(
     observedAt = checkedDate(price.date);
   } catch {
     return {
-      geographicScopeId,
       normalizedRecord: normalizedRecord(price),
       outcomeState: "quarantined",
       reason: "INVALID_DATE",
@@ -122,13 +117,26 @@ export function normalizeOpenPricesOutcome(
   const chain = resolveChainFromLocation(location);
   if (chain === undefined) {
     return {
-      geographicScopeId,
       normalizedRecord: normalizedRecord(price),
       outcomeState: "unknown",
       reason: "UNKNOWN_CHAIN",
       recordedAt: fetchedAt,
       recordKind: "price",
       sourceRecordId,
+      subjectEan: ean,
+    };
+  }
+  // Receipt discounts lack the conditions and validity needed for ordinary-price evidence.
+  // price_without_discount is a reference amount, not an observed ordinary purchase.
+  if (price.price_is_discounted !== false) {
+    return {
+      normalizedRecord: normalizedRecord(price),
+      outcomeState: "quarantined",
+      reason: "DISCOUNTED_PRICE",
+      recordedAt: fetchedAt,
+      recordKind: "price",
+      sourceRecordId,
+      subjectChain: chain,
       subjectEan: ean,
     };
   }
@@ -144,7 +152,6 @@ export function normalizeOpenPricesOutcome(
     price: {
       amountOre,
       fetchedAt,
-      ...(geographicScopeId === undefined ? {} : { geographicScopeId }),
       observedAt,
       sourceReference: `${OPEN_PRICES_SOURCE_ID}:${price.id}`,
     },

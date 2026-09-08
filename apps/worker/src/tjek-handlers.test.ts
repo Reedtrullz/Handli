@@ -1,104 +1,50 @@
 import { describe, expect, it, vi } from "vitest";
-
-import { WorkerCancelledError } from "./runner";
-import {
-  createTjekHandlers,
-  matchOfferToProduct,
-  normalizeOfferName,
-  scoreProductMatch,
-  TJEK_JOB_KIND,
-  TJEK_SOURCE_ID,
-} from "./tjek-handlers";
-
-const CATALOG = {
-  id: "catalog-2026-08-21",
-  dealer_id: "5b11sm",
-  publication_date: "2026-08-21",
-  run_from: "2026-08-21T00:00:00.000Z",
-  run_till: "2026-08-27T23:59:59.000Z",
-  offer_count: 1,
-  brand: "Bunnpris",
-  brand_logo_url: null,
-  cover_image_url: null,
-  page_count: 1,
-  type: "incito",
-  locale: "nb-NO",
-  country_code: "NO",
-} as const;
-
-function context(signal = new AbortController().signal) {
-  return {
-    signal,
-    jobId: "tjek-job-1",
-    kind: TJEK_JOB_KIND,
-    runId: "run-1",
-    sourceId: TJEK_SOURCE_ID,
-    fenceToken: "fence-1",
-  };
+import { officialOfferEditionDiscoveryInputV1Schema, syntheticAuthorizedLocalEdition } from "@handleplan/domain";
+import { createTjekHandlers, TJEK_JOB_KIND } from "./tjek-handlers";
+const catalog = { id: "edition", dealer_id: "5b11sm", chainId: "bunnpris", type: "incito" } as never;
+const edition = officialOfferEditionDiscoveryInputV1Schema.parse({ ...syntheticAuthorizedLocalEdition, sourceId: "tjek", externalEditionId: "edition", chain: "bunnpris" });
+function setup() {
+  const recordEdition = vi.fn(async () => ({ id: 1 }));
+  const recordCapture = vi.fn(async () => ({ id: 2, retrievedAt: "2026-07-17T08:00:00.000Z" }));
+  const recordExtraction = vi.fn(async () => ({ id: 3, status: "completed" as const, counts: { total: 1, exactMatch: 0, reviewRequired: 1, rejected: 0 } }));
+  const putIfAbsent = vi.fn(async (write: any) => ({ contractVersion: 1, state: "stored", checksumSha256: write.checksumSha256, byteLength: write.byteLength }));
+  const client = { getAllLatestCatalogs: vi.fn(async () => [catalog]), canExtractOffers: vi.fn(() => true), getOffersFromCatalog: vi.fn(async () => [{ id: "offer", name: "Milk", price: 20, before_price: null, run_from: edition.validFrom, run_till: edition.validUntil }]) };
+  const foundation = { isCaptureComplete: vi.fn(async (): Promise<"completed" | "degraded" | undefined> => undefined), repository: { recordEdition, recordCapture, recordExtraction }, privateBlobStore: { putIfAbsent }, resolveEdition: vi.fn(async () => edition), sourceAccessPolicy: { getDecision: vi.fn(async (_: string, __: string, asOf: string) => ({ contractVersion: 1, permissionId: 1, sourceId: "tjek", decision: "approved", capabilities: ["capture", "discover", "extract"], rightsClassifications: ["public_display"], reviewedAt: "2026-07-01T00:00:00.000Z", evaluatedAt: asOf })) } };
+  const handler = createTjekHandlers({ client: client as never, foundation, clock: () => new Date("2026-07-17T08:00:00.000Z") })[TJEK_JOB_KIND]!;
+  const run = () => handler({ signal: new AbortController().signal } as never);
+  return { run, client, foundation, recordEdition, recordCapture, recordExtraction, putIfAbsent };
 }
-
-function mockClient(overrides: Record<string, unknown> = {}) {
-  return {
-    getLatestCatalog: vi.fn(async () => CATALOG),
-    getOffersFromCatalog: vi.fn(async () => []),
-    getAllLatestCatalogs: vi.fn(async () => [{ ...CATALOG, chainId: "bunnpris" }]),
-    canExtractOffers: vi.fn(() => true),
-    ...overrides,
-  };
-}
-
-describe("Tjek fuzzy product matching", () => {
-  it("normalizes case, accents, punctuation, and packaging words", () => {
-    expect(normalizeOfferName("TINE Lettmelk L,  tilbud!")).toBe("tine lettmelk");
-    expect(normalizeOfferName("Kaffe g")).toBe("kaffe");
+describe("Tjek foundation ingestion", () => {
+  it("stores evidence and only unresolved review candidates", async () => {
+    const t = setup();
+    expect((await t.run())?.counters).toMatchObject({ accepted: 0, persisted: 1, failed: 0 });
+    expect(t.putIfAbsent).toHaveBeenCalledOnce();
+    const envelope = t.recordExtraction.mock.calls[0] as unknown as [number, { candidates: any[] }];
+    expect(envelope[1].candidates[0].product).toEqual({ kind: "unresolved-label", label: "Milk" });
   });
-
-  it("scores a strong token match above unrelated products", () => {
-    expect(scoreProductMatch("Tine Lettmelk 1L", "TINE Lettmelk")).toBeGreaterThanOrEqual(80);
-    expect(scoreProductMatch("Tine Lettmelk", "Grandiosa Pizza")).toBe(0);
+  it("reports failed writes and retries partially recorded editions", async () => {
+    const t = setup();
+    t.recordCapture.mockRejectedValueOnce(new Error("permission denied"));
+    expect((await t.run())?.counters).toMatchObject({ failed: 1, persisted: 0 });
+    expect((await t.run())?.counters).toMatchObject({ failed: 0, persisted: 1 });
+    expect(t.recordEdition).toHaveBeenCalledTimes(2);
   });
-
-  it("chooses the highest-confidence product and respects the threshold", () => {
-    const products = [
-      { id: 1, displayName: "Tine Helmelk" },
-      { id: 2, displayName: "Tine Lettmelk" },
-    ];
-    expect(matchOfferToProduct("Tine Lettmelk 1L", products)).toMatchObject({
-      productId: 2,
-      displayName: "Tine Lettmelk",
-    });
-    expect(matchOfferToProduct("Grandiosa Pizza", products)).toBeUndefined();
-    expect(matchOfferToProduct("Tine Lettmelk", products, 101)).toBeUndefined();
+  it("does not turn unsupported catalogs into confirmed empty", async () => {
+    const t = setup(); t.client.canExtractOffers.mockReturnValue(false);
+    expect((await t.run())?.counters).toMatchObject({ failed: 1, persisted: 0 });
+    expect(t.recordExtraction).not.toHaveBeenCalled();
   });
-});
-
-describe("Tjek worker handler wiring and idempotency", () => {
-  it("skips an existing catalog across all dealers", async () => {
-    const queryCalls: unknown[][] = [];
-    const db = {
-      $client: vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
-        queryCalls.push([strings[0], ...values]);
-        return [{ id: 99 }];
-      }),
-    };
-    const client = mockClient();
-    const handlers = createTjekHandlers({ client, db: db as never });
-
-    expect(handlers[TJEK_JOB_KIND]).toEqual(expect.any(Function));
-    await expect(handlers[TJEK_JOB_KIND]!(context())).resolves.toEqual({ counters: { fetched: 0, accepted: 0, quarantined: 0, unknown: 0, persisted: 0, failed: 0 } });
-    expect(client.getAllLatestCatalogs).toHaveBeenCalledWith(expect.anything());
-    expect(client.getOffersFromCatalog).not.toHaveBeenCalled();
+  it("skips only a verified complete capture and checks authorization before discovery", async () => {
+    const t = setup(); t.foundation.isCaptureComplete.mockResolvedValue("completed");
+    expect((await t.run())?.counters).toMatchObject({ failed: 0, persisted: 0 });
+    expect(t.recordEdition).not.toHaveBeenCalled();
+    t.foundation.sourceAccessPolicy.getDecision.mockRejectedValue(new Error("revoked"));
+    await expect(t.run()).rejects.toThrow("revoked");
+    expect(t.client.getAllLatestCatalogs).toHaveBeenCalledOnce();
   });
-
-  it("fails closed on a pre-cancelled signal before making source or database calls", async () => {
-    const controller = new AbortController();
-    controller.abort();
-    const client = mockClient();
-    const db = { $client: vi.fn() };
-    const handlers = createTjekHandlers({ client, db: db as never });
-
-    await expect(handlers[TJEK_JOB_KIND]!(context(controller.signal))).rejects.toBeInstanceOf(WorkerCancelledError);
-    expect(client.getAllLatestCatalogs).not.toHaveBeenCalled();
-    expect(db.$client).not.toHaveBeenCalled();
+  it("fails closed without reviewed scope", async () => {
+    const t = setup(); t.foundation.resolveEdition.mockRejectedValue(new Error("scope unavailable"));
+    expect((await t.run())?.counters).toMatchObject({ failed: 1 });
+    expect(t.putIfAbsent).not.toHaveBeenCalled();
   });
 });

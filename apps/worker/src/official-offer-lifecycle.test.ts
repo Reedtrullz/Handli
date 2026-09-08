@@ -4,6 +4,7 @@ import { OFFICIAL_OFFER_FOUNDATION_ACTIVATION } from "@handleplan/domain";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  createOfficialOfferLifecycleScheduler,
   MAX_OFFICIAL_OFFER_LIFECYCLE_BATCH,
   OfficialOfferLifecycleJobExecutor,
   type OfficialOfferLifecycleReceiptV1,
@@ -108,5 +109,59 @@ describe("dedicated official-offer lifecycle executor", () => {
     expect(source).not.toContain("publicationGate");
     expect(source).not.toContain("publishReviewedOffers");
     expect(source).not.toContain("expireEndedOffers");
+  });
+});
+
+describe("official-offer lifecycle schedule", () => {
+  it("retries failed and busy slots with fresh attempts, preserving SQL receipts and replay completion", async () => {
+    const busy = { ...RECEIPT, outcome: "lease-unavailable" as const };
+    const replay = { ...RECEIPT, outcome: "replayed" as const, replayed: true };
+    const reconcile = vi.fn<OfficialOfferLifecycleRepositoryPort["reconcile"]>()
+      .mockRejectedValueOnce(new Error("database unavailable"))
+      .mockResolvedValueOnce(busy)
+      .mockResolvedValueOnce(replay)
+      .mockResolvedValue(RECEIPT);
+    const run = createOfficialOfferLifecycleScheduler({
+      sourceId: "synthetic-source", ownerId: "worker", repository: { reconcile },
+    });
+    const now = new Date("2026-07-17T08:04:00Z");
+    await expect(run(now)).rejects.toThrow("database unavailable");
+    await expect(run(now)).resolves.toBe(busy);
+    await expect(run(now)).resolves.toBe(replay);
+    await expect(run(new Date("2026-07-17T08:14:59Z"))).resolves.toBeUndefined();
+    expect(reconcile).toHaveBeenCalledTimes(3);
+    const requests = reconcile.mock.calls.map(([request]) => request);
+    expect(new Set(requests.map((request) => request.runId)).size).toBe(3);
+    expect(requests.every((request) => request.jobId === RECEIPT.jobId)).toBe(true);
+    expect(requests.every((request) => request.scheduledAt.getTime() === SCHEDULED_AT.getTime())).toBe(true);
+    await expect(run(new Date("2026-07-17T08:15:00Z"))).resolves.toBe(RECEIPT);
+    expect(reconcile.mock.calls[3]?.[0].jobId).toContain("08:15:00.000Z");
+  });
+
+  it("bounds hung attempts to 30 seconds and propagates shutdown without consuming the slot", async () => {
+    vi.useFakeTimers();
+    try {
+      const reconcile = vi.fn<OfficialOfferLifecycleRepositoryPort["reconcile"]>()
+        .mockImplementation(() => new Promise(() => {}));
+      const run = createOfficialOfferLifecycleScheduler({
+        sourceId: "synthetic-source", ownerId: "worker", repository: { reconcile },
+      });
+      const timedOut = expect(run(SCHEDULED_AT)).rejects.toThrow("timed out");
+      await vi.advanceTimersByTimeAsync(30_000);
+      await timedOut;
+      expect(reconcile.mock.calls[0]?.[1]?.aborted).toBe(true);
+      const controller = new AbortController();
+      const stopped = expect(run(SCHEDULED_AT, controller.signal)).rejects.toThrow("shutdown");
+      controller.abort(new Error("shutdown"));
+      await stopped;
+      expect(reconcile.mock.calls[1]?.[1]?.aborted).toBe(true);
+      await expect(run(SCHEDULED_AT, controller.signal)).rejects.toThrow("shutdown");
+      expect(reconcile).toHaveBeenCalledTimes(2);
+      reconcile.mockResolvedValue(RECEIPT);
+      await expect(run(SCHEDULED_AT)).resolves.toBe(RECEIPT);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

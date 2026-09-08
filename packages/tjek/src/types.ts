@@ -13,6 +13,9 @@ export interface TjekCatalog {
   readonly type: string;
   readonly types?: readonly string[];
   readonly incito_publication_id?: string | null;
+  readonly all_stores?: boolean;
+  readonly store_id?: string | null;
+  readonly dealer?: { readonly country?: { readonly id: string }; readonly markets?: readonly { readonly country_code: string; readonly slug?: string }[] };
   readonly locale: string;
   readonly country_code: string;
 }
@@ -23,6 +26,9 @@ export interface TjekCatalogListResponse {
 }
 
 export interface TjekOffer {
+  readonly raw?: Readonly<Record<string, unknown>>;
+  readonly description?: string | null;
+  readonly currency?: string | null;
   readonly id: string;
   readonly heading: string | null;
   readonly name: string;

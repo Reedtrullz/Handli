@@ -2,19 +2,29 @@
 
 ## Status and nonclaims
 
-This slice is a source-neutral, private ingestion and operational foundation. Public activation is
-fixed to `enabled: false` in the versioned domain contract, and migration 026 seeds an independent
-database publication policy to `false`. It defines two worker job kinds, a dedicated atomic
-publication/expiry database boundary, while migration 027 records DB-owned append-only publication
-health evidence. The owner-private filesystem blob store exists, but production
-composition returns no official-offer handlers or schedules and bootstrap does not instantiate the
-store. It does not add a retailer adapter or URL, network fetch, live source schedule, public offer
-endpoint, or ranking input.
-The separate V1-10 slice adds an Access-protected source-neutral review UI/API and append-only
-repository; see [`private-review.md`](private-review.md). It still has no real source/capture
-renderer and cannot activate publication. No retailer publication, artwork, text, price, or
-identifier is included in the repository. The golden fixtures are invented and rights-cleared
-for tests.
+**Release blocked (2026-09-08):** this production composition is a draft. Fresh migration
+039 fails while rebuilding the public offer function; its immutable bytes have not been
+changed. Real worker-role intake additionally fails on millisecond-versus-microsecond
+permission identity and the `FOR SHARE` geographic-scope lock. Unit checks are not evidence
+of successful PostgreSQL intake or public publication. Resolve these boundaries and rerun
+`RUN_OFFICIAL_OFFER_DB_INTEGRATION=1` before deploying this composition.
+
+The domain activation flag is enabled, but the independent database publication policy
+remains a separate gate. With `TJEK_ENABLED=true`, production discovers catalogues daily,
+uses the foundation repository and private blob store, and reconciles the dedicated SQL
+lifecycle every 15-minute slot after a worker cycle. Enabling the worker does not approve
+candidates or enable the database publication policy.
+
+Bunnpris uses Incito; Extra and REMA use the paged Tjek offer endpoint. Raw catalogue and
+offer payloads are retained privately. National scope requires explicit all-store Norway
+evidence. Missing exact product/package/eligibility interpretation is routed to review,
+with degraded extraction accounting; it is never fuzzy-matched and published automatically.
+The current source permission record must authorize every operation and capture classification.
+Completed capture retries reuse persisted results. Partial captures remain retryable.
+
+See [`private-review.md`](private-review.md) for the protected review boundary. Existing
+legacy publications with incompatible identity or authorization timing require explicit
+recovery; the importer does not rewrite their evidence.
 
 The code does **not** claim that Bunnpris, Extra, Rema 1000, or any other source has granted
 capture, extraction, storage, or public-display rights. A real source remains blocked until its
@@ -32,7 +42,7 @@ The implementation has three deliberately separate layers:
    discovery time, geographic scope, and rights classification. Immediately before each discovery
    or fetch invocation, a separate authorizer is called; a physical adapter must perform exactly
    one attempt and must not hide retries or redirects. Returned values remain unknown, strict,
-   bounded input at the orchestrator boundary. There is no live source adapter.
+   bounded input at the orchestrator boundary. The Tjek composition implements this boundary for approved runtime access.
 3. `@handleplan/db` records the audit trail in the existing publication and offer-review schema.
    Migration 023 adds the two source-neutral job kinds to the worker-result ledger. It does not add
    a retailer source, runtime grant, publication grant, or activation.
@@ -43,7 +53,7 @@ reason. Implementations must not log capture bytes, private keys, or normalized 
 
 ## Authorized flow
 
-The future caller must provide a strict edition input whose authorization:
+The caller must provide a strict edition input whose authorization:
 
 - is `approved`;
 - includes `discover`, `capture`, and `extract`;

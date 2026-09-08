@@ -814,6 +814,20 @@ try {
     );
   }
 
+  // Migration 037 grants to this role; a fresh database has no runtime roles yet.
+  // Leave existing roles untouched; configureRuntimeRoles remains authoritative.
+  if (migrationFiles.includes("037_worker_official_offer_grants.sql")) {
+    await sql.unsafe(`
+      do $worker_role_prerequisite$
+      begin
+        if not exists (select 1 from pg_roles where rolname = '${workerRole}') then
+          create role ${workerRole} with nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
+        end if;
+      end
+      $worker_role_prerequisite$;
+    `);
+  }
+
   for (const id of migrationFiles) {
     const source = await readFile(path.join(migrationsDirectory, id), "utf8");
     const checksum = createHash("sha256").update(source).digest("hex");
