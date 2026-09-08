@@ -88,7 +88,7 @@ The exact tracked bytes are:
 deploy/bootstrap/040_schema.sql
 8febf33b13e7260e746e624714e8ee5e054b039f45df673da1cf8b1569198c7e
 deploy/bootstrap/040_manifest.json
-0a0ae7c9d46b2e20bfcbc4abd672cf9f2a8dbe5279b4237322d64f44c5c38b5c
+637257346aa91fe76f00225e3337282dbb82325609018740697eff2ec64ee9cb
 deploy/migrations/041_public_offer_projection_repair.sql
 68f59cfd0b1ada2f600f8540334d9b6eefe19c7970d3827d0ec5ca218905433a
 ```

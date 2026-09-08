@@ -41,7 +41,8 @@ canonical-artifact.raw.diff:        retained raw canonical/artifact dump diff
 canonical-artifact.diff:            132 changed definition lines; exact diff retained
 canonical-artifact.diff.check.json: every changed line is a constraint/index deparser line
 canonical-raw.diff sha256:          f3e5b1bdbea0490d5d6548f58fa60c5e534848978e62d676ff43064c2b51e71f
-readback sha256:                    5d545f4051eaa6c6ece96ef004accf75db4d40b6b8637908e61c590c5a14984f
+readback.json file bytes sha256:   5d545f4051eaa6c6ece96ef004accf75db4d40b6b8637908e61c590c5a14984f
+readbacks payload sha256:           51df020a12d8a537c76bb1e9b702d002f983f550f5fd58bdb1d3a0a21b0b05c9
 ```
 
 Both canonical databases and both artifact databases produced 52 relations,
