@@ -36,12 +36,13 @@ integration("Tjek production foundation under worker role", () => {
         id: `integration-retry-${randomUUID()}`,
       };
       let catalogs = [catalog];
+      let workerNow = new Date(databaseNow);
       const client = {
         getAllLatestCatalogs: async () => catalogs, canExtractOffers: () => true,
         getOffersFromCatalog: async (selectedCatalog: typeof catalog) => [{ id: "milk", name: "Synthetic milk", price: 20, currency: "NOK", before_price: null, run_from: selectedCatalog.run_from, run_till: selectedCatalog.run_till }],
       };
       const foundation = createTjekFoundationDependencies(connection.db, await realpath(root));
-      const handler = createTjekHandlers({ client: client as never, foundation, clock: () => new Date(databaseNow) })[TJEK_JOB_KIND]!;
+      const handler = createTjekHandlers({ client: client as never, foundation, clock: () => new Date(workerNow) })[TJEK_JOB_KIND]!;
       const context = { signal: new AbortController().signal, sourceId: "tjek", jobId: "integration", runId: randomUUID(), fenceToken: "integration", kind: TJEK_JOB_KIND };
       const first = await handler(context);
       expect(first.counters?.persisted).toBe(1);
@@ -73,8 +74,42 @@ integration("Tjek production foundation under worker role", () => {
       const failedRetry = await handler(context);
       expect(failedRetry.counters?.persisted).toBe(0);
       expect(failedRetry.counters?.failed).toBe(1);
+      const captureBeforeRetry = await connection.sql<{
+        id: number;
+        checksum: string;
+        blob_key: string;
+        byte_length: number;
+        rights_classification: string;
+        retrieved_at: string;
+        capture_count: number;
+      }[]>`
+        select capture.id, capture.checksum, capture.blob_key,
+          capture.byte_length, capture.rights_classification,
+          to_char(capture.retrieved_at at time zone 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as retrieved_at,
+          (select count(*)::integer from publication_captures sibling
+            where sibling.publication_id = publication.id) as capture_count
+        from publications publication
+        join publication_captures capture on capture.publication_id = publication.id
+        where publication.source_id = 'tjek' and publication.external_id = ${retryCatalog.id}`;
+      expect(captureBeforeRetry).toHaveLength(1);
+      expect(captureBeforeRetry[0]?.capture_count).toBe(1);
+      await admin.sql`select pg_sleep(0.01)`;
+      const [{ now: retryDatabaseNow }] = await admin.sql<{ now: Date | string }[]>`select clock_timestamp() as now`;
+      workerNow = new Date(new Date(retryDatabaseNow).getTime() - 1);
       const successfulRetry = await handler(context);
       expect(successfulRetry.counters?.persisted).toBe(1);
+      const captureAfterRetry = await connection.sql`
+        select capture.id, capture.checksum, capture.blob_key,
+          capture.byte_length, capture.rights_classification,
+          to_char(capture.retrieved_at at time zone 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as retrieved_at,
+          (select count(*)::integer from publication_captures sibling
+            where sibling.publication_id = publication.id) as capture_count
+        from publications publication
+        join publication_captures capture on capture.publication_id = publication.id
+        where publication.source_id = 'tjek' and publication.external_id = ${retryCatalog.id}`;
+      expect(captureAfterRetry).toEqual(captureBeforeRetry);
       const retryRows = await connection.sql`
         select extraction.id
         from publications publication
