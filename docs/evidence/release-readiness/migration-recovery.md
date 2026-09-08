@@ -13,7 +13,7 @@ exists or that production has been changed.
 ## Evidence and root cause
 
 The workflow and the existing upgrade proof name the exact CI image
-postgres:16.10-alpine@sha256:ab8380566c3ea09690a9ecaa85a59d82bfc6eb86744151a2a54335866c83a3e,
+postgres:16.10-alpine@sha256:ab8380566c3ea09690a9ecaa85a59d82bfc6eb86744151a2a54335866c83a3e9,
 whose digest has 64 hexadecimal characters. Docker inspected and pulled this
 exact reference successfully; the observed image ID was
 sha256:ab8380566c3ea09690a9ecaa85a59d82bfc6eb86744151a2a54335866c83a3e9.
