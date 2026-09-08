@@ -118,9 +118,10 @@ and reviewer references without credentials or private captures.
 The generated artifact is the selected atomicity solution. Task 2B must build
 it from a disposable canonical database after applying the immutable 001–038
 and 040 semantics plus one explicit corrected CREATE OR REPLACE FUNCTION
-public.public_official_offer_rows_v1(...) in place of 039. The generated
-artifact is reviewed and hash-pinned as a standalone SQL install; it is not a
-runtime rewrite of historical files and does not claim that 039 executed. The
+public.public_official_offer_rows_v1(...) in place of 039. Before
+implementation, the generated artifact must be independently reviewed and
+hash-pinned as a standalone SQL install; it is not a runtime rewrite of
+historical files and does not claim that 039 executed. The
 explicit function must preserve the existing SECURITY DEFINER, PARALLEL
 UNSAFE, SET search_path TO pg_catalog, pg_temp, owner, and grant boundary. Its
 only semantic changes are:
