@@ -3,10 +3,13 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   closeSync,
+  cpSync,
   mkdtempSync,
+  mkdirSync,
   openSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, resolve } from "node:path";
@@ -26,6 +29,22 @@ const publicationHealthPreconditionDatabase =
   "handleplan_ci_v1_03_publication_health_precondition";
 const pdfEvidencePreconditionDatabase =
   "handleplan_ci_v1_03_pdf_evidence_precondition";
+const bootstrapBeforeArtifactDatabase =
+  "handleplan_ci_v1_03_bootstrap_before_artifact";
+const bootstrapAfterArtifactDatabase =
+  "handleplan_ci_v1_03_bootstrap_after_artifact";
+const bootstrapBeforeCommitDatabase =
+  "handleplan_ci_v1_03_bootstrap_before_commit";
+const bootstrapTamperedArtifactDatabase =
+  "handleplan_ci_v1_03_bootstrap_tampered_artifact";
+const bootstrapTamperedManifestDatabase =
+  "handleplan_ci_v1_03_bootstrap_tampered_manifest";
+const bootstrapNonemptyDatabase =
+  "handleplan_ci_v1_03_bootstrap_nonempty";
+const bootstrapUnknownChecksumDatabase =
+  "handleplan_ci_v1_03_bootstrap_unknown_checksum";
+const bootstrapPartial038Database =
+  "handleplan_ci_v1_03_bootstrap_partial_038";
 const proofDatabases = [
   sourceDatabase,
   legacyDatabase,
@@ -34,6 +53,14 @@ const proofDatabases = [
   completionClockDatabase,
   publicationHealthPreconditionDatabase,
   pdfEvidencePreconditionDatabase,
+  bootstrapBeforeArtifactDatabase,
+  bootstrapAfterArtifactDatabase,
+  bootstrapBeforeCommitDatabase,
+  bootstrapTamperedArtifactDatabase,
+  bootstrapTamperedManifestDatabase,
+  bootstrapNonemptyDatabase,
+  bootstrapUnknownChecksumDatabase,
+  bootstrapPartial038Database,
 ];
 const postgresImage =
   "postgres:16.10-alpine@sha256:ab8380566c3ea09690a9ecaa85a59d82bfc6eb86744151a2a54335866c83a3e9";
@@ -238,18 +265,43 @@ function run(command, args, options = {}) {
   });
 }
 
-async function runMigrations(database, maxMigrationId) {
+async function runMigrations(database, maxMigrationId, options = {}) {
   const env = {
     ...process.env,
     CI: "true",
     DATABASE_MIGRATION_URL: urlForDatabase(database),
-    MIGRATIONS_DIR: process.env.MIGRATIONS_DIR,
+    MIGRATIONS_DIR: options.migrationsDirectory ?? process.env.MIGRATIONS_DIR,
+    ...(options.bootstrapDirectory
+      ? { BOOTSTRAP_DIR: options.bootstrapDirectory }
+      : {}),
+    ...(options.env ?? {}),
   };
   delete env.CI_MAX_MIGRATION_ID;
   if (maxMigrationId !== undefined) {
     env.CI_MAX_MIGRATION_ID = maxMigrationId;
   }
-  await run(process.execPath, [migrationRunner], { env });
+  await run(process.execPath, [options.runner ?? migrationRunner], { env });
+}
+
+function createCopiedRunnerFixture(name, mutate) {
+  const fixtureRoot = mkdtempSync(resolve(root, `tests/acceptance/.runner-${name}-`));
+  const deployRoot = resolve(fixtureRoot, "deploy");
+  const migrationsDirectory = resolve(deployRoot, "migrations");
+  const bootstrapDirectory = resolve(deployRoot, "bootstrap");
+  mkdirSync(deployRoot, { recursive: true });
+  cpSync(migrationRunner, resolve(deployRoot, "migrate.mjs"));
+  cpSync(resolve(root, "deploy/migrations"), migrationsDirectory, { recursive: true });
+  cpSync(resolve(root, "deploy/bootstrap"), bootstrapDirectory, { recursive: true });
+  mutate({
+    migrationsDirectory,
+    bootstrapDirectory,
+  });
+  return {
+    runner: resolve(deployRoot, "migrate.mjs"),
+    migrationsDirectory,
+    bootstrapDirectory,
+    cleanup: () => rmSync(fixtureRoot, { force: true, recursive: true }),
+  };
 }
 
 async function seedLegacyReviewRolePrivileges(sql) {
@@ -1201,6 +1253,102 @@ async function verifyRuntimeRolePolicy(sql) {
         'official_offer_lifecycle_reconcile_v1(text,text,text,timestamptz,text,integer,boolean)',
         'EXECUTE'
       ) as worker_offer_lifecycle_execute,
+      has_table_privilege(
+        'handleplan_app', 'approved_offers', 'INSERT'
+      ) as worker_approved_offers_insert,
+      has_table_privilege(
+        'handleplan_app', 'approved_offers', 'UPDATE'
+      ) as worker_approved_offers_update,
+      has_table_privilege(
+        'handleplan_app', 'approved_offers', 'DELETE'
+      ) as worker_approved_offers_delete,
+      has_table_privilege(
+        'handleplan_app', 'review_actions', 'INSERT'
+      ) as worker_review_actions_insert,
+      has_table_privilege(
+        'handleplan_app', 'review_actions', 'UPDATE'
+      ) as worker_review_actions_update,
+      has_table_privilege(
+        'handleplan_app', 'review_actions', 'DELETE'
+      ) as worker_review_actions_delete,
+      has_table_privilege(
+        'handleplan_app', 'offer_targets', 'INSERT'
+      ) as worker_offer_targets_insert,
+      has_table_privilege(
+        'handleplan_app', 'offer_targets', 'UPDATE'
+      ) as worker_offer_targets_update,
+      has_table_privilege(
+        'handleplan_app', 'offer_targets', 'DELETE'
+      ) as worker_offer_targets_delete,
+      has_table_privilege(
+        'handleplan_app', 'offer_conditions', 'INSERT'
+      ) as worker_offer_conditions_insert,
+      has_table_privilege(
+        'handleplan_app', 'offer_conditions', 'UPDATE'
+      ) as worker_offer_conditions_update,
+      has_table_privilege(
+        'handleplan_app', 'offer_conditions', 'DELETE'
+      ) as worker_offer_conditions_delete,
+      has_function_privilege(
+        'handleplan_app',
+        'canonical_official_offer_edition_identity(text,text,text,text,text,bigint,jsonb,timestamptz,timestamptz,timestamptz)',
+        'EXECUTE'
+      ) as worker_offer_edition_identity_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'canonical_official_offer_scope_identity(jsonb)',
+        'EXECUTE'
+      ) as worker_offer_scope_identity_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'private_review_candidate_rows_v1(bigint,timestamptz,text,text,integer,integer,integer,integer,text,timestamptz,bigint,integer)',
+        'EXECUTE'
+      ) as worker_private_review_candidate_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'private_review_decide_v1(bigint,integer,text,text,text,text,text,text,text,integer,integer,integer,integer,text,text,timestamptz,timestamptz,text[])',
+        'EXECUTE'
+      ) as worker_private_review_decide_v1_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'private_review_record_evidence_render_v1(bigint,integer,text,text,text,text,text,text,text,timestamptz)',
+        'EXECUTE'
+      ) as worker_private_review_evidence_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'private_review_decide_v2(bigint,integer,text,text,text,text,text,text,text,text,text,integer,integer,integer,integer,text,text,timestamptz,timestamptz,text[])',
+        'EXECUTE'
+      ) as worker_private_review_decide_v2_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'assert_current_official_offer_permission(character varying,bigint,jsonb,text,text)',
+        'EXECUTE'
+      ) as worker_offer_permission_governance_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'assert_public_official_offer_payload_v1(bigint)',
+        'EXECUTE'
+      ) as worker_public_offer_payload_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'is_canonical_membership_program_id_v1(text)',
+        'EXECUTE'
+      ) as worker_membership_program_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'public_official_offer_rows_v1(bigint[],timestamptz)',
+        'EXECUTE'
+      ) as worker_public_offer_projection_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'public_offer_backed_discovery_rows_v1(timestamptz)',
+        'EXECUTE'
+      ) as worker_offer_discovery_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'official_offer_lifecycle_is_revoked_v1(bigint,timestamptz)',
+        'EXECUTE'
+      ) as worker_offer_revocation_execute,
       has_function_privilege(
         'handleplan_app',
         'reject_append_only_mutation()',
@@ -1526,6 +1674,30 @@ async function verifyRuntimeRolePolicy(sql) {
     public_api_budget_worker_table_access: false,
     public_api_budget_worker_execute: false,
     worker_offer_lifecycle_execute: true,
+    worker_approved_offers_insert: false,
+    worker_approved_offers_update: false,
+    worker_approved_offers_delete: false,
+    worker_review_actions_insert: false,
+    worker_review_actions_update: false,
+    worker_review_actions_delete: false,
+    worker_offer_targets_insert: false,
+    worker_offer_targets_update: false,
+    worker_offer_targets_delete: false,
+    worker_offer_conditions_insert: false,
+    worker_offer_conditions_update: false,
+    worker_offer_conditions_delete: false,
+    worker_offer_edition_identity_execute: true,
+    worker_offer_scope_identity_execute: true,
+    worker_private_review_candidate_execute: false,
+    worker_private_review_decide_v1_execute: false,
+    worker_private_review_evidence_execute: false,
+    worker_private_review_decide_v2_execute: false,
+    worker_offer_permission_governance_execute: false,
+    worker_public_offer_payload_execute: false,
+    worker_membership_program_execute: false,
+    worker_public_offer_projection_execute: false,
+    worker_offer_discovery_execute: false,
+    worker_offer_revocation_execute: false,
     guard_execute: false,
     owner_member: false,
     web_database_create: false,
@@ -2294,6 +2466,269 @@ async function dropDatabase(sql, database) {
   await sql.unsafe(`drop database if exists "${database}"`);
 }
 
+async function readBootstrapState(sql) {
+  const [catalog] = await sql`
+    select
+      to_regclass('public.handleplan_schema_migrations') is not null as ledger_exists,
+      to_regclass('public.handleplan_schema_baselines') is not null as baseline_exists,
+      (
+        select count(*)::integer
+        from pg_catalog.pg_namespace
+        where nspname not in ('pg_catalog', 'information_schema', 'public')
+          and nspname !~ '^pg_(toast|temp)'
+      ) as custom_schemas,
+      (
+        select count(*)::integer
+        from pg_catalog.pg_class relation
+        join pg_catalog.pg_namespace namespace on namespace.oid = relation.relnamespace
+        where namespace.nspname not in ('pg_catalog', 'information_schema')
+          and namespace.nspname !~ '^pg_(toast|temp)'
+          and not (
+            namespace.nspname = 'public'
+            and relation.relname in ('handleplan_schema_migrations', 'handleplan_schema_baselines')
+          )
+      ) as custom_relations,
+      (
+        select count(*)::integer
+        from pg_catalog.pg_proc procedure
+        join pg_catalog.pg_namespace namespace on namespace.oid = procedure.pronamespace
+        where namespace.nspname not in ('pg_catalog', 'information_schema')
+          and namespace.nspname !~ '^pg_(toast|temp)'
+      ) as custom_functions,
+      (
+        select count(*)::integer
+        from pg_catalog.pg_type type
+        join pg_catalog.pg_namespace namespace on namespace.oid = type.typnamespace
+        where namespace.nspname not in ('pg_catalog', 'information_schema')
+          and namespace.nspname !~ '^pg_(toast|temp)'
+          and type.typtype <> 'p'
+      ) as custom_types,
+      (
+        select count(*)::integer
+        from pg_catalog.pg_extension extension
+        join pg_catalog.pg_namespace namespace on namespace.oid = extension.extnamespace
+        where not (extension.extname = 'plpgsql' and namespace.nspname = 'pg_catalog')
+      ) as non_default_extensions,
+      (select count(*)::integer from pg_catalog.pg_event_trigger) as event_triggers
+  `;
+  const [ledger, baseline, roles, memberships] = await Promise.all([
+    catalog.ledger_exists
+      ? sql`select id, checksum from public.handleplan_schema_migrations order by id`
+      : Promise.resolve([]),
+    catalog.baseline_exists
+      ? sql`select baseline_id, manifest_sha256, artifact_sha256,
+          covered_migrations, resulting_schema_sha256, provenance
+          from public.handleplan_schema_baselines order by baseline_id`
+      : Promise.resolve([]),
+    sql`
+      select rolname, rolsuper, rolcreaterole, rolcreatedb, rolcanlogin,
+             rolreplication, rolbypassrls
+      from pg_catalog.pg_roles
+      where rolname in (
+        'handleplan', 'handleplan_app', 'handleplan_web',
+        'handleplan_review', 'handleplan_operations'
+      )
+      order by rolname
+    `,
+    sql`
+      select member.rolname as member, parent.rolname as parent
+      from pg_catalog.pg_auth_members membership
+      inner join pg_catalog.pg_roles member on member.oid = membership.member
+      inner join pg_catalog.pg_roles parent on parent.oid = membership.roleid
+      where member.rolname in (
+        'handleplan', 'handleplan_app', 'handleplan_web',
+        'handleplan_review', 'handleplan_operations'
+      )
+         or parent.rolname in (
+        'handleplan', 'handleplan_app', 'handleplan_web',
+        'handleplan_review', 'handleplan_operations'
+      )
+      order by member.rolname, parent.rolname
+    `,
+  ]);
+  return {
+    catalog,
+    ledger,
+    baseline,
+    roles,
+    memberships,
+  };
+}
+
+async function verifyBootstrapFailureCases(admin) {
+  const failureCases = [
+    {
+      database: bootstrapBeforeArtifactDatabase,
+      env: { HANDLEPLAN_BOOTSTRAP_FAIL_PHASE: "before-artifact" },
+      error: /Injected bootstrap failure before artifact/,
+    },
+    {
+      database: bootstrapAfterArtifactDatabase,
+      env: { HANDLEPLAN_BOOTSTRAP_FAIL_PHASE: "after-artifact" },
+      error: /Injected bootstrap failure after artifact/,
+    },
+    {
+      database: bootstrapBeforeCommitDatabase,
+      env: { HANDLEPLAN_BOOTSTRAP_FAIL_PHASE: "before-commit" },
+      error: /Injected bootstrap failure before commit/,
+    },
+  ];
+
+  for (const testCase of failureCases) {
+    await createDatabase(admin, testCase.database);
+    createdDatabases.add(testCase.database);
+    const database = postgres(urlForDatabase(testCase.database), {
+      max: 1,
+      onnotice: () => {},
+    });
+    const before = await readBootstrapState(database);
+    await assert.rejects(
+      runMigrations(testCase.database, undefined, { env: testCase.env }),
+      testCase.error,
+      `${testCase.database} must reject at the injected phase`,
+    );
+    const after = await readBootstrapState(database);
+    assert.deepEqual(
+      after,
+      before,
+      `${testCase.database} rejection must leave catalog, roles, and ledgers unchanged`,
+    );
+    await database.end({ timeout: 5 });
+  }
+
+  const tamperedCases = [
+    {
+      database: bootstrapTamperedArtifactDatabase,
+      name: "bootstrap-tampered-artifact",
+      mutate: ({ bootstrapDirectory }) => {
+        const artifactPath = resolve(bootstrapDirectory, "040_schema.sql");
+        writeFileSync(
+          artifactPath,
+          `${readFileSync(artifactPath, "utf8")}\n-- tampered proof copy\n`,
+        );
+      },
+      error: /Bootstrap manifest is incomplete or does not match its artifact/,
+    },
+    {
+      database: bootstrapTamperedManifestDatabase,
+      name: "bootstrap-tampered-manifest",
+      mutate: ({ bootstrapDirectory }) => {
+        const manifestPath = resolve(bootstrapDirectory, "040_manifest.json");
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+        manifest.artifact.path = "deploy/bootstrap/tampered.sql";
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      },
+      error: /Bootstrap manifest is incomplete or does not match its artifact/,
+    },
+  ];
+  for (const testCase of tamperedCases) {
+    const fixture = createCopiedRunnerFixture(testCase.name, testCase.mutate);
+    try {
+      await createDatabase(admin, testCase.database);
+      createdDatabases.add(testCase.database);
+      const database = postgres(urlForDatabase(testCase.database), {
+        max: 1,
+        onnotice: () => {},
+      });
+      const before = await readBootstrapState(database);
+      await assert.rejects(
+        runMigrations(testCase.database, undefined, {
+          runner: fixture.runner,
+          migrationsDirectory: fixture.migrationsDirectory,
+          bootstrapDirectory: fixture.bootstrapDirectory,
+        }),
+        testCase.error,
+        `${testCase.database} must reject the tampered copied fixture`,
+      );
+      const after = await readBootstrapState(database);
+      assert.deepEqual(
+        after,
+        before,
+        `${testCase.database} tamper rejection must leave the catalog unchanged`,
+      );
+      await database.end({ timeout: 5 });
+    } finally {
+      fixture.cleanup();
+    }
+  }
+
+  await createDatabase(admin, bootstrapNonemptyDatabase);
+  createdDatabases.add(bootstrapNonemptyDatabase);
+  const nonempty = postgres(urlForDatabase(bootstrapNonemptyDatabase), {
+    max: 1,
+    onnotice: () => {},
+  });
+  await nonempty.unsafe(
+    "create table public.ci_bootstrap_nonempty_marker (id integer not null)",
+  );
+  const nonemptyBefore = await readBootstrapState(nonempty);
+  await assert.rejects(
+    runMigrations(bootstrapNonemptyDatabase),
+    /Baseline target must be an empty catalog/,
+    "nonempty bootstrap targets must reject before mutation",
+  );
+  assert.deepEqual(
+    await readBootstrapState(nonempty),
+    nonemptyBefore,
+    "nonempty bootstrap rejection must preserve the marker and all catalog state",
+  );
+  await nonempty.end({ timeout: 5 });
+
+  await createDatabase(admin, bootstrapUnknownChecksumDatabase);
+  createdDatabases.add(bootstrapUnknownChecksumDatabase);
+  const unknownChecksum = postgres(urlForDatabase(bootstrapUnknownChecksumDatabase), {
+    max: 1,
+    onnotice: () => {},
+  });
+  await unknownChecksum.unsafe(`
+    create table public.handleplan_schema_migrations (
+      id varchar(255) primary key,
+      checksum char(64) not null,
+      applied_at timestamptz not null default transaction_timestamp()
+    );
+    insert into public.handleplan_schema_migrations (id, checksum)
+    values ('001_price_cache.sql', '${"f".repeat(64)}');
+  `);
+  const unknownBefore = await readBootstrapState(unknownChecksum);
+  await assert.rejects(
+    runMigrations(bootstrapUnknownChecksumDatabase),
+    /Applied migration checksum changed: 001_price_cache\.sql/,
+    "unknown legacy checksums must reject before mutation",
+  );
+  assert.deepEqual(
+    await readBootstrapState(unknownChecksum),
+    unknownBefore,
+    "unknown-checksum rejection must preserve the existing ledger and catalog",
+  );
+  await unknownChecksum.end({ timeout: 5 });
+
+  await createDatabase(admin, bootstrapPartial038Database);
+  createdDatabases.add(bootstrapPartial038Database);
+  await runMigrations(bootstrapPartial038Database, "038_tjek_function_grants.sql");
+  const partial038 = postgres(urlForDatabase(bootstrapPartial038Database), {
+    max: 1,
+    onnotice: () => {},
+  });
+  const partialBefore = await readBootstrapState(partial038);
+  await assert.rejects(
+    runMigrations(bootstrapPartial038Database),
+    /Incomplete historical 038 ledger refuses before mutation/,
+    "a partial 038 ledger must refuse the uncapped path",
+  );
+  assert.deepEqual(
+    await readBootstrapState(partial038),
+    partialBefore,
+    "partial 038 refusal must preserve catalog, runtime roles, and ledger state",
+  );
+  const [partialLedger] = await partial038`
+    select count(*)::integer as migration_039_rows
+    from handleplan_schema_migrations
+    where id = '039_tjek_null_comparison_fix.sql'
+  `;
+  assert.equal(partialLedger.migration_039_rows, 0);
+  await partial038.end({ timeout: 5 });
+}
+
 const scratchDirectory = mkdtempSync(resolve(tmpdir(), "handleplan-v1-03-"));
 const dumpPath = resolve(scratchDirectory, "database.dump");
 const createdDatabases = new Set();
@@ -2372,16 +2807,20 @@ try {
   await pdfEvidencePrecondition.end({ timeout: 5 });
   pdfEvidencePrecondition = undefined;
 
+  await verifyBootstrapFailureCases(admin);
+
   await createDatabase(admin, baselineDatabase);
   createdDatabases.add(baselineDatabase);
   await runMigrations(baselineDatabase);
   baseline = postgres(urlForDatabase(baselineDatabase), { max: 1, onnotice: () => {} });
   const cleanProjectionDefinition = await verifyBaselineActivation(baseline);
+  await verifyRuntimeRolePolicy(baseline);
   await baseline.end({ timeout: 5 });
   baseline = undefined;
   await runMigrations(baselineDatabase);
   baseline = postgres(urlForDatabase(baselineDatabase), { max: 1, onnotice: () => {} });
   const replayProjectionDefinition = await verifyBaselineActivation(baseline);
+  await verifyRuntimeRolePolicy(baseline);
   assert.equal(
     replayProjectionDefinition,
     cleanProjectionDefinition,
@@ -2502,19 +2941,6 @@ try {
     legacyDatabase,
     restoreDatabase,
     migrations: sourceLedger.length,
-    legacyRows: 1,
-    restoredPermissionAudits: 1,
-    restoredPublicationCaptures: 1,
-    restoredReviewActions: 1,
-    restoredCatalogObservations: 1,
-    restoredReviewedFamilyDecisions: 1,
-    legacyRuntimeRolePolicy: true,
-    completionClockUpgradeRollback: true,
-    publicationHealthUpgradeReconciliationGuard: true,
-    pdfEvidenceUpgradeReconciliationGuard: true,
-    categoryPathUpgradeValidation: true,
-    immutableReviewCandidates: true,
-    guardedReviewOfferPublication: true,
   };
 } catch (error) {
   proofError = error;
