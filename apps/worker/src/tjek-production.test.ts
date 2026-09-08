@@ -28,4 +28,19 @@ describe("Tjek geographic evidence", () => {
     const t = factory([{ geographic_scope_id: 1, declared_geographic_scope: { kind: "national", countryCode: "NO" } }]);
     await expect(t.value.resolveEdition({ ...(catalog as object), all_stores: false } as never, new AbortController().signal)).rejects.toThrow("TJEK_REVIEWED_SCOPE_UNAVAILABLE");
   });
+
+  it("rejects a legacy publication whose stored edition identity is incompatible", async () => {
+    const t = factory([{
+      title: "Bunnpris 2026-09-08",
+      content_kind: "structured-feed",
+      chain: "bunnpris",
+      geographic_scope_id: 88,
+      declared_geographic_scope: { kind: "national", countryCode: "NO" },
+      valid_from: new Date("2026-09-07T00:00:00.000Z"),
+      valid_until: new Date("2026-09-14T00:00:00.000Z"),
+      discovered_at: new Date("2026-09-08T00:00:00.000Z"),
+      edition_identity_sha256: "0".repeat(64),
+    }]);
+    await expect(t.value.resolveEdition(catalog, new AbortController().signal)).rejects.toThrow("TJEK_EDITION_CONFLICT");
+  });
 });

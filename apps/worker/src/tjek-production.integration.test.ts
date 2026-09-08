@@ -31,9 +31,14 @@ integration("Tjek production foundation under worker role", () => {
         run_till: new Date(Date.now() + 86_400_000).toISOString(),
         all_stores: true, dealer: { country: { id: "NO" }, markets: [{ country_code: "NO" }] },
       };
+      const retryCatalog = {
+        ...catalog,
+        id: `integration-retry-${randomUUID()}`,
+      };
+      let catalogs = [catalog];
       const client = {
-        getAllLatestCatalogs: async () => [catalog], canExtractOffers: () => true,
-        getOffersFromCatalog: async () => [{ id: "milk", name: "Synthetic milk", price: 20, currency: "NOK", before_price: null, run_from: catalog.run_from, run_till: catalog.run_till }],
+        getAllLatestCatalogs: async () => catalogs, canExtractOffers: () => true,
+        getOffersFromCatalog: async (selectedCatalog: typeof catalog) => [{ id: "milk", name: "Synthetic milk", price: 20, currency: "NOK", before_price: null, run_from: selectedCatalog.run_from, run_till: selectedCatalog.run_till }],
       };
       const foundation = createTjekFoundationDependencies(connection.db, await realpath(root));
       const handler = createTjekHandlers({ client: client as never, foundation, clock: () => new Date(databaseNow) })[TJEK_JOB_KIND]!;
@@ -54,6 +59,29 @@ integration("Tjek production foundation under worker role", () => {
         where publication.source_id = 'tjek' and publication.external_id = ${catalog.id}`;
       expect(rows).toHaveLength(1);
       expect(rows[0]?.candidates).toBe(1);
+
+      catalogs = [retryCatalog];
+      const originalRecordExtraction = foundation.repository.recordExtraction.bind(foundation.repository);
+      let failExtraction = true;
+      foundation.repository.recordExtraction = async (...args) => {
+        if (failExtraction) {
+          failExtraction = false;
+          throw new Error("injected extraction failure");
+        }
+        return originalRecordExtraction(...args);
+      };
+      const failedRetry = await handler(context);
+      expect(failedRetry.counters?.persisted).toBe(0);
+      expect(failedRetry.counters?.failed).toBe(1);
+      const successfulRetry = await handler(context);
+      expect(successfulRetry.counters?.persisted).toBe(1);
+      const retryRows = await connection.sql`
+        select extraction.id
+        from publications publication
+        join publication_captures capture on capture.publication_id = publication.id
+        join extraction_runs extraction on extraction.capture_id = capture.id
+        where publication.source_id = 'tjek' and publication.external_id = ${retryCatalog.id}`;
+      expect(retryRows).toHaveLength(1);
     } finally {
       await Promise.all([connection.close(), admin.close()]);
       await rm(root, { recursive: true, force: true });

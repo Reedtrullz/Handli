@@ -1,13 +1,15 @@
+import { createHash } from "node:crypto";
 import type { HandleplanDatabase } from "@handleplan/db/client";
 import { PostgresOfficialOfferFoundationRepository } from "@handleplan/db/official-offer-foundation";
 import { PostgresSourceAccessReader } from "@handleplan/db/source-access";
-import { officialOfferAuthorizationFenceV1Schema, officialOfferEditionDiscoveryInputV1Schema } from "@handleplan/domain";
+import { canonicalOfficialOfferEditionIdentity, officialOfferAuthorizationFenceV1Schema, officialOfferEditionDiscoveryInputV1Schema } from "@handleplan/domain";
 import { FilesystemOfficialOfferPrivateBlobStore } from "./private-offer-blob-store";
 import { WorkerCancelledError } from "./runner";
 import type { TjekFoundationDependencies } from "./tjek-handlers";
 
 const chains: Readonly<Record<string, string>> = { "5b11sm": "bunnpris", "80742m": "extra", "faa0Ym": "rema-1000" };
 const timestamp = (value: Date | string) => new Date(value).toISOString();
+const editionIdentitySha256 = (edition: Parameters<typeof canonicalOfficialOfferEditionIdentity>[0]) => createHash("sha256").update(canonicalOfficialOfferEditionIdentity(edition), "utf8").digest("hex");
 export function createTjekFoundationDependencies(db: HandleplanDatabase, privateCaptureRoot: string): TjekFoundationDependencies {
   const reader = new PostgresSourceAccessReader(db);
   const sourceAccessPolicy: TjekFoundationDependencies["sourceAccessPolicy"] = {
@@ -78,8 +80,8 @@ export function createTjekFoundationDependencies(db: HandleplanDatabase, private
       const chain = chains[catalog.dealer_id];
       if (!chain) throw new Error("TJEK_UNKNOWN_DEALER");
       const fence = officialOfferAuthorizationFenceV1Schema.parse(await sourceAccessPolicy.getDecision("tjek", "discover", new Date().toISOString(), signal));
-      const rows = await db.$client<{ title: string; content_kind: string; chain: string; geographic_scope_id: number; declared_geographic_scope: unknown; valid_from: Date; valid_until: Date; discovered_at: Date }[]>`
-        select title, content_kind, chain, geographic_scope_id, declared_geographic_scope, valid_from, valid_until, discovered_at
+      const rows = await db.$client<{ title: string; content_kind: string; chain: string; geographic_scope_id: number; declared_geographic_scope: unknown; valid_from: Date; valid_until: Date; discovered_at: Date; edition_identity_sha256: string | null }[]>`
+        select title, content_kind, chain, geographic_scope_id, declared_geographic_scope, valid_from, valid_until, discovered_at, edition_identity_sha256
         from publications where source_id = 'tjek' and external_id = ${catalog.id} limit 1`;
       const existing = rows[0];
       const raw = catalog as typeof catalog & { all_stores?: boolean; dealer?: { country?: { id?: string }; markets?: { country_code?: string }[] } };
@@ -97,7 +99,7 @@ export function createTjekFoundationDependencies(db: HandleplanDatabase, private
         scopeId = Number(scopes[0]!.id);
       }
       if (signal.aborted) throw new WorkerCancelledError();
-      return officialOfferEditionDiscoveryInputV1Schema.parse({
+      const resolved = officialOfferEditionDiscoveryInputV1Schema.parse({
         contractVersion: 1, sourceId: "tjek", externalEditionId: catalog.id, chain,
         title: existing?.title ?? `${chain} ${catalog.publication_date}`,
         contentKind: existing?.content_kind ?? "structured-feed", geographicScopeId: scopeId,
@@ -106,6 +108,8 @@ export function createTjekFoundationDependencies(db: HandleplanDatabase, private
         discoveredAt: existing ? timestamp(existing.discovered_at) : new Date().toISOString(),
         authorization: { decision: "approved", capabilities: fence.capabilities, reviewedAt: fence.reviewedAt, ...(fence.validUntil ? { validUntil: fence.validUntil } : {}) },
       });
+      if (existing && existing.edition_identity_sha256 !== editionIdentitySha256(resolved)) throw new Error("TJEK_EDITION_CONFLICT");
+      return resolved;
     },
   };
 }
