@@ -99,6 +99,95 @@ describeIntegration("official-offer PostgreSQL trust fences", () => {
     await Promise.all([first?.close(), second?.close()]);
   });
 
+  it("rejects a fence that differs from the stored permission by one microsecond", async () => {
+    const suffix = randomUUID();
+    const sourceId = `offer-precision-${suffix}`.slice(0, 64);
+    const reviewedAt = "2026-08-21T16:04:05.780477Z";
+    const validUntil = "2026-12-31T23:59:59.000000Z";
+    const permissions = {
+      officialOffers: true,
+      officialOfferCapabilities: ["capture", "discover", "extract"],
+      officialOfferRightsClassifications: ["public_display"],
+    };
+    await first.sql`
+      insert into data_sources (
+        id, display_name, source_kind, runtime_state,
+        permission_reviewed_at, permission_expires_at
+      ) values (
+        ${sourceId}, ${`Official offer precision ${sourceId}`}, 'offer', 'approved',
+        ${reviewedAt}, ${validUntil}
+      )
+    `;
+    const [permission] = await first.sql<Array<{ id: string }>>`
+      insert into source_permissions (source_id, decision, reviewed_at, valid_until, permissions)
+      values (${sourceId}, 'approved', ${reviewedAt}, ${validUntil}, ${JSON.stringify(permissions)}::jsonb)
+      returning id
+    `;
+    const [scope] = await first.sql<Array<{ id: string }>>`
+      insert into geographic_scopes (scope_key, scope_kind, label, country_code)
+      values (${`offer-precision:${suffix}`}, 'postal_set', 'Official offer precision', 'NO')
+      returning id
+    `;
+    await first.sql`
+      insert into geographic_scope_postal_codes (scope_id, postal_code)
+      values (${scope!.id}, '0001')
+    `;
+    const now = await first.sql<Array<{ now: string }>>`select to_char(
+      clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+    ) as now`;
+    const evaluatedAt = now[0]!.now;
+    const repository = new PostgresOfficialOfferFoundationRepository(first.db);
+    const authorization = {
+      contractVersion: 1 as const,
+      permissionId: Number(permission!.id),
+      sourceId,
+      decision: "approved" as const,
+      capabilities: ["capture", "discover", "extract"] as const,
+      rightsClassifications: ["public_display"] as const,
+      reviewedAt: reviewedAt,
+      validUntil,
+      evaluatedAt,
+    };
+    const edition = {
+      contractVersion: 1 as const,
+      sourceId,
+      externalEditionId: `precision-${suffix}`,
+      chain: "extra" as const,
+      title: "Precision authorization edition",
+      contentKind: "structured-feed" as const,
+      geographicScopeId: Number(scope!.id),
+      declaredGeographicScope: {
+        kind: "postal-set" as const,
+        countryCode: "NO",
+        postalCodes: ["0001"],
+      },
+      validFrom: "2026-09-01T00:00:00.000Z",
+      validUntil: "2026-09-30T00:00:00.000Z",
+      discoveredAt: "2026-09-08T13:00:00.000Z",
+      authorization: {
+        decision: "approved" as const,
+        capabilities: authorization.capabilities,
+        reviewedAt,
+        validUntil,
+      },
+    };
+    const recordedEdition = await repository.recordEdition(edition, authorization);
+    await expect(repository.recordCapture({
+      contractVersion: 1,
+      publicationId: recordedEdition.id,
+      sourceId,
+      externalEditionId: edition.externalEditionId,
+      checksumSha256: SYNTHETIC_OFFER_CAPTURE_CHECKSUM,
+      mimeType: "application/json",
+      byteLength: 1,
+      rightsClassification: "public_display",
+      retrievedAt: "2026-09-08T13:00:00.000Z",
+    }, `official-offers/private/precision/${suffix}`, {
+      ...authorization,
+      reviewedAt: "2026-08-21T16:04:05.780478Z",
+    })).rejects.toMatchObject({ code: "SOURCE_AUTHORIZATION_STALE" });
+  }, 30_000);
+
   it("runs edition through current read and serializes a concurrent revocation", async () => {
     const suffix = randomUUID();
     const sourceId = `offer-proof-${suffix}`.slice(0, 64);

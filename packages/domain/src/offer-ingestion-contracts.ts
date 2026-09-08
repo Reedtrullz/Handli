@@ -79,6 +79,19 @@ export const officialOfferAuthorizationCapabilitySchema = z.enum([
   "ocr",
 ]);
 
+export const officialOfferAuthorizationTimestampSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.(?:\d{3}|\d{6})Z$/u)
+  .refine((value) => {
+    const milliseconds = `${value.slice(0, 23)}Z`;
+    const parsed = new Date(milliseconds);
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString() === milliseconds;
+  });
+
+export function officialOfferAuthorizationOrderKey(value: string): string {
+  return `${value.slice(0, 20)}${value.slice(20, -1).padEnd(6, "0")}Z`;
+}
+
 export type OfficialOfferAuthorizationCapability = z.infer<
   typeof officialOfferAuthorizationCapabilitySchema
 >;
@@ -95,9 +108,9 @@ export const officialOfferAuthorizationFenceV1Schema = z
     decision: z.literal("approved"),
     capabilities: z.array(officialOfferAuthorizationCapabilitySchema).min(3).max(4),
     rightsClassifications: z.array(officialOfferRightsClassificationSchema).min(1).max(3),
-    reviewedAt: canonicalTimestampSchema,
-    validUntil: canonicalTimestampSchema.optional(),
-    evaluatedAt: canonicalTimestampSchema,
+    reviewedAt: officialOfferAuthorizationTimestampSchema,
+    validUntil: officialOfferAuthorizationTimestampSchema.optional(),
+    evaluatedAt: officialOfferAuthorizationTimestampSchema,
   })
   .strict()
   .superRefine((fence, context) => {
@@ -127,7 +140,10 @@ export const officialOfferAuthorizationFenceV1Schema = z
         path: ["rightsClassifications"],
       });
     }
-    if (Date.parse(fence.reviewedAt) > Date.parse(fence.evaluatedAt)) {
+    if (
+      officialOfferAuthorizationOrderKey(fence.reviewedAt)
+      > officialOfferAuthorizationOrderKey(fence.evaluatedAt)
+    ) {
       context.addIssue({
         code: "custom",
         message: "Authorization-fence review cannot occur after evaluation",
@@ -136,7 +152,8 @@ export const officialOfferAuthorizationFenceV1Schema = z
     }
     if (
       fence.validUntil !== undefined
-      && Date.parse(fence.validUntil) <= Date.parse(fence.evaluatedAt)
+      && officialOfferAuthorizationOrderKey(fence.validUntil)
+        <= officialOfferAuthorizationOrderKey(fence.evaluatedAt)
     ) {
       context.addIssue({
         code: "custom",
@@ -154,8 +171,8 @@ const editionAuthorizationSchema = z
   .object({
     decision: z.literal("approved"),
     capabilities: z.array(officialOfferAuthorizationCapabilitySchema).min(3).max(4),
-    reviewedAt: canonicalTimestampSchema,
-    validUntil: canonicalTimestampSchema.optional(),
+    reviewedAt: officialOfferAuthorizationTimestampSchema,
+    validUntil: officialOfferAuthorizationTimestampSchema.optional(),
   })
   .strict()
   .superRefine(({ capabilities, reviewedAt, validUntil }, context) => {
@@ -175,7 +192,11 @@ const editionAuthorizationSchema = z
         });
       }
     }
-    if (validUntil !== undefined && Date.parse(reviewedAt) >= Date.parse(validUntil)) {
+    if (
+      validUntil !== undefined
+      && officialOfferAuthorizationOrderKey(reviewedAt)
+        >= officialOfferAuthorizationOrderKey(validUntil)
+    ) {
       context.addIssue({
         code: "custom",
         message: "Authorization validity must end after review",
@@ -210,7 +231,8 @@ export const officialOfferEditionDiscoveryInputV1Schema = z
     }
     if (
       edition.authorization.validUntil !== undefined
-      && Date.parse(edition.discoveredAt) >= Date.parse(edition.authorization.validUntil)
+      && officialOfferAuthorizationOrderKey(edition.discoveredAt)
+        >= officialOfferAuthorizationOrderKey(edition.authorization.validUntil)
     ) {
       context.addIssue({
         code: "custom",
@@ -218,7 +240,10 @@ export const officialOfferEditionDiscoveryInputV1Schema = z
         path: ["authorization", "validUntil"],
       });
     }
-    if (Date.parse(edition.authorization.reviewedAt) > Date.parse(edition.discoveredAt)) {
+    if (
+      officialOfferAuthorizationOrderKey(edition.authorization.reviewedAt)
+      > officialOfferAuthorizationOrderKey(edition.discoveredAt)
+    ) {
       context.addIssue({
         code: "custom",
         message: "Edition discovery cannot rely on a future authorization review",

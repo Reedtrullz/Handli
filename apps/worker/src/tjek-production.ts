@@ -14,8 +14,19 @@ export function createTjekFoundationDependencies(db: HandleplanDatabase, private
     async getDecision(sourceId, capability, asOf, signal) {
       const access = await reader.getSourceAccess(sourceId, signal);
       if (access?.runtimeState !== "approved" || !access.permissionCurrent || !access.sourcePermissionCurrent || access.permissionDecision !== "approved" || access.permissions.officialOffers !== true) throw new Error("TJEK_SOURCE_DISABLED");
-      const rows = await db.$client<{ id: number; reviewed_at: Date; valid_until: Date | null; permissions: Record<string, unknown> }[]>`
-        select permission.id, permission.reviewed_at, permission.valid_until, permission.permissions
+      const rows = await db.$client<{
+        id: number;
+        reviewed_at_exact: string;
+        valid_until_exact: string | null;
+        permissions: Record<string, unknown>;
+      }[]>`
+        select
+          permission.id,
+          to_char(permission.reviewed_at at time zone 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as reviewed_at_exact,
+          to_char(permission.valid_until at time zone 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as valid_until_exact,
+          permission.permissions
         from data_sources source join lateral (
           select * from source_permissions where source_id = source.id
           and created_at <= clock_timestamp() order by created_at desc, id desc limit 1
@@ -36,8 +47,8 @@ export function createTjekFoundationDependencies(db: HandleplanDatabase, private
         contractVersion: 1, permissionId: Number(row.id), sourceId, decision: "approved",
         capabilities: row.permissions.officialOfferCapabilities,
         rightsClassifications: row.permissions.officialOfferRightsClassifications,
-        reviewedAt: timestamp(row.reviewed_at), evaluatedAt: asOf,
-        ...(row.valid_until ? { validUntil: timestamp(row.valid_until) } : {}),
+        reviewedAt: row.reviewed_at_exact, evaluatedAt: asOf,
+        ...(row.valid_until_exact ? { validUntil: row.valid_until_exact } : {}),
       });
       if (!fence.capabilities.includes(capability) || !fence.rightsClassifications.includes("public_display")) throw new Error("TJEK_SOURCE_DISABLED");
       return fence;

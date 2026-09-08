@@ -5,6 +5,7 @@ import {
   MAX_OFFICIAL_OFFER_EXTRACTION_DURATION_MS,
   canonicalOfficialOfferEditionIdentity,
   geographicScopeSchema,
+  officialOfferAuthorizationOrderKey,
   officialOfferAuthorizationFenceV1Schema,
   officialOfferCaptureMetadataV1Schema,
   officialOfferEditionDiscoveryInputV1Schema,
@@ -140,6 +141,8 @@ interface AuthorizationRow {
   database_clock: Date;
   id: unknown;
   rights_classifications: unknown;
+  reviewed_at_exact: string;
+  valid_until_exact: string | null;
 }
 
 function cancelledError(): OfficialOfferFoundationError {
@@ -398,8 +401,15 @@ function assertEditionAuthorizationFence(
     authorization.sourceId !== edition.sourceId
     || jsonKey(canonicalCapabilities(authorization.capabilities))
       !== jsonKey(canonicalCapabilities(edition.authorization.capabilities))
-    || authorization.reviewedAt !== edition.authorization.reviewedAt
-    || authorization.validUntil !== edition.authorization.validUntil
+    || officialOfferAuthorizationOrderKey(authorization.reviewedAt)
+      !== officialOfferAuthorizationOrderKey(edition.authorization.reviewedAt)
+    || (authorization.validUntil === undefined) !== (edition.authorization.validUntil === undefined)
+    || (
+      authorization.validUntil !== undefined
+      && edition.authorization.validUntil !== undefined
+      && officialOfferAuthorizationOrderKey(authorization.validUntil)
+        !== officialOfferAuthorizationOrderKey(edition.authorization.validUntil)
+    )
   ) {
     throw new OfficialOfferFoundationError("SOURCE_AUTHORIZATION_STALE");
   }
@@ -441,6 +451,10 @@ async function requireCurrentAuthorization(
   const rows = await awaitAbortable(transaction<AuthorizationRow[]>`
     select
       permission.id,
+      to_char(permission.reviewed_at at time zone 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as reviewed_at_exact,
+      to_char(permission.valid_until at time zone 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as valid_until_exact,
       permission.permissions -> 'officialOfferCapabilities' as capabilities,
       permission.permissions -> 'officialOfferRightsClassifications' as rights_classifications,
       clock_timestamp() as database_clock
