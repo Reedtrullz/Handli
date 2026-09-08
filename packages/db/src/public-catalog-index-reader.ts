@@ -910,7 +910,7 @@ export class PostgresPublicCatalogIndexReader implements
         sort_rank,
         sort_name collate "C",
         gtin
-      limit ${DISCOVERY_SCAN_LIMIT_MAXIMUM}
+      limit ${DISCOVERY_SCAN_LIMIT_MAXIMUM + 1}
     `;
 
     try {
@@ -922,7 +922,7 @@ export class PostgresPublicCatalogIndexReader implements
       if (
         !Array.isArray(rows)
         || !Array.isArray(rawOfferBackedRows)
-        || rows.length > DISCOVERY_SCAN_LIMIT_MAXIMUM
+        || rows.length > DISCOVERY_SCAN_LIMIT_MAXIMUM + 1
       ) {
         throw new PublicCatalogIndexReaderError("UNAVAILABLE");
       }

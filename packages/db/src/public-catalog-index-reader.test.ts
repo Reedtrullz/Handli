@@ -265,6 +265,31 @@ describe("PostgresPublicCatalogIndexReader", () => {
       .resolves.toMatchObject({ entries: [{ categoryPath: null, product: { gtin: GTIN_MILK } }] });
   });
 
+  it.each([50, 51])("preserves continuation at the maximum scan size with %i catalog rows", async (count) => {
+    const rows = Array.from({ length: count }, (_, index) => {
+      const body = String(100000000000 + index);
+      const sum = [...body].reduce((total, digit, position) =>
+        total + Number(digit) * (position % 2 === 0 ? 1 : 3), 0);
+      return discoveryRow({
+        canonical_product_id: index + 1,
+        display_name: `Product ${String(index).padStart(2, "0")}`,
+        gtin: `${body}${(10 - sum % 10) % 10}`,
+      });
+    });
+    const { db, captures } = databaseWith(() =>
+      resolvedQuery(rows.slice(0, Number(captures.at(-1)!.parameters.at(-1)))));
+
+    const page = await new PostgresPublicCatalogIndexReader(db)
+      .readDiscoveryPage({ limit: 50 }, AT);
+
+    expect(page.entries).toHaveLength(50);
+    expect(page.scannedCount).toBe(50);
+    expect(page.hasMore).toBe(count > 50);
+    expect(page.nextPosition).toEqual(count > 50
+      ? page.entries.at(-1)!.catalogPosition
+      : undefined);
+  });
+
   it("merges enabled offer-backed rows into browse pages without catalog matches", async () => {
     const catalogRow = discoveryRow({
       canonical_product_id: 2,
