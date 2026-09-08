@@ -42,7 +42,9 @@ Draft only; not deployed. Five production services remain healthy on
    An explicitly agreed immutable-migration recovery strategy is needed.
 2. Existing source permission timestamps have microseconds; the domain fence represents
    milliseconds and the foundation compares exact SQL timestamps. Current governance
-   evidence was not silently rounded or reapproved.
+   evidence was not silently rounded or reapproved. Live permission ID 7 and source
+   timestamps match exactly at `2026-08-21 16:04:05.780477+00`; this is not
+   representable by the millisecond contract.
 3. Under the real worker role, foundation geographic-scope `FOR SHARE` requires a
    privilege the worker lacks (SELECT is granted, UPDATE is not). Publication capture
    also requires an unreached update/lock privilege. Broad UPDATE rights were not granted and the lock was
@@ -52,7 +54,9 @@ Draft only; not deployed. Five production services remain healthy on
 
 The disposable PostgreSQL test is intentionally opt-in and exposes the remaining intake
 failure. Scratch migration experiments excluding 039 are diagnostic only, never full
-migration or deployment proof. Do not merge/deploy this draft as a completed repair.
+migration or deployment proof. The scratch set passed 9 admin-role foundation tests
+and one lifecycle test; the real worker-role intake regression failed as described.
+Do not merge/deploy this draft as a completed repair.
 
 ## Chain requirements
 
