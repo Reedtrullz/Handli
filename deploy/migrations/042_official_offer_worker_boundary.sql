@@ -203,6 +203,7 @@ begin
          where key not in ('kind', 'scheme', 'value'))
        or pg_catalog.jsonb_typeof(v_product -> 'scheme') is distinct from 'string'
        or v_product ->> 'scheme' is distinct from 'gtin'
+       or pg_catalog.jsonb_typeof(v_product -> 'value') is distinct from 'string'
        or v_product ->> 'value' is null
        or (v_product ->> 'value') !~ '^(?:[0-9]{8}|[0-9]{13})$' then
       raise exception 'official-offer candidate exact product is invalid' using errcode = '22023';
@@ -316,6 +317,8 @@ begin
     if (select count(*) from pg_catalog.jsonb_object_keys(v_validity)) <> 3
        or exists (select 1 from pg_catalog.jsonb_object_keys(v_validity) key
          where key not in ('state', 'startsAt', 'endsAt'))
+       or pg_catalog.jsonb_typeof(v_validity -> 'startsAt') is distinct from 'string'
+       or pg_catalog.jsonb_typeof(v_validity -> 'endsAt') is distinct from 'string'
        or (v_validity ->> 'startsAt') !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$'
        or (v_validity ->> 'endsAt') !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$'
        or (v_validity ->> 'startsAt')::timestamptz >= (v_validity ->> 'endsAt')::timestamptz then
@@ -428,6 +431,8 @@ begin
      or (v_value = 'rejected' and not (v_anomalies ?| array['BEFORE_PRICE_BELOW_OFFER', 'DUPLICATE_CANDIDATE_KEY']))
      or p_candidate ->> 'publicationRoute' is distinct from (case when v_value = 'rejected' then 'blocked' else 'human-review-required' end)
      or (p_candidate ? 'exactCanonicalProductId' and (
+       pg_catalog.jsonb_typeof(p_candidate -> 'exactCanonicalProductId') is distinct from 'string'
+       or
        p_candidate ->> 'exactCanonicalProductId' is null
        or pg_catalog.length(pg_catalog.btrim(p_candidate ->> 'exactCanonicalProductId')) not between 1 and 200
      )) then
@@ -465,6 +470,28 @@ begin
      or pg_catalog.pg_column_size(p_authorization) > 16384
      or p_edition -> 'contractVersion' is distinct from '1'::jsonb
      or p_authorization -> 'contractVersion' is distinct from '1'::jsonb
+     or pg_catalog.jsonb_typeof(p_edition -> 'sourceId') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_edition -> 'externalEditionId') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_edition -> 'chain') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_edition -> 'title') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_edition -> 'contentKind') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_edition -> 'geographicScopeId') is distinct from 'number'
+     or p_edition ->> 'geographicScopeId' !~ '^[1-9][0-9]*$'
+     or pg_catalog.jsonb_typeof(p_edition -> 'declaredGeographicScope') is distinct from 'object'
+     or pg_catalog.jsonb_typeof(p_edition -> 'validFrom') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_edition -> 'validUntil') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_edition -> 'discoveredAt') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_edition -> 'authorization') is distinct from 'object'
+     or pg_catalog.jsonb_typeof(p_authorization -> 'permissionId') is distinct from 'number'
+     or p_authorization ->> 'permissionId' !~ '^[1-9][0-9]*$'
+     or pg_catalog.jsonb_typeof(p_authorization -> 'sourceId') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_authorization -> 'decision') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_authorization -> 'reviewedAt') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_authorization -> 'evaluatedAt') is distinct from 'string'
+     or (p_authorization ? 'validUntil'
+       and pg_catalog.jsonb_typeof(p_authorization -> 'validUntil') is distinct from 'string')
+     or pg_catalog.jsonb_typeof(p_authorization -> 'capabilities') is distinct from 'array'
+     or pg_catalog.jsonb_typeof(p_authorization -> 'rightsClassifications') is distinct from 'array'
      or p_authorization ->> 'decision' is distinct from 'approved' then
     raise exception 'official-offer edition payload is invalid' using errcode = '22023';
   end if;
@@ -590,6 +617,26 @@ begin
      or pg_catalog.pg_column_size(p_authorization) > 16384
      or p_metadata -> 'contractVersion' is distinct from '1'::jsonb
      or p_authorization -> 'contractVersion' is distinct from '1'::jsonb
+     or pg_catalog.jsonb_typeof(p_metadata -> 'publicationId') is distinct from 'number'
+     or p_metadata ->> 'publicationId' !~ '^[1-9][0-9]*$'
+     or pg_catalog.jsonb_typeof(p_metadata -> 'sourceId') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_metadata -> 'externalEditionId') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_metadata -> 'checksumSha256') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_metadata -> 'mimeType') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_metadata -> 'byteLength') is distinct from 'number'
+     or p_metadata ->> 'byteLength' !~ '^[1-9][0-9]*$'
+     or pg_catalog.jsonb_typeof(p_metadata -> 'rightsClassification') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_metadata -> 'retrievedAt') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_authorization -> 'permissionId') is distinct from 'number'
+     or p_authorization ->> 'permissionId' !~ '^[1-9][0-9]*$'
+     or pg_catalog.jsonb_typeof(p_authorization -> 'sourceId') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_authorization -> 'decision') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_authorization -> 'reviewedAt') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_authorization -> 'evaluatedAt') is distinct from 'string'
+     or (p_authorization ? 'validUntil'
+       and pg_catalog.jsonb_typeof(p_authorization -> 'validUntil') is distinct from 'string')
+     or pg_catalog.jsonb_typeof(p_authorization -> 'capabilities') is distinct from 'array'
+     or pg_catalog.jsonb_typeof(p_authorization -> 'rightsClassifications') is distinct from 'array'
      or p_authorization ->> 'decision' is distinct from 'approved'
      or p_blob_key is null or pg_catalog.length(p_blob_key) not between 1 and 1024
      or p_blob_key ~ '(^/|\.\.)'
@@ -744,14 +791,63 @@ begin
      or pg_catalog.jsonb_typeof(v_envelope) is distinct from 'object'
      or pg_catalog.jsonb_typeof(v_edition) is distinct from 'object'
      or pg_catalog.jsonb_typeof(v_authorization) is distinct from 'object'
+     or pg_catalog.jsonb_typeof(p_payload -> 'timing') is distinct from 'object'
      or v_envelope -> 'contractVersion' is distinct from '1'::jsonb
      or v_edition -> 'contractVersion' is distinct from '1'::jsonb
      or v_authorization -> 'contractVersion' is distinct from '1'::jsonb
      or p_payload -> 'timing' -> 'contractVersion' is distinct from '1'::jsonb
+     or pg_catalog.jsonb_typeof(v_envelope -> 'captureChecksumSha256') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_envelope -> 'extractorVersion') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_envelope -> 'method') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_envelope -> 'layoutFingerprintSha256') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_envelope -> 'schemaFingerprintSha256') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_envelope -> 'startedAt') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_envelope -> 'completedAt') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_envelope -> 'emptyResult') is distinct from 'string'
+     or (v_envelope ? 'emptyConfirmation'
+       and pg_catalog.jsonb_typeof(v_envelope -> 'emptyConfirmation') is distinct from 'object')
+     or pg_catalog.jsonb_typeof(v_edition -> 'sourceId') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_edition -> 'externalEditionId') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_edition -> 'chain') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_edition -> 'title') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_edition -> 'contentKind') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_edition -> 'geographicScopeId') is distinct from 'number'
+     or v_edition ->> 'geographicScopeId' !~ '^[1-9][0-9]*$'
+     or pg_catalog.jsonb_typeof(v_edition -> 'declaredGeographicScope') is distinct from 'object'
+     or pg_catalog.jsonb_typeof(v_edition -> 'validFrom') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_edition -> 'validUntil') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_edition -> 'discoveredAt') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_edition -> 'authorization') is distinct from 'object'
+     or pg_catalog.jsonb_typeof(v_authorization -> 'permissionId') is distinct from 'number'
+     or v_authorization ->> 'permissionId' !~ '^[1-9][0-9]*$'
+     or pg_catalog.jsonb_typeof(v_authorization -> 'sourceId') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_authorization -> 'decision') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_authorization -> 'reviewedAt') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_authorization -> 'evaluatedAt') is distinct from 'string'
+     or (v_authorization ? 'validUntil'
+       and pg_catalog.jsonb_typeof(v_authorization -> 'validUntil') is distinct from 'string')
+     or pg_catalog.jsonb_typeof(v_authorization -> 'capabilities') is distinct from 'array'
+     or pg_catalog.jsonb_typeof(v_authorization -> 'rightsClassifications') is distinct from 'array'
      or (v_ocr_authorization is not null
-       and v_ocr_authorization -> 'contractVersion' is distinct from '1'::jsonb)
+       and (pg_catalog.jsonb_typeof(v_ocr_authorization) is distinct from 'object'
+         or v_ocr_authorization -> 'contractVersion' is distinct from '1'::jsonb
+         or pg_catalog.jsonb_typeof(v_ocr_authorization -> 'permissionId') is distinct from 'number'
+         or v_ocr_authorization ->> 'permissionId' !~ '^[1-9][0-9]*$'
+         or pg_catalog.jsonb_typeof(v_ocr_authorization -> 'sourceId') is distinct from 'string'
+         or pg_catalog.jsonb_typeof(v_ocr_authorization -> 'decision') is distinct from 'string'
+         or pg_catalog.jsonb_typeof(v_ocr_authorization -> 'reviewedAt') is distinct from 'string'
+         or pg_catalog.jsonb_typeof(v_ocr_authorization -> 'evaluatedAt') is distinct from 'string'
+         or (v_ocr_authorization ? 'validUntil'
+           and pg_catalog.jsonb_typeof(v_ocr_authorization -> 'validUntil') is distinct from 'string')
+         or pg_catalog.jsonb_typeof(v_ocr_authorization -> 'capabilities') is distinct from 'array'
+         or pg_catalog.jsonb_typeof(v_ocr_authorization -> 'rightsClassifications') is distinct from 'array'))
      or pg_catalog.jsonb_typeof(v_counts) is distinct from 'object'
      or pg_catalog.jsonb_typeof(v_candidates) is distinct from 'array'
+     or pg_catalog.jsonb_typeof(p_payload -> 'timing' -> 'serverStartedAt') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_payload -> 'timing' -> 'serverCompletedAt') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(p_payload -> 'validationStatus') is distinct from 'string'
+     or (p_payload ? 'validationErrorClass'
+       and pg_catalog.jsonb_typeof(p_payload -> 'validationErrorClass') is distinct from 'string')
      or pg_catalog.jsonb_array_length(v_candidates) > 500
      or pg_catalog.jsonb_typeof(v_envelope -> 'candidates') is distinct from 'array'
      or pg_catalog.jsonb_array_length(v_envelope -> 'candidates') > 500
@@ -822,7 +918,55 @@ begin
   end if;
   if (v_empty_result = 'not-empty' and pg_catalog.jsonb_array_length(v_envelope -> 'candidates') = 0)
      or (v_empty_result <> 'not-empty' and pg_catalog.jsonb_array_length(v_envelope -> 'candidates') <> 0)
-     or pg_catalog.jsonb_array_length(v_candidates) > pg_catalog.jsonb_array_length(v_envelope -> 'candidates') then
+     or pg_catalog.jsonb_array_length(v_candidates) > pg_catalog.jsonb_array_length(v_envelope -> 'candidates')
+     or exists (
+       select 1
+       from pg_catalog.jsonb_array_elements(v_envelope -> 'candidates') as envelope_entries(item)
+       where item -> 'contractVersion' is distinct from '1'::jsonb
+          or pg_catalog.jsonb_typeof(item -> 'anomalyCodes') is distinct from 'array'
+          or exists (
+            select 1 from pg_catalog.jsonb_array_elements(
+              case when pg_catalog.jsonb_typeof(item -> 'anomalyCodes') = 'array'
+                then item -> 'anomalyCodes' else '[]'::jsonb end
+            ) as anomaly(code)
+            where pg_catalog.jsonb_typeof(anomaly.code) is distinct from 'string'
+          )
+          or pg_catalog.jsonb_array_length(
+            case when pg_catalog.jsonb_typeof(item -> 'anomalyCodes') = 'array'
+              then item -> 'anomalyCodes' else '[]'::jsonb end
+          ) > 20
+          or (
+            select count(*) from pg_catalog.jsonb_array_elements_text(
+              case when pg_catalog.jsonb_typeof(item -> 'anomalyCodes') = 'array'
+                then item -> 'anomalyCodes' else '[]'::jsonb end
+            ) as anomaly(code)
+            where code not in (
+              'AMBIGUOUS_PRODUCT', 'BEFORE_PRICE_BELOW_OFFER',
+              'DUPLICATE_CANDIDATE_KEY', 'DUPLICATE_OFFER', 'EXTRACTOR_ANOMALY',
+              'LAYOUT_DRIFT', 'OCR_REVIEW_REQUIRED', 'PACKAGE_UNKNOWN',
+              'SCHEMA_DRIFT', 'SCOPE_MISMATCH', 'UNEXPECTED_EMPTY',
+              'UNKNOWN_SCOPE', 'UNMATCHED_PRODUCT', 'UNREADABLE_DATE',
+              'VALIDITY_OUTSIDE_EDITION'
+            )
+          ) > 0
+          or (
+            select count(*) from pg_catalog.jsonb_array_elements_text(
+              case when pg_catalog.jsonb_typeof(item -> 'anomalyCodes') = 'array'
+                then item -> 'anomalyCodes' else '[]'::jsonb end
+            ) as anomaly(code)
+          ) <> (
+            select count(distinct code) from pg_catalog.jsonb_array_elements_text(
+              case when pg_catalog.jsonb_typeof(item -> 'anomalyCodes') = 'array'
+                then item -> 'anomalyCodes' else '[]'::jsonb end
+            ) as anomaly(code)
+          )
+          or not exists (
+            select 1
+            from pg_catalog.jsonb_array_elements(v_candidates) as wrapper_entries(wrapper)
+            where (item - 'anomalyCodes') is not distinct from
+              ((wrapper_entries.wrapper -> 'candidate') - 'anomalyCodes')
+          )
+     ) then
     raise exception 'official-offer extraction envelope candidate binding is invalid' using errcode = '22023';
   end if;
   if (v_error_class in ('INVALID_CONTRACT', 'SCHEMA_DRIFT') and v_status is distinct from 'failed')
@@ -834,6 +978,8 @@ begin
      or exists (select 1 from pg_catalog.jsonb_object_keys(v_counts) key
        where key not in ('envelopeSha256', 'exactMatch', 'persistedCandidates', 'rejected',
                          'reviewRequired', 'total', 'validationSha256'))
+     or pg_catalog.jsonb_typeof(v_counts -> 'envelopeSha256') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(v_counts -> 'validationSha256') is distinct from 'string'
      or (v_counts ->> 'envelopeSha256') !~ '^[0-9a-f]{64}$'
      or (v_counts ->> 'validationSha256') !~ '^[0-9a-f]{64}$'
      or pg_catalog.jsonb_typeof(v_counts -> 'exactMatch') is distinct from 'number'
