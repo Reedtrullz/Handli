@@ -118,7 +118,7 @@
       "required": ["storeId", "chainId", "storeEvidenceId"],
       "properties": {
         "storeId": { "$ref": "#/$defs/identifier" },
-        "chainId": { "enum": ["bunnpris", "extra", "rema-1000"] },
+        "chainId": { "enum": ["bunnpris", "extra", "europris", "joker", "meny", "rema-1000", "spar"] },
         "storeEvidenceId": {
           "type": "string",
           "pattern": "^store-evidence:sha256:[a-f0-9]{64}$"
@@ -182,7 +182,7 @@
       "properties": {
         "canonicalProductId": { "$ref": "#/$defs/identifier" },
         "storeId": { "$ref": "#/$defs/identifier" },
-        "chainId": { "enum": ["bunnpris", "extra", "rema-1000"] },
+        "chainId": { "enum": ["bunnpris", "extra", "europris", "joker", "meny", "rema-1000", "spar"] },
         "ordinaryPriceEvidenceId": {
           "type": "string",
           "pattern": "^price-evidence:sha256:[a-f0-9]{64}$"
@@ -293,7 +293,7 @@
         "needId": { "$ref": "#/$defs/identifier" },
         "canonicalProductId": { "$ref": "#/$defs/identifier" },
         "storeId": { "$ref": "#/$defs/identifier" },
-        "chainId": { "enum": ["bunnpris", "extra", "rema-1000"] },
+        "chainId": { "enum": ["bunnpris", "extra", "europris", "joker", "meny", "rema-1000", "spar"] },
         "packageCount": { "$ref": "#/$defs/positiveSafeInteger" },
         "packageBaseUnits": { "$ref": "#/$defs/positiveSafeInteger" },
         "purchasedBaseUnits": { "$ref": "#/$defs/positiveSafeInteger" },

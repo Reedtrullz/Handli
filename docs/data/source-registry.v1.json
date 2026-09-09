@@ -1,7 +1,7 @@
 {
   "$schema": "./source-registry.v1.schema.json",
   "registryVersion": "1.0.0",
-  "reviewedAt": "2026-07-18",
+  "reviewedAt": "2026-09-09",
   "intendedUse": "Handleplan public price comparison, basket planning, offer discovery, branch lookup, and opt-in route estimates",
   "states": {
     "approved": "The intended use is supported by recorded primary evidence and all known obligations are accepted.",
@@ -86,7 +86,7 @@
       "revocationDisposition": "Stop fetch and serving; quarantine derived records; apply the governing agreement's deletion or retention requirements before reactivation."
     },
     {
-      "id": "tjek-api",
+      "id": "tjek",
       "owner": "Tjek",
       "runtimeState": "conditional",
       "runtimeDefaultEnabled": false,
@@ -110,7 +110,7 @@
       },
       "rateLimit": "The public terms state a default fair-use ceiling of 8,000,000 API calls per month per country unless agreed otherwise; the project has no verified agreement.",
       "terminationRisk": "Access may be suspended for misuse or excess use, and the agreement controls the licensed period and services.",
-      "killSwitchKey": "source.tjek-api.enabled",
+      "killSwitchKey": "source.tjek.enabled",
       "requiredActions": [
         "Obtain a Tjek quote/agreement that names Handleplan's public website and intended derived displays.",
         "Record authorized chains, countries, regions, fields, imagery, attribution, storage, cache, and termination rules.",
@@ -122,7 +122,8 @@
         "Which Norwegian retailer publications and offer fields would be licensed",
         "Whether normalized prices, savings calculations, and cross-store rankings may be retained and displayed",
         "Whether publication images, product images, and retailer marks may be displayed",
-        "Attribution wording, cache duration, deletion, and post-termination handling"
+        "Attribution wording, cache duration, deletion, and post-termination handling",
+        "Latest runtime approval is not a Handleplan-specific agreement and has no private or public contract reference."
       ],
       "evidence": [
         {
@@ -303,6 +304,49 @@
         }
       ],
       "revocationDisposition": "No automated data should exist while blocked. If discovered, stop serving it and quarantine it for rights review."
+    },
+    {
+      "id": "open-prices",
+      "owner": "Open Food Facts / Open Prices",
+      "runtimeState": "conditional",
+      "runtimeDefaultEnabled": false,
+      "publicRankingEligible": false,
+      "intendedUse": "Supplementary ordinary package-price observations for supported chains",
+      "dataClasses": [
+        "ordinary_price_observation"
+      ],
+      "rights": {
+        "access": "conditional",
+        "processing": "unknown",
+        "retention": "unknown",
+        "derivedDisplay": "unknown",
+        "redistribution": "unknown",
+        "imagery": "not_applicable",
+        "marks": "unknown",
+        "attribution": "unknown"
+      },
+      "rateLimit": "The runtime approval records a public API documentation reference; current account limits and Handleplan-specific quota are not recorded.",
+      "terminationRisk": "Public API availability and downstream retention/display rights may change; no Handleplan-specific agreement is recorded.",
+      "killSwitchKey": "source.open-prices.enabled",
+      "requiredActions": [
+        "Record the current Handleplan permission or governing terms for persistent ordinary-price storage and derived display without copying credentials.",
+        "Confirm chain, geographic scope, attribution, quota, retention, and deletion obligations before public ranking.",
+        "Keep observations outside regional claims until store or regional applicability is proven."
+      ],
+      "knownUnknowns": [
+        "Whether Handleplan may retain and publicly derive ordinary-price observations",
+        "Whether the current approval covers all seven named chains and the candidate municipalities",
+        "Required attribution, quota, termination, and deletion handling"
+      ],
+      "evidence": [
+        {
+          "url": "https://prices.openfoodfacts.org/api/docs",
+          "kind": "official_api_documentation",
+          "accessedAt": "2026-09-09",
+          "finding": "The latest runtime permission record points to the public Open Prices API documentation; public documentation and DB approval do not establish a Handleplan-specific reuse agreement."
+        }
+      ],
+      "revocationDisposition": "Disable fetch and public ranking; quarantine derived records and apply the governing terms before reactivation."
     },
     {
       "id": "kartverket-address-api",

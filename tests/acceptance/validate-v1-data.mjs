@@ -237,7 +237,8 @@ unique(registry.sources.map((source) => source.killSwitchKey), "source kill swit
 const sourcesById = new Map(registry.sources.map((source) => [source.id, source]));
 const grocerySourceIds = [
   "kassalapp",
-  "tjek-api",
+  "open-prices",
+  "tjek",
   "bunnpris-public-web",
   "rema-public-web",
   "coop-extra-public-web",
@@ -286,13 +287,14 @@ assert.equal(sourcesById.get("kassalapp")?.runtimeState, "conditional");
 assert.equal(sourcesById.get("kassalapp")?.runtimeDefaultEnabled, false);
 assert.equal(sourcesById.get("kassalapp")?.publicRankingEligible, false);
 assert.equal(sourcesById.get("kassalapp")?.killSwitchKey, "source.kassalapp.enabled");
-assert.equal(sourcesById.get("tjek-api")?.runtimeState, "conditional");
+assert.equal(sourcesById.get("open-prices")?.runtimeState, "conditional");
+assert.equal(sourcesById.get("tjek")?.runtimeState, "conditional");
 assert.equal(sourcesById.get("bunnpris-public-web")?.runtimeState, "blocked");
 assert.equal(sourcesById.get("rema-public-web")?.runtimeState, "blocked");
 assert.equal(sourcesById.get("coop-extra-public-web")?.runtimeState, "blocked");
 
-// Candidate coverage is a complete 3 regions x 3 chains x 2 price classes matrix.
-const expectedChains = ["bunnpris", "extra", "rema-1000"];
+// Candidate coverage is a complete 3 regions x 7 chains x 2 price classes matrix.
+const expectedChains = ["bunnpris", "europris", "extra", "joker", "meny", "rema-1000", "spar"];
 const expectedRegions = ["no-0301-oslo", "no-4601-bergen", "no-5001-trondheim"];
 const expectedPriceClasses = ["official_offer", "ordinary"];
 
@@ -306,7 +308,12 @@ unique(coverage.candidateRegions.map((region) => region.id), "candidate region i
 for (const region of coverage.candidateRegions) {
   assert.equal(region.selectionStatus, "candidate_unverified");
   assert.equal(region.selected, false);
-  assert.deepEqual(sorted(region.chainPresenceEvidence.map((entry) => entry.chainId)), expectedChains);
+  const presenceChainIds = region.chainPresenceEvidence.map((entry) => entry.chainId);
+  unique(presenceChainIds, `${region.id} chain presence evidence ids`);
+  assert.ok(
+    presenceChainIds.every((chainId) => expectedChains.includes(chainId)),
+    `${region.id} chain presence evidence uses the seven-chain vocabulary`,
+  );
   assert.ok(region.knownGaps.length > 0, `${region.id} discloses gaps`);
 }
 
@@ -348,6 +355,21 @@ for (const entry of coverage.coverage) {
     assert.equal(entry.activeSourceId, null, "candidate-only cells cannot have an active source");
   }
 }
+
+const coverageCsv = readText("docs/evidence/release-readiness/coverage.csv").trim().split("\n");
+assert.equal(
+  coverageCsv.shift(),
+  "chain,region,price_class,current_products,stale_products,unknown_products,known_not_carried,oldest_current_observed_at,scope_proof,permission_id",
+);
+assert.equal(coverageCsv.length, coverageKeys.length, "coverage.csv must contain one row per matrix cell");
+const coverageCsvKeys = coverageCsv.map((line) => {
+  const fields = line.split(",");
+  assert.equal(fields.length, 10, "coverage.csv rows must retain the required columns");
+  assert.ok(fields.slice(0, 3).every((field) => field.length > 0));
+  for (const index of [3, 4, 5, 6]) assert.match(fields[index], /^\d+$/);
+  return `${fields[1]}/${fields[0]}/${fields[2]}`;
+});
+assert.deepEqual(sorted(coverageCsvKeys), sorted(coverageKeys), "coverage.csv must bind the exact 42-cell matrix");
 
 // The corpus defines exactly 20 reusable scenarios and one pending run per region/scenario pair.
 assert.deepEqual(corpus.privacy, {

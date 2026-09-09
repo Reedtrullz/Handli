@@ -46,7 +46,7 @@ const validateLaunchCoverageDocument = ajv.compile(launchCoverageSchema);
 const validateRunnerAttestationDocument = ajv.compile(runnerAttestationSchema);
 
 const PRICE_CLASSES = ["official_offer", "ordinary"];
-const EXPECTED_CHAIN_IDS = ["bunnpris", "extra", "rema-1000"];
+const EXPECTED_CHAIN_IDS = ["bunnpris", "europris", "extra", "joker", "meny", "rema-1000", "spar"];
 const EXPECTED_REGION_IDS = [
   "no-0301-oslo",
   "no-4601-bergen",
@@ -2681,7 +2681,7 @@ function validateFoundationInputs({ corpus, sourceRegistry, launchCoverage }) {
   if (!hasUnique(scenarioIds)) throw new Error("Benchmark scenario IDs must be unique");
   if (!hasUnique(runIds)) throw new Error("Benchmark run IDs must be unique");
   if (!sameStrings(chainIds, EXPECTED_CHAIN_IDS)) {
-    throw new Error("Launch coverage must declare the exact three V1 chains");
+    throw new Error("Launch coverage must declare the exact seven V1 chains");
   }
   if (!sameStrings(regionIds, EXPECTED_REGION_IDS)) {
     throw new Error("Launch coverage must declare the exact three V1 candidate regions");
@@ -2694,7 +2694,7 @@ function validateFoundationInputs({ corpus, sourceRegistry, launchCoverage }) {
   const coverageKeys = launchCoverage.coverage.map((cell) =>
     `${cell.regionId}/${cell.chainId}/${cell.priceClass}`).sort(compareText);
   if (!hasUnique(coverageKeys) || !sameStrings(coverageKeys, expectedCoverageKeys)) {
-    throw new Error("Launch coverage must contain the exact 18-cell V1 matrix");
+    throw new Error("Launch coverage must contain the exact 42-cell V1 matrix");
   }
 
   for (const scenario of corpus.scenarios) {

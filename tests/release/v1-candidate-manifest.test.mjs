@@ -33,6 +33,8 @@ import {
   writeDraftManifest,
 } from "../../scripts/release/generate-v1-draft-manifest.mjs";
 
+const REQUIRED_CHAIN_IDS = ["bunnpris", "rema-1000", "extra", "meny", "spar", "joker", "europris"];
+
 // Generate repository-current draft bytes in memory. Historical evidence is
 // immutable and must not become a mutable fixture whenever the forward-only
 // migration set advances.
@@ -119,7 +121,7 @@ function promotionFixture() {
       revocationDisposition: "Disable the fixture source immediately.",
     }],
   });
-  const chainPresenceEvidence = ["bunnpris", "rema-1000", "extra"].map((chainId) => ({
+  const chainPresenceEvidence = REQUIRED_CHAIN_IDS.map((chainId) => ({
     chainId,
     url: `https://example.test/stores/${chainId}`,
     accessedAt: "2026-07-17",
@@ -131,11 +133,10 @@ function promotionFixture() {
     reviewedAt: "2026-07-17",
     launchDecision: "selected",
     publicClaim: "Oslo fixture coverage is selected for this isolated verifier test.",
-    requiredChains: [
-      { id: "bunnpris", displayName: "Bunnpris" },
-      { id: "rema-1000", displayName: "REMA 1000" },
-      { id: "extra", displayName: "Extra" },
-    ],
+    requiredChains: REQUIRED_CHAIN_IDS.map((id) => ({
+      id,
+      displayName: id === "rema-1000" ? "REMA 1000" : id[0].toUpperCase() + id.slice(1),
+    })),
     candidateRegions: [{
       id: "no-0301-oslo",
       name: "Oslo",
@@ -147,7 +148,7 @@ function promotionFixture() {
       offerScopeEvidence: [],
       knownGaps: [],
     }],
-    coverage: ["bunnpris", "rema-1000", "extra"].flatMap((chainId) => (
+    coverage: REQUIRED_CHAIN_IDS.flatMap((chainId) => (
       ["ordinary", "official_offer"].map((priceClass) => ({
         activeSourceId: "fixture-source",
         candidateSourceIds: ["fixture-source"],
@@ -163,7 +164,7 @@ function promotionFixture() {
       }))
     )),
     selectionGate: {
-      requiredEvidence: ["rights-cleared measured six-cell coverage"],
+      requiredEvidence: ["rights-cleared measured fourteen-cell coverage"],
       passed: true,
       blockers: [],
     },

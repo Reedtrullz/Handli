@@ -1,6 +1,6 @@
 # Handleplan source registry
 
-- Last reviewed: 2026-07-18
+- Last reviewed: 2026-09-09
 - Machine-readable contract: [source-registry.v1.json](./source-registry.v1.json)
 - Revocation procedure: [source-kill-switch.md](./source-kill-switch.md)
 - Candidate coverage: [launch-coverage.v1.json](./launch-coverage.v1.json)
@@ -23,8 +23,9 @@ Unknown permission fails closed to `blocked`. Every source defaults off. Public 
 
 | Source | Intended role | State | Public ranking | Binding reason |
 |---|---|---:|---:|---|
-| Kassalapp API | catalog, ordinary prices, history, stores | conditional | no | Hobby permits all endpoints for non-commercial use and Bedrift supports app embedding, but the current key tier and storage/display/redistribution terms are not recorded |
-| Tjek API | structured official offers | conditional | no | Customer-only API; the signed agreement defines the permitted services and Handleplan has no verified agreement |
+| Kassalapp API | catalog, ordinary prices, history, stores | conditional | no | Runtime approval is current, but the current key tier and Handleplan storage/display/redistribution terms are not recorded |
+| Open Prices API | supplementary ordinary prices | conditional | no | Runtime approval points to public API docs; Handleplan-specific retention, derived-display, scope, and attribution terms are not recorded |
+| Tjek API | structured official offers | conditional | no | Runtime source is canonical `tjek`; the signed agreement defines permitted services and Handleplan has no verified agreement or reference |
 | Bunnpris public web | stores and customer papers | blocked | no | Public presentation is not affirmative permission for automated reuse |
 | REMA 1000 public web | stores and regional customer papers | blocked | no | Public presentation is not affirmative permission for automated reuse |
 | Coop/Extra public web | stores, regional papers, member offers | blocked | no | Public presentation is not affirmative permission for automated reuse |
@@ -32,7 +33,7 @@ Unknown permission fails closed to `blocked`. Every source defaults off. Public 
 | openrouteservice API | opt-in route estimate | conditional | no | Result reuse is documented, but provider selection, account quota, and origin-coordinate privacy review are unresolved |
 | Self-hosted Valhalla + OpenStreetMap | opt-in route estimate | approved, disabled | no | MIT routing engine and ODbL map data permit the intended processing with attribution; production tile, capacity, freshness, and recovery proof remain gates |
 
-No grocery source is approved as of this review. Consequently, no candidate region is launch-eligible and Handleplan must not claim complete three-chain comparison.
+Available evidence does not yet demonstrate grocery release authority for Handleplan public ranking, although the runtime database records current source approvals. Consequently, no candidate region is launch-eligible. The launch manifest records all seven named chains and all 42 region/chain/price-class cells as candidate-only; national or unknown-scope observations do not become regional claims.
 
 ## Primary evidence
 
@@ -50,13 +51,20 @@ project-specific agreement.
 Unresolved: whether the public-good model qualifies as Hobby use; credential
 tier; persistent raw and derived storage; historical aggregation; public
 rankings; imagery; marks; attribution; rate limits; termination; deletion; and
-measured three-chain regional coverage. The ready-to-send permission request
+measured seven-chain regional coverage. The ready-to-send permission request
 and acceptance checklist are tracked in
 [issue #5](https://github.com/Reedtrullz/Handli/issues/5).
 
+### Open Prices
+
+- [Open Prices API documentation](https://prices.openfoodfacts.org/api/docs) is the public reference recorded by the latest runtime approval. The runtime record does not contain a private agreement reference, and public documentation does not establish Handleplan-specific rights to retain or derive public rankings.
+
+Unresolved: persistent storage and derived display, chain and geographic scope,
+attribution, quota, termination, and deletion handling.
+
 ### Tjek
 
-- [Tjek APIs and SDKs](https://tjek.com/apis-and-sdks) says the API is available only to customers and directs prospective users to contact Tjek.
+- [Tjek APIs and SDKs](https://tjek.com/apis-and-sdks) says the API is available only to customers and directs prospective users to contact Tjek. The runtime source identity is `tjek`; `tjek-api` is not a second approved source.
 - [Tjek terms](https://tjek.com/terms), sections 8.1-8.6, make API use agreement-specific, limit it to agreed services on customer-owned platforms, prohibit systematic third-party reuse unless expressly agreed, and prohibit using the content to train or improve AI/ML models without written approval.
 
 Unresolved: whether Handleplan will become a customer; authorized retailers, regions, fields, derived calculations, imagery, marks, attribution, cache/retention, deletion, and post-termination handling. No Tjek fetch, OCR, classifier training, or public display is approved.
@@ -66,6 +74,7 @@ Unresolved: whether Handleplan will become a customer; authorized retailers, reg
 - [Bunnpris](https://www.bunnpris.no/) and its [store directory](https://www.bunnpris.no/butikker) expose stores and customer papers.
 - [REMA 1000 campaigns](https://www.rema.no/kampanjevarer/) and the [Oslo customer-paper page](https://www.rema.no/kundeaviser/oslo/) expose offers and geographic validity. The Oslo page says it applies in Oslo and Gjelleråsen, showing that regional scope is material.
 - [Extra offers](https://www.coop.no/extra/tilbud), the [Hordaland publication](https://kundeavis.coop.no/aviser/extra/hordaland/), and the [Midt publication](https://kundeavis.coop.no/aviser/extra/midt/) expose customer papers, member benefits, validity dates, and stock/error caveats.
+- [MENY offers](https://meny.no/tilbud/) and [campaigns](https://meny.no/kampanjer), [SPAR customer papers](https://spar.no/spar-kundeavis) and [offers](https://spar.no/varer/tilbud), [Joker customer papers](https://joker.no/tilbud/se-var-kundeavis), and [Europris customer papers](https://www.europris.no/kundeavis) expose public offer routes. Their dynamic or postcode/store-scoped pages are route qualification only; no current structured payload, reuse permission, or municipality coverage was established.
 
 These pages support manual product research and launch-feasibility checks only. This review found no affirmative authorization for Handleplan's automated extraction, persistence, derived comparison, or republishing. Each retailer web source therefore remains blocked. A future authorized feed must receive a distinct source ID rather than silently changing the meaning of a web-scraping entry.
 

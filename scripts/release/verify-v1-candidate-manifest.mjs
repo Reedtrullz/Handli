@@ -31,7 +31,15 @@ export const gateIds = Object.freeze([
   "G11",
   "G12",
 ]);
-const requiredChainIds = Object.freeze(["bunnpris", "rema-1000", "extra"]);
+const requiredChainIds = Object.freeze([
+  "bunnpris",
+  "rema-1000",
+  "extra",
+  "meny",
+  "spar",
+  "joker",
+  "europris",
+]);
 const requiredEvidenceKindsByGate = Object.freeze({
   G1: ["reviews"],
   G2: ["tests"],
@@ -818,7 +826,7 @@ function assertSupportedRegions(manifest, coverage, registry, promotion) {
   if (!Array.isArray(coverage.requiredChains)) fail("coverage manifest has no required-chain list");
   const actualChainIds = coverage.requiredChains.map(({ id }) => id);
   if (JSON.stringify(actualChainIds) !== JSON.stringify(requiredChainIds)) {
-    fail("coverage manifest must require Bunnpris, REMA 1000, and Extra in canonical order");
+    fail("coverage manifest must require all seven named chains in canonical order");
   }
   if (!Array.isArray(registry.sources)) fail("source registry has no source list");
   const sourceIds = registry.sources.map(({ id }) => id);
@@ -841,7 +849,7 @@ function assertSupportedRegions(manifest, coverage, registry, promotion) {
     if (region.knownGaps.length > 0) fail(`${regionId} still declares unresolved regional gaps`);
     const rows = coverage.coverage.filter((row) => row.regionId === regionId);
     if (rows.length !== requiredChainIds.length * 2) {
-      fail(`${regionId} must contain exactly six required launch-coverage cells`);
+      fail(`${regionId} must contain exactly fourteen required launch-coverage cells`);
     }
     for (const chain of coverage.requiredChains) {
       for (const priceClass of ["ordinary", "official_offer"]) {

@@ -71,7 +71,7 @@
       "pattern": "^no-[0-9]{4}-[a-z0-9-]+$"
     },
     "chainId": {
-      "enum": ["bunnpris", "extra", "rema-1000"]
+      "enum": ["bunnpris", "extra", "europris", "joker", "meny", "rema-1000", "spar"]
     },
     "baseUnit": {
       "enum": ["g", "ml", "piece", "package"]

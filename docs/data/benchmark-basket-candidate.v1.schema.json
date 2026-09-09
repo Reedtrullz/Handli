@@ -78,7 +78,7 @@
       "pattern": "^no-[0-9]{4}-[a-z0-9-]+$"
     },
     "chainId": {
-      "enum": ["bunnpris", "extra", "rema-1000"]
+      "enum": ["bunnpris", "extra", "europris", "joker", "meny", "rema-1000", "spar"]
     },
     "priceClass": {
       "enum": ["official_offer", "ordinary"]
@@ -445,8 +445,8 @@
         },
         "entries": {
           "type": "array",
-          "minItems": 6,
-          "maxItems": 6,
+          "minItems": 14,
+          "maxItems": 14,
           "items": { "$ref": "#/$defs/coverageEntry" }
         }
       }
