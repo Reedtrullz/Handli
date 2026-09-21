@@ -35,12 +35,12 @@
 - [x] Layout fingerprint derived from a stable review marker (createHash sha256 of "meny-page-texts-review-v1"), matching the Tjek fingerprint convention.
 - [x] 9 vitest tests green; worker typecheck clean.
 
-### Task B: Production wiring (blocked — needs scope authority decision)
+### Task B: Production wiring (scope decision applied; protected staging capture remains)
 
-- [ ] Add `meny` `data_sources` row + `source_permissions` migration (none exists today).
-- [ ] Wire extractor into `official-offer-operational.ts` dispatch (new sourceId-keyed branch; the `kind`-keyed handler map must not be reused blindly).
-- [ ] Protected staging capture under worker credentials; representative review; public inclusion/exclusion proof by scope.
-- [ ] Resolve the scope fence: `declaredGeographicScope` must match a stored `geographic_scopes` row and `scope_kind` is constrained to national/region/postal_set/store_set — MENY payload evidence supports none of these. Decision required (reviewed national permission with external evidence, fence extension, or keep MENY blocked).
+- [x] Add `meny` `data_sources` row + `source_permissions` migration: `deploy/migrations/043_meny_official_offer_source.sql` (approved offer source, officialOffers/capture/discover/extract + public_display, permission_reviewed_at).
+- [x] Wire extractor into runtime dispatch — implemented as the sourceId-routed `officialOfferDiscovery` branch in `production.ts` (`context.sourceId === "meny"` routes to the MENY handler; the kind-keyed Tjek map is untouched), plus `meny-handlers.ts`, `meny-production.ts`, bootstrap schedulers and `MENY_ENABLED` (commit `825eb55`).
+- [ ] Protected staging capture under worker credentials; representative review; public inclusion/exclusion proof by scope. (Still open — belongs with Task 15 lifecycle observation; requires live worker credentials and the current MENY edition, which rotates: Uke 39 expires 2026-09-26.)
+- [x] Scope fence resolved: reviewed national NO permission recorded in migration 043, using external evidence (meny.no/om-meny states "landsdekkende kjede", HTTP 200, 2026-09-22) per the Extra/Tjek national precedent. Payload itself still carries no scope field; candidates keep `unknown` scope and the foundation review fence governs inclusion.
 
 ## Explicit failures and limits
 

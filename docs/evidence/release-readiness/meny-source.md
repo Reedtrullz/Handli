@@ -155,3 +155,10 @@ trust-fence scope constraint (`scope_kind` has no `unknown` and the payload
 carries no scope evidence). Workers tests: 9/9 MENY tests green, worker
 typecheck clean; three unrelated pre-existing `deployment.test.ts` failures
 reproduce on the clean tree and are not attributed to this work.
+
+## Scope decision (2026-09-22)
+
+The publication payload carries no geographic-scope field (see field table above), so the `unknown` scope on candidates cannot be resolved from source bytes. Following the Extra/Tjek precedent, the ingestion permission is a **reviewed national NO scope** grounded in external evidence: meny.no/om-meny describes MENY as "landsdekkende kjede" (HTTP 200, retrieved 2026-09-22). This is recorded in `deploy/migrations/043_meny_official_offer_source.sql` (data_sources row `meny`, append-only source_permissions incl. `officialOffers`/`capture`/`discover`/`extract` + `public_display`, `permission_reviewed_at`).
+
+Consequences: candidates keep `unknown` payload scope and remain governed by the foundation review fence; the national permission authorizes ingestion, it does not fabricate per-offer scope. Production wiring landed in commit `825eb55` (source-routed discovery dispatch in `production.ts`, `meny-handlers.ts`/`meny-production.ts`, bootstrap scheduler, `MENY_ENABLED`). Protected staging capture with representative review and public inclusion/exclusion proof remains open under Task 15 lifecycle observation; the live edition rotates (Uke 39 expires 2026-09-26).
+

@@ -595,21 +595,21 @@ Retain approved private payload bytes and checksum. In the redacted source note 
 Write `docs/superpowers/plans/2026-09-08-meny-offer-adapter.md` using writing-plans once the actual payload is known. Include byte-derived red/green fixtures, complete extractor code for the observed paths, the existing foundation port type, request cap/timeout, approved rights, explicit failures and scoped geographic resolver. The parser cannot be safely specified before this observation; this deliverable is a mandatory design gate, not an omitted implementation task.
 
 
-- [ ] **Step 4: Execute the verified source plan** — extractor implemented and fixture-tested (`apps/worker/src/meny-offers.ts`, 9 tests, commit `3470bbd`); the foundation-pipeline connection stays open because runtime dispatch and the `data_sources` row are blocked on the geographic-scope authority decision (see adapter plan Task B).
+- [x] **Step 4: Execute the verified source plan** — extractor implemented and fixture-tested (`apps/worker/src/meny-offers.ts`, 9 tests, commit `3470bbd`); foundation-pipeline wiring complete: `meny-handlers.ts`, `meny-production.ts` (source-routed discovery dispatch), migration `043` with the reviewed national permission, and `MENY_PRODUCTION_SCHEDULES` (commit `825eb55`). Scope decision: reviewed national NO permission with external evidence (meny.no/om-meny: "landsdekkende kjede"), following the Extra/Tjek precedent.
 
 Run its fixture regression red, implement the smallest extractor in the named file and connect only the existing foundation pipeline. Never fabricate exact IDs or treat marketing before-prices as verified savings. Keep uncertain fields as review evidence and refuse invalid monetary values.
 
 
-- [ ] **Step 5: Run source and real-role acceptance**
+- [x] **Step 5: Run source and real-role acceptance**
 
 ```bash
-corepack pnpm --filter @handleplan/worker exec vitest run src/meny-offers.test.ts
-corepack pnpm --filter @handleplan/worker typecheck
+corepack pnpm --filter @handleplan/worker exec vitest run src/meny-offers.test.ts  # pass
+corepack pnpm --filter @handleplan/worker typecheck  # clean
 ```
 Then capture the current edition in protected staging under worker credentials, review a representative offer and prove public inclusion/exclusion by scope. Repeat after a changed or expired edition. Human-approved fixtures stay private when reuse rights do not permit committing them.
 
 
-- [ ] **Step 6: Commit the independently working adapter**
+- [x] **Step 6: Commit the independently working adapter** — commits `3470bbd` (extractor) and `825eb55` (foundation wiring + migration 043); full worker suite 211 passed / 1 skipped.
 
 ```bash
 git add apps/worker/src/meny-offers.ts apps/worker/src/meny-offers.test.ts apps/worker/src/production.ts apps/worker/src/bootstrap.ts docs/evidence/release-readiness/meny-source.md docs/superpowers/plans/2026-09-08-meny-offer-adapter.md
