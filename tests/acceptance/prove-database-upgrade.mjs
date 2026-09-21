@@ -2778,7 +2778,10 @@ function writeExecutable(path, source) {
 }
 
 function localDatabaseUrl(database, port, role, password) {
-  return `postgresql://${encodeURIComponent(role)}:${encodeURIComponent(password)}@127.0.0.1:${port}/${database}`;
+  const url = new URL(`postgresql://127.0.0.1:${port}/${database}`);
+  url.username = encodeURIComponent(role);
+  url.password = encodeURIComponent(password);
+  return url.toString();
 }
 
 async function startRestoreContainer() {

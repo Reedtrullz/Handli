@@ -22,7 +22,7 @@ Using that exact pinned image, a disposable PostgreSQL container was started on
 127.0.0.1:55440 with the non-secret CI fixture environment and the required
 Node runtime v22.22.3. The command was:
 
-    DATABASE_MIGRATION_URL='postgresql://handleplan:<fixture>@127.0.0.1:55440/handleplan' \
+    DATABASE_MIGRATION_URL="postgresql://handleplan:$FIXTURE_PASSWORD@127.0.0.1:55440/handleplan" \
     APP_DATABASE_PASSWORD='<fixture>' \
     WEB_DATABASE_PASSWORD='<fixture>' \
     REVIEW_DATABASE_PASSWORD='<fixture>' \
