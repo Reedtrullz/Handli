@@ -794,12 +794,12 @@ git commit -m "feat: add governed Europris offer intake"
 **Interfaces:** Consumes private raw captures and candidate schema; produces explicit reviewed decisions through PostgresReviewQueueRepository.decide and the protected review service. No worker-generated review identities.
 
 
-- [ ] **Step 1: Test an actual captured evidence format**
+- [x] **Step 1: Test an actual captured evidence format** — done 2026-09-22 (commit 14bdf44): structured application/json captures fail closed with EVIDENCE_UNAVAILABLE in both render and acknowledge (real codec challenge required); status manifest test now derives row counts from the manifest instead of hardcoding totals.
 
 Current evidence renderer is image-bound. Add a regression for a structured JSON capture: rendering it must either produce a source-faithful authorized image for the existing renderer boundary or fail with an explicit unsupported state. Never pass JSON bytes as an image. Test unsupported mime type, mismatched checksum and stale review proof.
 
 
-- [ ] **Step 2: Implement one source-faithful review path**
+- [ ] **Step 2: Implement one source-faithful review path** — BLOCKED on reviewed boundary decision (user gate): Tjek captures are application/json and MENY captures are text/html, both public_display; migration 028 enforces image-only (JPEG/PNG/WebP) render receipts at the table check, recorder function, and decision function, and docs/runbooks/private-review.md states adding non-image rendering "requires a new bounded page-rendering design and a reviewed forward database boundary". Candidate designs: (a) derived deterministic image artifact stored alongside the capture with its own locator/checksum and receipt; (b) extend the receipt mime boundary forward; (c) render at capture time (rejected: changes capture semantics). Fail-closed retained until reviewed.
 
 Reuse the existing evidence renderer and proof binding. For structured feeds, render source fields/conditions and locator into a private deterministic image if the approved source rights allow it; bind capture checksum and renderer version. For PDF, preserve page and crop identity. Show all conditions needed to make the decision, not only the numeric price.
 
