@@ -131,3 +131,27 @@ retailer store directory) before any nonnational ingestion.
   recorded in `source-authority.md` (2026-09-09), durable protected capture is
   pending, text-anchor stability across editions is unproven, and positive
   geographic scope evidence is absent.
+
+## Task 10 extractor status (2026-09-21, post-qualification)
+
+The embedded-text extractor is implemented and unit-tested:
+
+- `apps/worker/src/meny-offers.ts` — `parseMenyStaticSettings`,
+  `parseMenyOffers`, `createMenyEmbeddedTextExtractor` (foundation
+  embedded-text port), layout fingerprint derived per the Tjek convention.
+- `apps/worker/src/meny-offers.test.ts` — 9 tests from real text anchors
+  (split-digit + before-price, multi-pack decimal `PK 8X1,5L` = 1500 ml × 8,
+  comparison-price exclusion, percentage-only skip, footnote skip, scrambled
+  `FØRPRIS72,90 / HG` fail-closed, Trumf membership, envelope binding).
+- `docs/superpowers/plans/2026-09-08-meny-offer-adapter.md` — the Step 3
+  design-gate plan, including the blocked production-wiring task.
+
+Fail-closed behaviors verified against the real capture: name-after-price
+layouts skip (no label pairing), comparison unit prices never become offer
+prices, before-prices never become offer prices, percentage-only and footnote
+blocks never price. Non-claims: no production wiring exists; no runtime
+`data_sources` row or permission migration; ingestion stays blocked at the
+trust-fence scope constraint (`scope_kind` has no `unknown` and the payload
+carries no scope evidence). Workers tests: 9/9 MENY tests green, worker
+typecheck clean; three unrelated pre-existing `deployment.test.ts` failures
+reproduce on the clean tree and are not attributed to this work.
