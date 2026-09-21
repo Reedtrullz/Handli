@@ -30,6 +30,7 @@ import {
 import { superviseWorker } from "./supervisor";
 import { createOfficialOfferLifecycleScheduler } from "./official-offer-lifecycle";
 import { createTjekFoundationDependencies } from "./tjek-production";
+import { createMenyFoundationDependencies } from "./meny-production";
 
 export function workerOwnerId(host = hostname(), processId = process.pid): string {
   const digest = createHash("sha256")
@@ -109,6 +110,10 @@ export async function runProductionWorkerProcess(
       ? { apiKey: productionEnv.tjekApiKey, foundation: createTjekFoundationDependencies(connection.db, productionEnv.officialOfferPrivateCaptureRoot) }
       : undefined;
 
+    const menyDependencies = productionEnv.menyEnabled
+      ? { foundation: createMenyFoundationDependencies(connection.db, productionEnv.officialOfferPrivateCaptureRoot) }
+      : undefined;
+
     const runtime = createProductionWorkerRuntime({
       clock: () => new Date(),
       gateway,
@@ -118,6 +123,7 @@ export async function runProductionWorkerProcess(
         sourceId: "kassalapp",
         ttlMs: productionEnv.leaseTtlMs,
       }),
+      meny: menyDependencies,
       openPrices: openPricesDependencies,
       tjek: tjekDependencies,
       runtimeObserver: health,
@@ -129,12 +135,25 @@ export async function runProductionWorkerProcess(
         productionEnv.targetLimit,
       ),
     });
-    const lifecycle = productionEnv.tjekEnabled
-      ? createOfficialOfferLifecycleScheduler({
-          ownerId: workerOwnerId(),
-          repository: new PostgresOfficialOfferLifecycleRepository(connection.db),
-          sourceId: "tjek",
-        })
+    const lifecycleSchedulers = [
+      ...(productionEnv.tjekEnabled ? [createOfficialOfferLifecycleScheduler({
+        ownerId: workerOwnerId(),
+        repository: new PostgresOfficialOfferLifecycleRepository(connection.db),
+        sourceId: "tjek",
+      })] : []),
+      ...(productionEnv.menyEnabled ? [createOfficialOfferLifecycleScheduler({
+        ownerId: workerOwnerId(),
+        repository: new PostgresOfficialOfferLifecycleRepository(connection.db),
+        sourceId: "meny",
+      })] : []),
+    ];
+    const lifecycle = lifecycleSchedulers.length > 0
+      ? async (asOf: Date, lifecycleSignal: AbortSignal) => {
+          for (const scheduler of lifecycleSchedulers) {
+            if (lifecycleSignal.aborted) break;
+            await scheduler(asOf, lifecycleSignal);
+          }
+        }
       : undefined;
     const healthServer = await startWorkerHealthServer(health);
     try {

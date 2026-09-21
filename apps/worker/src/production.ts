@@ -41,9 +41,11 @@ import {
   type OpenPricesTargetProvider,
 } from "./open-prices-handlers";
 import { officialOfferAuthorizationFenceV1Schema } from "@handleplan/domain";
-import { TJEK_SOURCE_ID, createTjekHandlers, type TjekFoundationDependencies, type TjekHandlerDependencies } from "./tjek-handlers";
+import { TJEK_JOB_KIND, TJEK_SOURCE_ID, createTjekHandlers, type TjekFoundationDependencies, type TjekHandlerDependencies } from "./tjek-handlers";
+import { MENY_SOURCE_ID } from "./meny-offers";
+import { MENY_JOB_KIND, createMenyHandlers, type MenyHandlerDependencies } from "./meny-handlers";
 import { createKassalappHandlers } from "./kassalapp-handlers";
-import { WorkerRunner } from "./runner";
+import { WorkerRunner, type WorkerJobHandler } from "./runner";
 import {
   WorkerRuntime,
   type WorkerLeaseHandle,
@@ -110,6 +112,20 @@ export const TJEK_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition[] = Ob
     intervalMs: 24 * 60 * 60 * 1_000,
     kind: "official-offer-discovery" as const,
     sourceId: "tjek" as const,
+    timeoutMs: 5 * 60 * 1_000,
+  }),
+]);
+
+/**
+ * Daily MENY viewer discovery. The schedule is declared here for
+ * bounded-cycle accounting; production handler composition remains opt-in.
+ */
+export const MENY_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition[] = Object.freeze([
+  Object.freeze({
+    anchorAt: "2026-09-08T03:45:00.000Z",
+    intervalMs: 24 * 60 * 60 * 1_000,
+    kind: "official-offer-discovery" as const,
+    sourceId: MENY_SOURCE_ID,
     timeoutMs: 5 * 60 * 1_000,
   }),
 ]);
@@ -433,9 +449,15 @@ export interface OpenPricesProductionRuntimeDependencies {
   targetProvider: OpenPricesTargetProvider;
 }
 
+
+
 export interface TjekProductionRuntimeDependencies {
   apiKey?: string;
   foundation: TjekHandlerDependencies["foundation"];
+}
+
+export interface MenyProductionRuntimeDependencies {
+  foundation: MenyHandlerDependencies["foundation"];
 }
 
 export interface ProductionWorkerRuntimeDependencies<RunHandle = unknown> {
@@ -443,6 +465,7 @@ export interface ProductionWorkerRuntimeDependencies<RunHandle = unknown> {
   gateway: KassalappIngestionGateway;
   ingestionRepository: KassalappIngestionRepository<RunHandle>;
   leaseProvider: WorkerLeaseProvider;
+  meny?: MenyProductionRuntimeDependencies;
   openPrices?: OpenPricesProductionRuntimeDependencies;
   tjek?: TjekProductionRuntimeDependencies;
   runtimeObserver?: WorkerRuntimeObserver;
@@ -479,13 +502,30 @@ export function createProductionWorkerRuntime<RunHandle = unknown>(
     : {};
 
   const tjekHandlers = dependencies.tjek !== undefined ? createTjekHandlers({ client: new TjekClient({ apiKey: dependencies.tjek.apiKey, authorizeRequestAttempt: createTjekRequestAttemptAuthorizer(dependencies.tjek.foundation.sourceAccessPolicy) }), foundation: dependencies.tjek.foundation }) : {};
-
-  const handlers = { ...kassalappHandlers, ...openPricesHandlers, ...tjekHandlers };
+  const menyHandlers = dependencies.meny !== undefined ? createMenyHandlers({ foundation: dependencies.meny.foundation }) : {};
+  // Tjek and MENY share the discovery job kind; route on the request source
+  // instead of letting one handler map silently overwrite the other.
+  const officialOfferDiscovery = Object.keys(tjekHandlers).length + Object.keys(menyHandlers).length > 0
+    ? async (context: Parameters<WorkerJobHandler>[0]) => {
+        if (context.sourceId === MENY_SOURCE_ID) {
+          if (!menyHandlers[MENY_JOB_KIND]) throw new Error("MENY_HANDLER_UNAVAILABLE");
+          return menyHandlers[MENY_JOB_KIND]!(context);
+        }
+        if (!tjekHandlers[TJEK_JOB_KIND]) throw new Error("TJEK_HANDLER_UNAVAILABLE");
+        return tjekHandlers[TJEK_JOB_KIND]!(context);
+      }
+    : undefined;
+  const handlers = {
+    ...kassalappHandlers,
+    ...openPricesHandlers,
+    ...(officialOfferDiscovery ? { "official-offer-discovery": officialOfferDiscovery } : {}),
+  };
 
   const schedules = [
     ...(dependencies.schedules ?? KASSALAPP_PRODUCTION_SCHEDULES),
     ...(dependencies.openPrices !== undefined ? OPEN_PRICES_PRODUCTION_SCHEDULES : []),
     ...(dependencies.tjek !== undefined ? TJEK_PRODUCTION_SCHEDULES : []),
+    ...(dependencies.meny !== undefined ? MENY_PRODUCTION_SCHEDULES : []),
   ];
 
   const runner = new WorkerRunner({

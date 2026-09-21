@@ -14,6 +14,7 @@ export interface WorkerProductionEnv {
   leaseTtlMs: number;
   officialOfferFoundationEnabled: boolean;
   officialOfferPrivateCaptureRoot: string;
+  menyEnabled: boolean;
   openPricesEnabled: boolean;
   requestBudgetLimit: number;
   requestBudgetMaxWaitMs: number;
@@ -125,6 +126,10 @@ function tjekEnabled(value: string | undefined): boolean {
   return value === "true";
 }
 
+function menyEnabled(value: string | undefined): boolean {
+  return value === "true";
+}
+
 function optionalApiKey(value: string | undefined, access: WorkerSourceAccessState): string | undefined {
   if (value !== undefined && (value.length < 1 || value.length > 1_024 || value.trim().length < 1)) {
     throw new TypeError("KASSAL_API_KEY must contain 1-1024 nonblank characters");
@@ -209,6 +214,7 @@ export function readWorkerProductionEnv(
       24 * 60 * 60 * 1_000,
       "WORKER_REQUEST_BUDGET_WINDOW_MS",
     ),
+    menyEnabled: menyEnabled(source.MENY_ENABLED),
     sourceAccessState: access,
     targetLimit: boundedInteger(
       source.WORKER_TARGET_LIMIT,

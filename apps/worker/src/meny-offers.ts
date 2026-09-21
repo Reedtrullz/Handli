@@ -10,7 +10,7 @@ export const MENY_EXTRACTOR_VERSION = "meny-embedded-text-v1" as const;
 
 // Fingerprint of the reviewed MENY pageTexts layout. Derived like the Tjek
 // fingerprint: a stable review marker, not a hash of one captured payload.
-const MENY_LAYOUT_FINGERPRINT = createHash("sha256").update("meny-page-texts-review-v1").digest("hex");
+export const MENY_LAYOUT_FINGERPRINT = createHash("sha256").update("meny-page-texts-review-v1").digest("hex");
 const MENY_SCHEMA_FINGERPRINT = MENY_LAYOUT_FINGERPRINT;
 
 export interface MenyStaticSettings {
