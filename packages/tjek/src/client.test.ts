@@ -88,6 +88,18 @@ function createClient(fetchImpl: typeof fetch): TjekClient {
   });
 }
 
+function createGovernedClient(
+  fetchImpl: typeof fetch,
+  authorize: (signal?: AbortSignal) => Promise<void>,
+): TjekClient {
+  return new TjekClient({
+    apiKey: "test-key-123",
+    baseUrl: "https://fixture.invalid",
+    fetch: fetchImpl,
+    authorizeRequestAttempt: authorize,
+  });
+}
+
 describe("TjekClient", () => {
   describe("listCatalogs", () => {
     it("returns catalogs from the API", async () => {
@@ -371,6 +383,61 @@ describe("TjekClient", () => {
       ).rejects.toSatisfy(
         (err: TjekClientError) => err.code === "CANCELLED",
       );
+    });
+  });
+
+  describe("request governance", () => {
+    it("authorizes once per physical request across discovery, pagination and incito detail fetches", async () => {
+      const row = (id: string) => ({ id, heading: "Bread", pricing: { price: 20 }, catalog_id: "paged", dealer_id: "80742m", run_from: "2026-09-01", run_till: "2026-09-08" });
+      const first = Array.from({ length: 24 }, (_, i) => row(String(i)));
+      const authorize = vi.fn(async () => {});
+      // discovery = one list request per dealer, then two offer pages
+      const pagedFetch = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/v2/catalogs")) {
+          return jsonResponse([{ ...makeCatalog({ id: "paged", dealer_id: "80742m", type: "paged", offer_count: 25 }) }]);
+        }
+        const offset = Number(url.searchParams.get("offset"));
+        return offset === 0 ? jsonResponse(first) : jsonResponse([row("24")]);
+      });
+      const pagedClient = createGovernedClient(pagedFetch, authorize);
+      const pagedCatalog = await pagedClient.getAllLatestCatalogs();
+      expect(authorize).toHaveBeenCalledTimes(3);
+      await pagedClient.getOffersFromCatalog(pagedCatalog[0]!);
+      expect(authorize).toHaveBeenCalledTimes(5);
+      expect(pagedFetch).toHaveBeenCalledTimes(5);
+      // incito flow: 3 discovery lists + 1 generate_incito + 1 detail per offer view
+      authorize.mockClear();
+      const incitoFetch = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/v2/catalogs")) {
+          return jsonResponse([{ ...makeCatalog(), offer_count: 2 }]);
+        }
+        if (url.pathname.endsWith("generate_incito_from_publication")) {
+          return jsonResponse(INCITO_WITH_OFFERS);
+        }
+        return jsonResponse(OFFER_DETAIL_1);
+      });
+      const incitoClient = createGovernedClient(incitoFetch, authorize);
+      const catalogs = await incitoClient.getAllLatestCatalogs();
+      const offers = await incitoClient.getOffersFromCatalog(catalogs[0]!);
+      expect(offers).toHaveLength(2);
+      expect(authorize).toHaveBeenCalledTimes(6);
+      expect(incitoFetch).toHaveBeenCalledTimes(6);
+    });
+
+    it("stops the second physical request when authorization is revoked after the first", async () => {
+      let calls = 0;
+      const authorize = vi.fn(async () => {
+        calls += 1;
+        if (calls >= 2) throw new Error("TJEK_SOURCE_DISABLED");
+      });
+      const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([{ ...makeCatalog() }]));
+      const client = createGovernedClient(mockFetch, authorize);
+      await expect(client.getAllLatestCatalogs()).rejects.toThrow("TJEK_SOURCE_DISABLED");
+      // every physical attempt asks first, but only the authorized one reaches fetch
+      expect(authorize).toHaveBeenCalledTimes(3);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -24,6 +24,9 @@ export interface TjekClientOptions {
   readonly apiKey?: string;
   readonly baseUrl?: string;
   readonly fetch?: typeof globalThis.fetch;
+  // Awaited before every physical HTTP request so the worker can recheck the
+  // persisted source-access policy per attempt (mirrors kassalapp governance).
+  readonly authorizeRequestAttempt?: (signal?: AbortSignal) => Promise<void>;
 }
 
 export class TjekClientError extends Error {
@@ -61,11 +64,21 @@ export class TjekClient {
   private readonly baseUrl: string;
   private readonly apiKey?: string;
   private readonly fetchFn: typeof globalThis.fetch;
+  private readonly authorizeRequestAttempt?: (signal?: AbortSignal) => Promise<void>;
 
   constructor(options: TjekClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? TJEK_BASE_URL;
     this.apiKey = options.apiKey;
     this.fetchFn = options.fetch ?? globalThis.fetch;
+    this.authorizeRequestAttempt = options.authorizeRequestAttempt;
+  }
+
+  // One invocation per physical fetch: keeps the authorization count equal to
+  // the physical request count so revocation between attempts stops the next one.
+  private async authorizeRequest(signal?: AbortSignal): Promise<void> {
+    if (this.authorizeRequestAttempt !== undefined) {
+      await this.authorizeRequestAttempt(signal);
+    }
   }
 
   private async rpc(
@@ -76,6 +89,7 @@ export class TjekClient {
     const url = `${this.baseUrl}/v4/rpc/${method}`;
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (this.apiKey) headers["X-Api-Key"] = this.apiKey;
+    await this.authorizeRequest(signal);
     const response = await this.fetchFn(url, {
       method: "POST",
       headers,
@@ -112,7 +126,7 @@ export class TjekClient {
     if (signal?.aborted) {
       throw new TjekClientError("CANCELLED", "Request cancelled");
     }
-
+    await this.authorizeRequest(signal);
     const response = await this.fetchFn(url, { signal });
     if (response.status === 429) {
       throw new TjekClientError("RATE_LIMITED", "Rate limited by Tjek API");
@@ -183,6 +197,7 @@ export class TjekClient {
     for (let page = 0; page < 21; page++) {
       if (signal?.aborted) throw new TjekClientError("CANCELLED", "Request cancelled");
       const query = new URLSearchParams({ dealer_id: catalog.dealer_id, catalog_id: catalog.id, types: "paged", order_by: "page", offset: String(page * 24), limit: "24" });
+      await this.authorizeRequest(signal);
       const response = await this.fetchFn(`${this.baseUrl}/v2/offers?${query}`, {
         signal, ...(this.apiKey ? { headers: { "X-Api-Key": this.apiKey } } : {}),
       });

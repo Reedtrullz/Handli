@@ -40,7 +40,8 @@ import {
   type OpenPricesSourceAccessState,
   type OpenPricesTargetProvider,
 } from "./open-prices-handlers";
-import { createTjekHandlers, type TjekHandlerDependencies } from "./tjek-handlers";
+import { officialOfferAuthorizationFenceV1Schema } from "@handleplan/domain";
+import { TJEK_SOURCE_ID, createTjekHandlers, type TjekFoundationDependencies, type TjekHandlerDependencies } from "./tjek-handlers";
 import { createKassalappHandlers } from "./kassalapp-handlers";
 import { WorkerRunner } from "./runner";
 import {
@@ -222,6 +223,19 @@ const JOB_KIND_BY_REQUEST_SCOPE: Readonly<
   "physical-store": "physical-store-sync",
   "price-history": "historical-observation-collection",
 };
+
+export function createTjekRequestAttemptAuthorizer(
+  policy: TjekFoundationDependencies["sourceAccessPolicy"],
+): (signal?: AbortSignal) => Promise<void> {
+  return async (signal) => {
+    const fence = officialOfferAuthorizationFenceV1Schema.parse(
+      await policy.getDecision(TJEK_SOURCE_ID, "discover", new Date().toISOString(), signal ?? new AbortController().signal),
+    );
+    if (!fence.capabilities.includes("discover")) {
+      throw new Error("Tjek request attempt is not authorized");
+    }
+  };
+}
 
 export function createKassalappRequestAttemptAuthorizer(
   policy: KassalappSourceAccessPolicy,
@@ -464,7 +478,7 @@ export function createProductionWorkerRuntime<RunHandle = unknown>(
       })
     : {};
 
-  const tjekHandlers = dependencies.tjek !== undefined ? createTjekHandlers({ client: new TjekClient({ apiKey: dependencies.tjek.apiKey }), foundation: dependencies.tjek.foundation }) : {};
+  const tjekHandlers = dependencies.tjek !== undefined ? createTjekHandlers({ client: new TjekClient({ apiKey: dependencies.tjek.apiKey, authorizeRequestAttempt: createTjekRequestAttemptAuthorizer(dependencies.tjek.foundation.sourceAccessPolicy) }), foundation: dependencies.tjek.foundation }) : {};
 
   const handlers = { ...kassalappHandlers, ...openPricesHandlers, ...tjekHandlers };
 
