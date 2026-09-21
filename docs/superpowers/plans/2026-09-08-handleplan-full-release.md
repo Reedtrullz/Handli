@@ -633,7 +633,7 @@ git commit -m "feat: add governed MENY offer intake"
 **Interfaces:** Consumes the source-authority decision and protected raw capture. Produces candidates conforming to existing extractedOfficialOfferCandidateV1Schema and an existing foundation structured/embedded-text extractor port. No alternative publication or review interface.
 
 
-- [ ] **Step 1: Discover one authorized current edition** — done in substance 2026-09-21: discovery JSON + 14.7 MB PDF captured (see `docs/evidence/release-readiness/spar-source.md`); step stays open only because authorization evidence for routine intake is not yet recorded.
+- [x] **Step 1: Discover one authorized current edition** — done 2026-09-21: discovery JSON + 14.7 MB PDF captured (see `docs/evidence/release-readiness/spar-source.md`). 2026-09-22: OCR capability evaluated offline (tesseract 5.5.3 + nor traineddata on five sample pages): names/units/before-prices read cleanly but offer prices in stylized badge type are unreliably captured and block association cannot prove completeness — OCR is not a proven automated offer-price capability. SPAR remains BLOCKED pending a structured feed or an explicit reviewed-manual-OCR decision.
 
 Read `https://spar.no/api/kundeavis?postCode=7011` with one bounded request after approval. Follow only the returned official destination; preserve status and timestamp. The observed destination is a PDF. Use embedded text first; OCR requires explicit source capability and reviewed evidence. Do not assume postcode7011 defines the whole launch region.
 

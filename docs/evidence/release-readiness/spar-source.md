@@ -127,3 +127,12 @@ source capability plus reviewed evidence, neither of which is present. SPAR
 offer delivery remains blocked until SPAR provides either a text-based PDF or
 an official structured offer feed, or an explicit OCR capability decision with
 reviewed evidence is approved separately.
+
+## OCR capability evaluation (2026-09-22)
+
+Tesseract 5.5.3 (Homebrew) with the `nor` traineddata pack was installed and run on five sample pages (1-5) of the captured Uke 39 PDF at psm 3. This was an offline evaluation of the PDF bytes already captured on 2026-09-21; no new source requests were made.
+
+Results: product names, brand/producer lines, unit labels and before-prices ("Førpris: 339,00") OCR cleanly. However, the offer prices themselves are unreliably captured: page 5 shows five "Førpris" values but only a subset of the offer prices; page 1 misses the "Norske epler" price almost entirely; page 4's klementiner block has no price. The prices are set in large stylized display type on colored badges, which the OCR pass frequently fails to read. Multi-column block association (name-price-unit grouping) is also unreliable at psm 3.
+
+Verdict: OCR is not proven as an offer-price extraction capability. It fails the fail-closed bar because the pipeline cannot know which offer blocks were dropped, so per-block human review of every page would be required each week - a reviewed-manual-OCR pipeline, not an automated capability. SPAR ingestion remains BLOCKED pending either (a) a source-authorized structured offer feed, or (b) an explicit user decision to fund a reviewed per-block manual-OCR workflow. Raw bytes (14.7 MB PDF, sha256 f8b00e8d...f81c29) and page JPEGs stay private in /tmp; nothing committed.
+
