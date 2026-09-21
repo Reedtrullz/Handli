@@ -633,12 +633,14 @@ git commit -m "feat: add governed MENY offer intake"
 **Interfaces:** Consumes the source-authority decision and protected raw capture. Produces candidates conforming to existing extractedOfficialOfferCandidateV1Schema and an existing foundation structured/embedded-text extractor port. No alternative publication or review interface.
 
 
-- [ ] **Step 1: Discover one authorized current edition**
+- [ ] **Step 1: Discover one authorized current edition** — done in substance 2026-09-21: discovery JSON + 14.7 MB PDF captured (see `docs/evidence/release-readiness/spar-source.md`); step stays open only because authorization evidence for routine intake is not yet recorded.
 
 Read `https://spar.no/api/kundeavis?postCode=7011` with one bounded request after approval. Follow only the returned official destination; preserve status and timestamp. The observed destination is a PDF. Use embedded text first; OCR requires explicit source capability and reviewed evidence. Do not assume postcode7011 defines the whole launch region.
 
 
-- [ ] **Step 2: Create a concrete source contract**
+- [ ] **Step 2: Create a concrete source contract** — BLOCKED: the discovered edition is an image-only PDF with no embedded text; extraction requires the OCR capability decision, which no source evidence currently supports.
+
+
 
 Retain approved private payload bytes and checksum. In the redacted source note enumerate exact JSON paths or PDF page/text anchors for name, offer price, before price, quantity, currency, validity, scope, member/multibuy/channel conditions and image rights. For each missing field write the actual rejection/review reason. Capture at least one ordinary unit offer, one conditional/ambiguous offer and one invalid/expired input. If the source cannot provide these, this task remains blocked rather than claiming an implemented feed.
 
@@ -686,7 +688,7 @@ git commit -m "feat: add governed SPAR offer intake"
 **Interfaces:** Consumes the source-authority decision and protected raw capture. Produces candidates conforming to existing extractedOfficialOfferCandidateV1Schema and an existing foundation structured/embedded-text extractor port. No alternative publication or review interface.
 
 
-- [ ] **Step 1: Discover one authorized current edition**
+- [ ] **Step 1: Discover one authorized current edition** — attempted 2026-09-21: discovery restored, viewer is a Flipsnack SPA with zero observable offer data (`docs/evidence/release-readiness/joker-source.md`); BLOCKED pending an authorized structured feed.
 
 Read `https://joker.no/api/kundeavis?postCode=7011` with one bounded request after approval. Follow only the returned official destination; preserve status and timestamp. The observed destination returned403. Stop on access denial; obtain an authorized feed or permitted alternative. Do not route around the denial. Do not assume postcode7011 defines the whole launch region.
 
@@ -739,7 +741,7 @@ git commit -m "feat: add governed Joker offer intake"
 **Interfaces:** Consumes the source-authority decision and protected raw capture. Produces candidates conforming to existing extractedOfficialOfferCandidateV1Schema and an existing foundation structured/embedded-text extractor port. No alternative publication or review interface.
 
 
-- [ ] **Step 1: Discover one authorized current edition**
+- [ ] **Step 1: Discover one authorized current edition** — attempted 2026-09-21: Zmags viewer; structured offers unreachable within budget, viewer-config probe HTTP 500 (`docs/evidence/release-readiness/europris-source.md`); BLOCKED pending authorized feed access or viewer-parameter observation.
 
 Read `https://www.europris.no/kundeavis` with one bounded request after approval. Follow only the returned official destination; preserve status and timestamp. The observed viewer is Zmags. Identify an actual structured offer/enrichment payload or obtain an approved feed; publication metadata alone is insufficient. Do not assume postcode7011 defines the whole launch region.
 
