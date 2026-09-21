@@ -9,6 +9,7 @@ import {
   OfficialOfferLifecycleJobExecutor,
   type OfficialOfferLifecycleReceiptV1,
   type OfficialOfferLifecycleRepositoryPort,
+  startOfficialOfferLifecycleLoop,
 } from "./official-offer-lifecycle";
 
 const SCHEDULED_AT = new Date("2026-07-17T08:00:00.000Z");
@@ -163,5 +164,70 @@ describe("official-offer lifecycle schedule", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+describe("startOfficialOfferLifecycleLoop", () => {
+  it("runs on its own interval independent of any ingestion cycle", async () => {
+    vi.useFakeTimers();
+    try {
+      const reconcile = vi.fn<OfficialOfferLifecycleRepositoryPort["reconcile"]>()
+        .mockResolvedValue(RECEIPT);
+      const controller = new AbortController();
+      const receipts: OfficialOfferLifecycleReceiptV1[] = [];
+      startOfficialOfferLifecycleLoop({
+        ownerId: "worker", repository: { reconcile }, sourceId: "synthetic-source",
+        intervalMs: 60_000, onReceipt: (receipt) => receipts.push(receipt), signal: controller.signal,
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reconcile).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reconcile).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(reconcile).toHaveBeenCalledTimes(2);
+      expect(receipts).toHaveLength(2);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reconcile).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("logs a failed reconcile and retries on the next tick without throwing", async () => {
+    vi.useFakeTimers();
+    const logged: unknown[] = [];
+    const originalError = console.error;
+    console.error = (value: unknown) => { logged.push(value); };
+    try {
+      const reconcile = vi.fn<OfficialOfferLifecycleRepositoryPort["reconcile"]>()
+        .mockRejectedValueOnce(new Error("database unavailable"))
+        .mockResolvedValue(RECEIPT);
+      const controller = new AbortController();
+      startOfficialOfferLifecycleLoop({
+        ownerId: "worker", repository: { reconcile }, sourceId: "synthetic-source",
+        intervalMs: 60_000, signal: controller.signal,
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reconcile).toHaveBeenCalledTimes(2);
+      expect(logged).toHaveLength(1);
+      controller.abort();
+    } finally {
+      console.error = originalError;
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects intervals outside the 15-minute bound", () => {
+    const reconcile = vi.fn<OfficialOfferLifecycleRepositoryPort["reconcile"]>();
+    const signal = AbortSignal.abort();
+    expect(() => startOfficialOfferLifecycleLoop({
+      ownerId: "worker", repository: { reconcile }, sourceId: "synthetic-source",
+      intervalMs: 500, signal,
+    })).toThrow("intervalMs");
+    expect(() => startOfficialOfferLifecycleLoop({
+      ownerId: "worker", repository: { reconcile }, sourceId: "synthetic-source",
+      intervalMs: 15 * 60 * 1_000 + 1, signal,
+    })).toThrow("intervalMs");
   });
 });

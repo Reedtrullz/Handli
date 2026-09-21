@@ -28,7 +28,7 @@ import {
   createProductionWorkerRuntime,
 } from "./production";
 import { superviseWorker } from "./supervisor";
-import { createOfficialOfferLifecycleScheduler } from "./official-offer-lifecycle";
+import { startOfficialOfferLifecycleLoop } from "./official-offer-lifecycle";
 import { createTjekFoundationDependencies } from "./tjek-production";
 import { createMenyFoundationDependencies } from "./meny-production";
 
@@ -135,42 +135,38 @@ export async function runProductionWorkerProcess(
         productionEnv.targetLimit,
       ),
     });
-    const lifecycleSchedulers = [
-      ...(productionEnv.tjekEnabled ? [createOfficialOfferLifecycleScheduler({
+    // Dedicated lifecycle execution: a long ingestion cycle must not delay
+    // expiry past the documented 15-minute slot.
+    const lifecycleAbort = new AbortController();
+    signal.addEventListener("abort", () => lifecycleAbort.abort(), { once: true });
+    const lifecycleLoops = [
+      ...(productionEnv.tjekEnabled ? [startOfficialOfferLifecycleLoop({
         ownerId: workerOwnerId(),
         repository: new PostgresOfficialOfferLifecycleRepository(connection.db),
+        signal: lifecycleAbort.signal,
         sourceId: "tjek",
       })] : []),
-      ...(productionEnv.menyEnabled ? [createOfficialOfferLifecycleScheduler({
+      ...(productionEnv.menyEnabled ? [startOfficialOfferLifecycleLoop({
         ownerId: workerOwnerId(),
         repository: new PostgresOfficialOfferLifecycleRepository(connection.db),
+        signal: lifecycleAbort.signal,
         sourceId: "meny",
       })] : []),
     ];
-    const lifecycle = lifecycleSchedulers.length > 0
-      ? async (asOf: Date, lifecycleSignal: AbortSignal) => {
-          for (const scheduler of lifecycleSchedulers) {
-            if (lifecycleSignal.aborted) break;
-            await scheduler(asOf, lifecycleSignal);
-          }
-        }
-      : undefined;
     const healthServer = await startWorkerHealthServer(health);
     try {
       return await superviseWorker({
         get exitCode() { return runtime.exitCode; },
         requestShutdown: () => runtime.requestShutdown(),
-        async runCycle() {
-          const result = await runtime.runCycle();
-          if (!signal.aborted) await lifecycle?.(new Date(), signal);
-          return result;
-        },
+        runCycle: () => runtime.runCycle(),
       }, {
         cycleIntervalMs: runtimeEnv.cycleIntervalMs,
         observer: health,
         signal,
       });
     } finally {
+      lifecycleAbort.abort();
+      await Promise.allSettled(lifecycleLoops.map((loop) => loop.stopped));
       health.schedulerStopping();
       await healthServer.close();
     }

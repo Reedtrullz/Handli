@@ -12,7 +12,8 @@ of successful PostgreSQL intake or public publication. Resolve these boundaries 
 The domain activation flag is enabled, but the independent database publication policy
 remains a separate gate. With `TJEK_ENABLED=true`, production discovers catalogues daily,
 uses the foundation repository and private blob store, and reconciles the dedicated SQL
-lifecycle every 15-minute slot after a worker cycle. Enabling the worker does not approve
+lifecycle every 15-minute slot on an independent timer decoupled from ingestion-cycle
+duration. Enabling the worker does not approve
 candidates or enable the database publication policy.
 
 Bunnpris uses Incito; Extra and REMA use the paged Tjek offer endpoint. Raw catalogue and
