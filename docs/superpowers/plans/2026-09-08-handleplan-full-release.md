@@ -580,22 +580,22 @@ git commit -m "feat: ingest Extra offers only with verified geographic scope"
 **Interfaces:** Consumes the source-authority decision and protected raw capture. Produces candidates conforming to existing extractedOfficialOfferCandidateV1Schema and an existing foundation structured/embedded-text extractor port. No alternative publication or review interface.
 
 
-- [ ] **Step 1: Discover one authorized current edition**
+- [x] **Step 1: Discover one authorized current edition**
 
 Read `https://meny.no/api/kundeavis?postCode=7011` with one bounded request after approval. Follow only the returned official destination; preserve status and timestamp. The observed destination uses iPaper. Inspect its actual enrichment data; viewer-language defaults are not offer currency. Do not assume postcode7011 defines the whole launch region.
 
 
-- [ ] **Step 2: Create a concrete source contract**
+- [x] **Step 2: Create a concrete source contract**
 
 Retain approved private payload bytes and checksum. In the redacted source note enumerate exact JSON paths or PDF page/text anchors for name, offer price, before price, quantity, currency, validity, scope, member/multibuy/channel conditions and image rights. For each missing field write the actual rejection/review reason. Capture at least one ordinary unit offer, one conditional/ambiguous offer and one invalid/expired input. If the source cannot provide these, this task remains blocked rather than claiming an implemented feed.
 
 
-- [ ] **Step 3: Write and review the source-specific implementation plan**
+- [x] **Step 3: Write and review the source-specific implementation plan**
 
 Write `docs/superpowers/plans/2026-09-08-meny-offer-adapter.md` using writing-plans once the actual payload is known. Include byte-derived red/green fixtures, complete extractor code for the observed paths, the existing foundation port type, request cap/timeout, approved rights, explicit failures and scoped geographic resolver. The parser cannot be safely specified before this observation; this deliverable is a mandatory design gate, not an omitted implementation task.
 
 
-- [ ] **Step 4: Execute the verified source plan**
+- [ ] **Step 4: Execute the verified source plan** — extractor implemented and fixture-tested (`apps/worker/src/meny-offers.ts`, 9 tests, commit `3470bbd`); the foundation-pipeline connection stays open because runtime dispatch and the `data_sources` row are blocked on the geographic-scope authority decision (see adapter plan Task B).
 
 Run its fixture regression red, implement the smallest extractor in the named file and connect only the existing foundation pipeline. Never fabricate exact IDs or treat marketing before-prices as verified savings. Keep uncertain fields as review evidence and refuse invalid monetary values.
 
