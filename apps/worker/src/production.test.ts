@@ -11,6 +11,7 @@ import {
   createKassalappRequestAttemptAuthorizer,
   createProductionWorkerRuntime,
 } from "./production";
+import { createOpenPricesHandlers } from "./open-prices-handlers";
 import type { WorkerRunResult } from "./contracts";
 import type { KassalappSourceAccessPolicy } from "./kassalapp-handlers";
 
@@ -333,5 +334,47 @@ describe("production worker adapters", () => {
     expect(gateway.getSourceProductByEan).not.toHaveBeenCalled();
     expect(ingestionRepository.beginRun).not.toHaveBeenCalled();
     expect(state.recordResult).toHaveBeenCalledOnce();
+  });
+
+  it("records an open-prices provider miss without evidence or scope assignment", async () => {
+    const handlerDeps = {
+      clock: () => new Date("2026-09-21T10:00:00.000Z"),
+      client: { getPricesForGtins: vi.fn(async () => []) },
+      repository: {
+        beginRun: vi.fn(async () => ({ handle: { runId: "run-1" } })),
+        persistPriceOutcomes: vi.fn(),
+        finalizeRun: vi.fn(async (_handle: unknown, _input: { status: string }) => ({
+          counts: { accepted: 0, failed: 0, fetched: 0, persisted: 0, quarantined: 0, unknown: 0 },
+        })),
+      },
+      sourceAccessPolicy: { getAccessState: vi.fn(async () => "approved" as const) },
+      targetProvider: {
+        getBenchmarkPriceTargets: vi.fn(async () => [
+          { ean: "7038010000010" },
+          { ean: "7040000000009" },
+        ]),
+      },
+    };
+    const handler = createOpenPricesHandlers(handlerDeps)["open-prices-benchmark-refresh"]!;
+    const result = await handler({
+      fenceToken: "fence-1",
+      jobId: "job-1",
+      kind: "open-prices-benchmark-refresh",
+      runId: "run-1",
+      signal: SIGNAL,
+      sourceId: "open-prices",
+    });
+    expect(result.counters).toEqual({
+      accepted: 0,
+      failed: 0,
+      fetched: 0,
+      persisted: 0,
+      quarantined: 0,
+      unknown: 0,
+    });
+    expect(handlerDeps.repository.beginRun).toHaveBeenCalledTimes(1);
+    expect(handlerDeps.repository.persistPriceOutcomes).not.toHaveBeenCalled();
+    expect(handlerDeps.repository.finalizeRun).toHaveBeenCalledTimes(1);
+    expect(handlerDeps.repository.finalizeRun.mock.calls[0]?.[1]).toMatchObject({ status: "completed" });
   });
 });

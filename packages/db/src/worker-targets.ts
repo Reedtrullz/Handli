@@ -63,6 +63,38 @@ export function catalogDiscoveryPageForCompletedRuns(completedRuns: number): num
   return 2 + (deepPageIndex % 99);
 }
 
+export function completedRunsForRotation(
+  rows: readonly { completed_runs?: number | null }[],
+): number {
+  const value = rows[0]?.completed_runs;
+  if (value === null || value === undefined) return 0;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError("PostgreSQL returned an invalid completed-run cursor");
+  }
+  return value;
+}
+
+export function priceTargetPageState(
+  completedRuns: number,
+  eligibleCount: number,
+  pageLimit: number,
+): number {
+  if (!Number.isSafeInteger(completedRuns) || completedRuns < 0) {
+    throw new TypeError("completedRuns must be a non-negative safe integer");
+  }
+  if (!Number.isSafeInteger(eligibleCount) || eligibleCount < 0) {
+    throw new TypeError("eligibleCount must be a non-negative safe integer");
+  }
+  if (!Number.isSafeInteger(pageLimit) || pageLimit < 1) {
+    throw new TypeError("pageLimit must be a positive safe integer");
+  }
+  // Full-page rotation: each completed run advances one whole page so a starved
+  // prefix cannot pin the window, and every eligible target is revisited once
+  // per ceil(eligibleCount / pageLimit) runs.
+  const pageCount = Math.max(Math.ceil(eligibleCount / pageLimit), 1);
+  return (completedRuns % pageCount) * pageLimit;
+}
+
 export class PostgresWorkerGtinTargetReader implements WorkerGtinTargetReader {
   constructor(private readonly db: HandleplanDatabase) {}
 
@@ -161,6 +193,32 @@ export class PostgresWorkerGtinTargetReader implements WorkerGtinTargetReader {
     if (claimEligibility !== "ordinary_only" && claimEligibility !== "historical_eligible") {
       throw new TypeError("Unsupported price target class");
     }
+    // Cursor counts mirror the page query filters below; keep them in sync so
+    // the rotation cycle reaches every eligible target.
+    const cursorRows = await awaitAbortable(this.db.$client<Array<{ eligible: number; completed_runs: number }>>`
+      select
+        (
+          select count(*)::integer
+          from product_identifiers identifier
+          join canonical_products product on product.id = identifier.product_id
+          where identifier.scheme in ('ean8', 'ean13')
+            and identifier.verified_at is not null
+            and product.status = 'active'
+        ) as eligible,
+        (
+          select count(*)::integer
+          from ingestion_runs
+          where source_id = 'kassalapp'
+            and run_type = any (array['benchmark-prices', 'historical-prices'])
+            and status = 'completed'
+        ) as completed_runs
+    `, signal);
+    if (signal?.aborted) throw cancelledError();
+    const offset = priceTargetPageState(
+      completedRunsForRotation(cursorRows),
+      cursorRows[0]?.eligible ?? 0,
+      limit,
+    );
     const rows = await awaitAbortable(this.db.$client<Array<{ ean: string }>>`
       select identifier.value as ean
       from product_identifiers identifier
@@ -177,7 +235,7 @@ export class PostgresWorkerGtinTargetReader implements WorkerGtinTargetReader {
         and identifier.verified_at is not null
         and product.status = 'active'
       order by refresh.last_refreshed_at asc nulls first, identifier.value asc
-      limit ${limit}
+      limit ${limit} offset ${offset}
     `, signal);
     if (signal?.aborted) throw cancelledError();
     return values(rows);
@@ -192,6 +250,43 @@ export class PostgresWorkerGtinTargetReader implements WorkerGtinTargetReader {
     if (!Array.isArray(chains) || chains.length === 0) {
       throw new TypeError("chains must be a non-empty array");
     }
+    // Cursor counts mirror the page query filters below; keep them in sync so
+    // the rotation cycle reaches every eligible target.
+    const cursorRows = await awaitAbortable(this.db.$client<Array<{ eligible: number; completed_runs: number }>>`
+      select
+        (
+          select count(*)::integer
+          from product_identifiers identifier
+          join canonical_products product on product.id = identifier.product_id
+          where identifier.scheme in ('ean8', 'ean13')
+            and identifier.value ~ '^([0-9]{8}|[0-9]{13})$'
+            and identifier.verified_at is not null
+            and product.status = 'active'
+            and not exists (
+              select 1
+              from price_observations obs
+              inner join ingestion_runs run on run.id = obs.ingestion_run_id
+              where obs.product_id = identifier.product_id
+                and obs.chain = ANY(${chains})
+                and obs.fetched_at > now() - interval '72 hours'
+                and run.status = 'completed'
+            )
+        ) as eligible,
+        (
+          select count(*)::integer
+          from ingestion_runs
+          where source_id = 'open-prices'
+            and run_type = any (array['benchmark-prices'])
+            and status = 'completed'
+        ) as completed_runs
+    `, signal);
+    if (signal?.aborted) throw cancelledError();
+    const pageLimit = Math.ceil(limit * 1.2);
+    const offset = priceTargetPageState(
+      completedRunsForRotation(cursorRows),
+      cursorRows[0]?.eligible ?? 0,
+      pageLimit,
+    );
     const rows = await awaitAbortable(this.db.$client<Array<{ ean: string }>>`
       select identifier.value as ean
       from product_identifiers identifier
@@ -211,7 +306,7 @@ export class PostgresWorkerGtinTargetReader implements WorkerGtinTargetReader {
             and run.status = 'completed'
         )
       order by identifier.value asc
-      limit ${Math.ceil(limit * 1.2)}::integer
+      limit ${pageLimit}::integer offset ${offset}::integer
     `, signal);
     if (signal?.aborted) throw cancelledError();
     return values(rows);
