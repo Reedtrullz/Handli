@@ -6,6 +6,11 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import StatusPage from "./page";
+import coverageManifest from "../../../../docs/data/launch-coverage.v1.json";
+
+const rowsPerRegion = coverageManifest.coverage.filter(
+  ({ regionId }) => regionId === "no-0301-oslo",
+).length;
 
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
@@ -28,7 +33,10 @@ describe("public coverage status", () => {
       for (const chain of ["Bunnpris", "REMA 1000", "Extra"]) {
         expect(within(section).getByText(chain)).toBeVisible();
       }
-      expect(within(section).getByText(/0 av 6 dataløp er lanseringsklare/i)).toBeVisible();
+      expect(
+        within(section)
+          .getByText(new RegExp(`0 av ${rowsPerRegion} dataløp er lanseringsklare`, "i")),
+      ).toBeVisible();
     }
   });
 
