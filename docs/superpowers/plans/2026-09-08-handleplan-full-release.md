@@ -420,7 +420,7 @@ git commit -m "docs: reconcile source authority and measured release coverage"
 **Interfaces:** Consumes approved source targets and provider evidence; produces current scoped ordinary-price observations and coverage checks through existing ingestion repository. Receipt prices without verified store mapping remain geographically unknown.
 
 
-- [ ] **Step 1: Preserve demonstrated trust regressions**
+- [x] **Step 1: Preserve demonstrated trust regressions**
 
 ```bash
 corepack pnpm --filter @handleplan/open-prices exec vitest run src/normalizer.test.ts
@@ -429,17 +429,17 @@ corepack pnpm --filter @handleplan/worker exec vitest run src/production.test.ts
 Assert discounted/unknown-discount receipts are quarantined and the Open Prices target provider never calls national-scope assignment. Reuse the existing regressions, not a duplicate suite.
 
 
-- [ ] **Step 2: Reproduce refresh starvation with actual targets**
+- [x] **Step 2: Reproduce refresh starvation with actual targets**
 
 Record current target selection for each required chain. Add a worker-target test containing more eligible targets than one batch, current and stale records, and explicit source missing-supported-chain responses. Assert subsequent runs advance to unrefreshed evidence and unknown is not translated to known-not-carried.
 
 
-- [ ] **Step 3: Implement the minimum target correction**
+- [x] **Step 3: Implement the minimum target correction**
 
 Change the shared worker-target query if coverage is caused by starvation; retain bounded pages, durable progress/oldest-first fairness and provider request budgets. If the provider does not have the chain, record upstream missing coverage and acquire another approved feed through Task6. Do not retry permanently missing records in a tight loop or fill prices from unrelated stores.
 
 
-- [ ] **Step 4: Verify ordinary-price coverage through a full scheduled cycle**
+- [x] **Step 4: Verify ordinary-price coverage through a full scheduled cycle**
 
 ```bash
 corepack pnpm --filter @handleplan/db exec vitest run src/worker-targets.test.ts
@@ -449,7 +449,7 @@ corepack pnpm --filter @handleplan/open-prices typecheck
 In protected staging, compare two refresh cycles and source request budgets with coverage.csv. Empty chains remain release-blocking until supported evidence exists.
 
 
-- [ ] **Step 5: Commit the ordinary-price correction**
+- [x] **Step 5: Commit the ordinary-price correction**
 
 ```bash
 git add apps/worker/src/production.ts apps/worker/src/production.test.ts apps/worker/src/open-prices-handlers.ts packages/db/src/worker-targets.ts packages/db/src/worker-targets.test.ts packages/open-prices/src/normalizer.ts packages/open-prices/src/normalizer.test.ts
@@ -472,7 +472,7 @@ git commit -m "fix: refresh ordinary-price coverage without inventing scope"
 **Interfaces:** Consumes TjekClient.getOffersFromCatalog(catalog, signal) and createTjekFoundationDependencies(db, privateCaptureRoot); produces raw private captures and extracted review candidates via OfficialOfferFoundationPipeline.captureAndExtract.
 
 
-- [ ] **Step 1: Run the retained parser and intake checks**
+- [x] **Step 1: Run the retained parser and intake checks**
 
 ```bash
 corepack pnpm --filter @handleplan/tjek exec vitest run
@@ -481,12 +481,12 @@ corepack pnpm --filter @handleplan/worker exec vitest run src/tjek-handlers.test
 Bunnpris key comes only from runtime configuration. Assert failed requests, duplicate pages and malformed money fail; a short final paged response is complete even if advertised count differs.
 
 
-- [ ] **Step 2: Capture one current catalogue per chain**
+- [x] **Step 2: Capture one current catalogue per chain**
 
 Use approved configuration and a bounded AbortSignal. Confirm credentialed Bunnpris RPC succeeds. For REMA use catalog-object dispatch to the paged endpoint, not the legacy string overload. Retain full raw conditions/currency/quantity and catalogue scope; publish only redacted counts in tjek-live.md.
 
 
-- [ ] **Step 3: Make physical request governance complete**
+- [x] **Step 3: Make physical request governance complete**
 
 If needed, extend the existing options (not a new client abstraction):
 
@@ -500,12 +500,12 @@ At each existing physical fetch call, await that callback with the same signal b
 Trace listCatalogs, each paged request and each Incito detail request. Recheck persisted approval before every physical attempt using the existing source policy. Preserve429 handling and abort; do not introduce hidden retries. If the current client cannot inject authorization per attempt, add an optional awaitable callback to TjekClientOptions and exercise it at the shared physical-request boundary.
 
 
-- [ ] **Step 4: Distinguish review work from transport failure**
+- [x] **Step 4: Distinguish review work from transport failure**
 
 Use existing counters for fetched, persisted, quarantined and failed. Retain semantic uncertainty as review-required/degraded; do not erase EXTRACTOR_ANOMALY solely to achieve zero failures. Document the expected operational outcome and let monitoring distinguish review backlog from request/SQL failure.
 
 
-- [ ] **Step 5: Verify retry and commit**
+- [x] **Step 5: Verify retry and commit**
 
 ```bash
 corepack pnpm --filter @handleplan/tjek exec vitest run
@@ -530,7 +530,7 @@ git commit -m "feat: verify governed Bunnpris and REMA catalogue intake"
 **Interfaces:** Consumes current Extra catalogue plus source-backed store/region membership; produces OfficialOfferEditionDiscoveryInputV1 with a proven declaredGeographicScope and matching stored scope. all_stores:false and null store_id never imply national.
 
 
-- [ ] **Step 1: Keep the current rejection regression**
+- [x] **Step 1: Keep the current rejection regression**
 
 ```bash
 corepack pnpm --filter @handleplan/worker exec vitest run src/tjek-production.test.ts
@@ -538,7 +538,7 @@ corepack pnpm --filter @handleplan/worker exec vitest run src/tjek-production.te
 Confirm the all_stores:false catalogue remains rejected without positive scope evidence.
 
 
-- [ ] **Step 2: Resolve the catalogue-to-store mapping**
+- [x] **Step 2: Resolve the catalogue-to-store mapping**
 
 Inspect authorized retailer/store-specific catalogue discovery for the chosen geography. Record exact external edition ID and store directory identities, boundary dates and source reference. If no positive mapping exists, Extra stays blocked; do not hardcode nationwide scope or infer it from postcode alone.
 
@@ -556,7 +556,7 @@ corepack pnpm --filter @handleplan/worker exec vitest run src/tjek-production.te
 ```
 
 
-- [ ] **Step 5: Commit Extra scope support**
+- [x] **Step 5: Commit Extra scope support**
 
 ```bash
 git add apps/worker/src/tjek-production.ts apps/worker/src/tjek-production.test.ts apps/worker/src/tjek-production.integration.test.ts docs/evidence/release-readiness/extra-scope.md
