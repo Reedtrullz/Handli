@@ -2825,8 +2825,12 @@ import { spawnSync } from "node:child_process";
 const args = process.argv.slice(2).filter((value) => !value.startsWith("--dbname=service="));
 const connectionArgs = ${JSON.stringify(command === "pg_restore" ? [] : ["-U", role, "-d", database])};
 const child = spawnSync(${JSON.stringify(dockerBinary)}, [
-  "exec", "-i", "handleplan-task2b2-postgres", "env", ${JSON.stringify(`PGPASSWORD=${password}`)},
-  ${JSON.stringify(command)}, ...connectionArgs, ...args,
+  "run", "--rm", "-i", "--network", "host",
+  "-e", ${JSON.stringify(`PGPASSWORD=${password}`)},
+  ${JSON.stringify(postgresImage)}, ${JSON.stringify(command)},
+  "--host", ${JSON.stringify(postgresClientHost)},
+  "--port", ${JSON.stringify(postgresPort)},
+  ...connectionArgs, ...args,
 ], { stdio: "inherit" });
 process.exit(child.status ?? 1);
 `);
@@ -2954,7 +2958,9 @@ const args = process.argv.slice(2).filter((value) => !value.startsWith("--dbname
 const child = spawnSync(${JSON.stringify(dockerBinary)}, ["exec", "-i", ${JSON.stringify(restoreContainerName)}, "env", ${JSON.stringify(`PGPASSWORD=${restoreContainerPassword}`)}, "pg_restore", ...args], { stdio: "inherit" });
 process.exit(child.status ?? 1);
 `);
-  const sourceAdmin = postgres(localDatabaseUrl("postgres", 55442, "handleplan", "ci_admin_url_safe_0000000000000001"), { max: 1 });
+  const sourceAdminUrl = new URL(adminUrl);
+  sourceAdminUrl.pathname = "/postgres";
+  const sourceAdmin = postgres(sourceAdminUrl.toString(), { max: 1 });
   const [server] = await sourceAdmin`
     select encode(sha256(convert_to(system_identifier::text, 'UTF8')), 'hex') as server_id
     from pg_control_system()
@@ -3030,7 +3036,7 @@ process.exit(child.status ?? 1);
   assert.equal(restoreResult.evidence.status, "archive-restored-schema-verified");
   const restored = postgres(localDatabaseUrl(restoreDatabase, 55443, restoreRole, restoreContainerPassword), { max: 1, onnotice: () => {} });
   const [ledgerCount] = await restored`select count(*)::integer as count from handleplan_schema_migrations`;
-  assert.equal(ledgerCount.count, label === "baseline" ? 2 : 42);
+  assert.equal(ledgerCount.count, label === "baseline" ? 3 : 43);
   const [baselineState] = await restored`
     select to_regclass('public.handleplan_schema_baselines') is not null as exists
   `;
