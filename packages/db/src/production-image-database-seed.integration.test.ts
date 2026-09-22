@@ -550,6 +550,22 @@ describe.skipIf(!runProductionImageDatabaseSeed).sequential(
             }),
           }),
         ]));
+        const offerBackedDiscovery = await new PostgresPublicCatalogIndexReader(web.db, true)
+          .readDiscoveryPage({ limit: PUBLIC_DISCOVERY_CATALOG_SCAN_MAX }, evaluatedAt);
+        expect(offerBackedDiscovery.entries).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            product: expect.objectContaining({ gtin: fixture.gtin }),
+          }),
+        ]));
+        // Category provenance must bind to the same reviewed source as the
+        // reported catalog evidence; mixed provenance fails the public
+        // discovery response contract downstream.
+        for (const entry of offerBackedDiscovery.entries) {
+          const evidenceSourceId = entry.product.catalogEvidence.source.id;
+          expect(
+            (entry.categoryPath ?? []).every(({ sourceId }) => sourceId === evidenceSourceId),
+          ).toBe(true);
+        }
         const discoveryGtins = discoveryCatalog.entries
           .map(({ product }) => product.gtin)
           .sort();
