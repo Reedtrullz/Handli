@@ -265,6 +265,26 @@ describe("PostgresPublicCatalogIndexReader", () => {
       .resolves.toMatchObject({ entries: [{ categoryPath: null, product: { gtin: GTIN_MILK } }] });
   });
 
+  it("restricts the chain-scoped discovery window to fresh chain prices", async () => {
+    const scoped = databaseWith(() => resolvedQuery([discoveryRow()]));
+
+    await expect(new PostgresPublicCatalogIndexReader(scoped.db)
+      .readDiscoveryPage({ chain: "bunnpris", limit: 10 }, AT))
+      .resolves.toMatchObject({ entries: [{ product: { gtin: GTIN_MILK } }] });
+    expect(scoped.captures[0]!.sql).toContain("from public.price_observations fresh_chain_price");
+    expect(scoped.captures[0]!.parameters).toContain("bunnpris");
+  });
+
+  it("keeps the unfiltered discovery window when no chain is requested", async () => {
+    const unscoped = databaseWith(() => resolvedQuery([discoveryRow()]));
+
+    await expect(new PostgresPublicCatalogIndexReader(unscoped.db)
+      .readDiscoveryPage({ limit: 10 }, AT))
+      .resolves.toMatchObject({ entries: [{ product: { gtin: GTIN_MILK } }] });
+    expect(unscoped.captures[0]!.parameters).toContain(null);
+    expect(unscoped.captures[0]!.parameters).not.toContain("bunnpris");
+  });
+
   it.each([50, 51])("preserves continuation at the maximum scan size with %i catalog rows", async (count) => {
     const rows = Array.from({ length: count }, (_, index) => {
       const body = String(100000000000 + index);

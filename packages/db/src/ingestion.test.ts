@@ -120,6 +120,7 @@ describe("ingestion persistence primitives", () => {
   it("derives historical claim eligibility only from the fenced historical run type", () => {
     expect(claimEligibilityForRunType("historical-prices")).toBe("historical_eligible");
     expect(claimEligibilityForRunType("benchmark-prices")).toBe("ordinary_only");
+    expect(claimEligibilityForRunType("catalog")).toBe("ordinary_only");
     expect(() => claimEligibilityForRunType("prices")).toThrow(/exact supported ingestion run type/i);
   });
 

@@ -10,6 +10,7 @@ import { deriveWorkerSourceHealthSnapshot } from "./source-health-writer";
 export const WORKER_JOB_STATE_KINDS = [
   "catalog-refresh",
   "benchmark-price-refresh",
+  "store-catalog-price-refresh",
   "physical-store-sync",
   "historical-observation-collection",
   "open-prices-benchmark-refresh",

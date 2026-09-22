@@ -127,6 +127,7 @@ const currentMigrations = [
   "041_public_offer_projection_repair.sql",
   "042_official_offer_worker_boundary.sql",
   "043_meny_official_offer_source.sql",
+  "044_store_scoped_job_kind.sql",
 ];
 const legacy040SchemaFixture = resolve(
   root,
@@ -664,8 +665,9 @@ async function verifyBaselineActivation(sql) {
     "041_public_offer_projection_repair.sql",
     "042_official_offer_worker_boundary.sql",
     "043_meny_official_offer_source.sql",
+    "044_store_scoped_job_kind.sql",
   ]);
-  assert.equal(ledger.length, 3);
+  assert.equal(ledger.length, 4);
   const [projection] = await sql`
     select pg_catalog.pg_get_functiondef(
       'public.public_official_offer_rows_v1(bigint[], timestamptz)'::regprocedure
@@ -3036,7 +3038,7 @@ process.exit(child.status ?? 1);
   assert.equal(restoreResult.evidence.status, "archive-restored-schema-verified");
   const restored = postgres(localDatabaseUrl(restoreDatabase, 55443, restoreRole, restoreContainerPassword), { max: 1, onnotice: () => {} });
   const [ledgerCount] = await restored`select count(*)::integer as count from handleplan_schema_migrations`;
-  assert.equal(ledgerCount.count, label === "baseline" ? 3 : 43);
+  assert.equal(ledgerCount.count, label === "baseline" ? 4 : 44);
   const [baselineState] = await restored`
     select to_regclass('public.handleplan_schema_baselines') is not null as exists
   `;

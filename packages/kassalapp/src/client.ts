@@ -2,6 +2,7 @@ import type { PriceObservation, Product } from "@handleplan/domain";
 import { z } from "zod";
 
 import { normalizeBrowseResponse, normalizeBulkPriceResponse, normalizeSearchResponse } from "./schemas";
+import { normalizeStoreScopedProductPage } from "./source-contracts";
 import {
   type KassalappCategorySyncResultV1,
   type KassalappLabelSourceRecordV1,
@@ -9,6 +10,7 @@ import {
   type KassalappPhysicalStoreSourceRecordV1,
   type KassalappPriceSourceRecordV1,
   type KassalappProductSourceRecordV1,
+  type StoreScopedProductPageOutcome,
   type SourceRecordOutcome,
   canonicalizeSourceRecordOutcomes,
   isValidGtin,
@@ -120,6 +122,11 @@ export interface KassalappIngestionGateway {
   getSourcePhysicalStores(
     signal?: AbortSignal,
   ): Promise<KassalappPhysicalStoreSyncResultV1>;
+  getStoreScopedProducts(
+    chainCode: string,
+    page: number,
+    signal?: AbortSignal,
+  ): Promise<StoreScopedProductPageOutcome>;
 }
 
 export interface KassalappClientOptions {
@@ -507,6 +514,35 @@ export class KassalappClient implements KassalappGateway, KassalappIngestionGate
           : entry),
       outcomes: canonicalizeSourceRecordOutcomes(outcomes),
     };
+  }
+
+  async getStoreScopedProducts(
+    chainCode: string,
+    page: number,
+    signal?: AbortSignal,
+  ): Promise<StoreScopedProductPageOutcome> {
+    const parsed = z.object({
+      chainCode: z.string().trim().min(1).max(100),
+      page: z.number().int().min(1).max(10_000),
+    }).safeParse({ chainCode, page });
+    if (!parsed.success) throw new KassalappGatewayError("INVALID_REQUEST");
+    try {
+      const url = new URL(`${this.baseUrl}/products`);
+      url.searchParams.set("store", parsed.data.chainCode);
+      url.searchParams.set("page", String(parsed.data.page));
+      url.searchParams.set("size", "100");
+      url.searchParams.set("sort", "date_desc");
+      url.searchParams.set("unique", "1");
+      url.searchParams.set("exclude_without_ean", "1");
+      const response = await this.requestJson(url, { method: "GET" }, signal, "catalog");
+      return normalizeStoreScopedProductPage(response, {
+        chainCode: parsed.data.chainCode,
+        now: this.currentTime(),
+        retrievedAt: this.currentTime().toISOString(),
+      });
+    } catch (error) {
+      throw toGatewayError(error);
+    }
   }
 
   async getSourceBulkPrices(

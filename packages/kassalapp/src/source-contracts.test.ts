@@ -18,6 +18,7 @@ import {
   normalizeProductComparisonSourceResponse,
   normalizeProductPageSourceResponse,
   normalizeProductSourceResponse,
+  normalizeStoreScopedProductPage,
 } from "./source-contracts";
 
 const NOW = new Date("2026-07-16T12:00:00.000Z");
@@ -702,5 +703,90 @@ it("keeps accepted, unknown-price, and unknown-chain price states explicit", () 
     expect(() => normalizeCategorySourceResponse({
       data: Array.from({ length: 1001 }, (_, id) => ({ id, name: "category" })),
     }, RETRIEVED_AT)).toThrow();
+  });
+
+  it("normalizes store-scoped listing rows into catalog and current price records", () => {
+    expect(normalizeStoreScopedProductPage({
+      data: [{
+        created_at: "2026-07-15T08:30:00.000Z",
+        current_price: 21.9,
+        ean: "7038010000010",
+        id: "store-row-1",
+        name: "Tine Lettmelk",
+        price_history: [],
+        store: { code: "0130" },
+        updated_at: "2026-07-15T08:30:00.000Z",
+        weight: 1,
+        weight_unit: "l",
+      }],
+    }, {
+      chainCode: "REMA_1000",
+      now: NOW,
+      retrievedAt: RETRIEVED_AT,
+    })).toEqual({
+      catalogOutcomes: [
+        expect.objectContaining({
+          record: expect.objectContaining({
+            ean: "7038010000010",
+            name: "Tine Lettmelk",
+            packageMeasure: { amount: 1000, unit: "ml" },
+            sourceRecordId: "store-row-1",
+            sourceUpdatedAt: "2026-07-15T08:30:00.000Z",
+          }),
+          state: "accepted",
+        }),
+      ],
+      priceOutcomes: [
+        expect.objectContaining({
+          record: expect.objectContaining({
+            amountOre: 2190,
+            chainCode: "REMA_1000",
+            chainId: "rema-1000",
+            ean: "7038010000010",
+            observationKind: "current",
+            observedAt: "2026-07-15T08:30:00.000Z",
+          }),
+          state: "accepted",
+        }),
+      ],
+    });
+  });
+
+  it("quarantines malformed store-scoped rows and prices without a product", () => {
+    const page = normalizeStoreScopedProductPage({
+      data: [
+        { id: "row-broken", name: "" },
+        {
+          created_at: "2026-07-15T08:30:00.000Z",
+          current_price: 12.5,
+          ean: "7038010000013",
+          id: "row-invalid-ean",
+          name: "Checksum fail",
+          price_history: [],
+          store: { code: "0130" },
+          updated_at: "2026-07-15T08:30:00.000Z",
+        },
+        {
+          created_at: "2026-07-15T08:30:00.000Z",
+          current_price: null,
+          ean: "7038010000010",
+          id: "row-no-price",
+          name: "Tine Lettmelk",
+          price_history: [],
+          store: { code: "0130" },
+          updated_at: "2026-07-15T08:30:00.000Z",
+        },
+      ],
+    }, {
+      chainCode: "REMA_1000",
+      now: NOW,
+      retrievedAt: RETRIEVED_AT,
+    });
+    expect(page.catalogOutcomes).toEqual([
+      expect.objectContaining({ reason: "MALFORMED_RECORD", state: "quarantined" }),
+      expect.objectContaining({ reason: "INVALID_GTIN", state: "quarantined" }),
+      expect.objectContaining({ state: "accepted" }),
+    ]);
+    expect(page.priceOutcomes).toEqual([]);
   });
 });

@@ -22,6 +22,7 @@ export const OPERATIONAL_WORKER_JOB_KINDS = [
   "official-offer-ingestion",
   "official-offer-lifecycle-reconcile",
   "physical-store-sync",
+  "store-catalog-price-refresh",
 ] as const;
 
 const sourceIdSchema = z.string().trim().min(1).max(64)
@@ -161,6 +162,7 @@ export const sourceOperationalMetricsV1Schema = z.object({
     "official-offer-ingestion": workerJobEvidenceSchema,
     "official-offer-lifecycle-reconcile": workerJobEvidenceSchema,
     "physical-store-sync": workerJobEvidenceSchema,
+    "store-catalog-price-refresh": workerJobEvidenceSchema,
   }).strict(),
 }).strict();
 
@@ -209,6 +211,7 @@ export const OPERATIONS_RUNTIME_WORKER_JOB_KINDS = [
   "official-offer-ingestion",
   "official-offer-lifecycle-reconcile",
   "physical-store-sync",
+  "store-catalog-price-refresh",
 ] as const;
 
 export const operationsRuntimeWorkerJobKindSchema = z.enum(

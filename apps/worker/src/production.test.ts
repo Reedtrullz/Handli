@@ -37,6 +37,7 @@ describe("production worker adapters", () => {
       "catalog-refresh",
       "historical-observation-collection",
       "physical-store-sync",
+      "store-catalog-price-refresh",
     ]);
     expect(KASSALAPP_PRODUCTION_SCHEDULES.every(({ sourceId }) => sourceId === "kassalapp")).toBe(true);
     expect(KASSALAPP_PRODUCTION_SCHEDULES.every(({ intervalMs, timeoutMs }) =>
@@ -293,6 +294,10 @@ describe("production worker adapters", () => {
       getSourcePhysicalStores: vi.fn(),
       getSourceProductByEan: vi.fn(),
       getSourceProductById: vi.fn(),
+      getStoreScopedProducts: vi.fn(async () => ({
+        catalogOutcomes: [],
+        priceOutcomes: [],
+      })),
     };
     const ingestionRepository = {
       beginRun: vi.fn(),

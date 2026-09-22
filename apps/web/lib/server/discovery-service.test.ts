@@ -274,6 +274,28 @@ describe("DiscoveryService persisted composition", () => {
     });
   });
 
+  it("threads the chain filter into the persisted discovery read", async () => {
+    const catalog = catalogReader([products[0]!]);
+    const result = await new DiscoveryService({
+      catalog,
+      now: () => NOW,
+      priceService: { readExact: async () => priceResultFor([products[0]!]) },
+    }).discover({
+      chain: "extra",
+      contractVersion: 1,
+      marketContext: MARKET_CONTEXT,
+      pageSize: 8,
+      resultType: "all",
+    });
+
+    expect(catalog.readDiscoveryPage).toHaveBeenCalledWith(
+      { chain: "extra", limit: 50 },
+      NOW,
+      undefined,
+    );
+    expect(result.products).toHaveLength(1);
+  });
+
   it("deduplicates canonical aliases while preserving an exact-GTIN search", async () => {
     const alias: ExactProductPlanApiProductSummary = {
       ...products[0]!,
