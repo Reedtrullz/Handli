@@ -897,6 +897,8 @@ corepack pnpm --filter web exec vitest run lib/server/discovery-service.test.ts 
 ```
 Retain50/51 sentinel, duplicate merge, bigint strings, null-category rules and cursor cases.
 
+- [x] **Step 2: Restore multi-chain ordinary coverage (2026-09-22)** — diagnosis and fix chain: discovery rows only surfaced for chains with fresh prices, and REMA/Extra/Europris had no persisted prices because the worker only priced exact-EAN targets. Fix A (75c0ca4) scopes the discovery scan window to the requested chain's fresh prices; Fix B adds the store-catalog-price-refresh worker job that walks store-scoped REMA_1000 / COOP_EXTRA / EUROPRIS_NO listing pages, persists catalog rows first, then current prices (docs/evidence/release-readiness/store-catalog-price-refresh.md). Typecheck and focused suites green; deployment and live verification still pending.
+
 
 - [ ] **Step 2: Add a reviewed identifier end-to-end case**
 

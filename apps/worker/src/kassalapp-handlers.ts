@@ -8,9 +8,11 @@ import {
   type KassalappPhysicalStoreSourceRecordV1,
   type KassalappPriceSourceRecordV1,
   type KassalappProductSourceRecordV1,
+  type StoreScopedProductPageOutcome,
   type SourceRecordOutcome,
   isValidGtin,
 } from "@handleplan/kassalapp";
+import { KassalappGatewayError } from "@handleplan/kassalapp";
 
 import type {
   KassalappWorkerJobKind,
@@ -31,13 +33,18 @@ const RUN_TYPE_BY_JOB_KIND: Readonly<Record<KassalappWorkerJobKind, string>> = {
   "catalog-refresh": "catalog",
   "historical-observation-collection": "historical-prices",
   "physical-store-sync": "physical-stores",
+  "store-catalog-price-refresh": "catalog",
 };
 
 const CHAIN_BY_CODE: Readonly<Record<string, KassalappChainId>> = {
   BUNNPRIS: "bunnpris",
   COOP_EXTRA: "extra",
+  EUROPRIS_NO: "europris",
   REMA_1000: "rema-1000",
 };
+
+const STORE_WALK_CHAIN_CODES = ["REMA_1000", "COOP_EXTRA", "EUROPRIS_NO"] as const;
+const STORE_CATALOG_PAGES_PER_CHAIN = 12;
 
 export type KassalappSourceAccessState =
   | "approved"
@@ -685,6 +692,7 @@ function createExecutor<RunHandle>(
   prepare: (
     signal: AbortSignal,
     recheckAccess: (signal: AbortSignal) => Promise<void>,
+    jobId: string,
   ) => Promise<PreparedIngestion<RunHandle> | undefined>,
 ): WorkerJobHandler {
   const { repository, sourceAccessPolicy } = dependencies;
@@ -719,7 +727,7 @@ function createExecutor<RunHandle>(
 
       await recheckAccess(signal);
 
-      const prepared = await prepare(signal, recheckAccess);
+      const prepared = await prepare(signal, recheckAccess, jobId);
       throwIfCancelled(signal);
       if (prepared === undefined) return failedWithoutEvidence();
 
@@ -973,10 +981,90 @@ export function createKassalappHandlers<RunHandle>(
     };
   });
 
+  // Deterministic blind rotation: page offset from the scheduled jobId digits.
+  // Different schedule slots walk different upstream windows without persisted
+  // cursor state, and repeated walks self-heal upstream inserts/deletes.
+  function rotationPageFromJobId(jobId: string, pageCount: number): number {
+    const digits = jobId.replace(/\D/g, "");
+    const base = digits.length === 0
+      ? 0
+      : Number(digits.slice(-6)) % pageCount;
+    return base + 1;
+  }
+
+  const storeCatalogPriceRefresh = createExecutor(dependencies, "store-catalog-price-refresh", async (
+    signal,
+    recheckAccess,
+    jobId,
+  ) => {
+    const recordedAt = checkedNow(dependencies.clock);
+    const catalogOutcomes: KassalappCatalogIngestionOutcome[] = [];
+    const priceOutcomes: KassalappPriceIngestionOutcome[] = [];
+    let failed = 0;
+    let sawAnyEvidence = false;
+
+    for (const chainCode of STORE_WALK_CHAIN_CODES) {
+      const startPage = rotationPageFromJobId(jobId, STORE_CATALOG_PAGES_PER_CHAIN);
+      for (let offset = 0; offset < STORE_CATALOG_PAGES_PER_CHAIN; offset += 1) {
+        throwIfCancelled(signal);
+        const page = ((startPage - 1 + offset) % STORE_CATALOG_PAGES_PER_CHAIN) + 1;
+        let normalized: StoreScopedProductPageOutcome;
+        try {
+          normalized = await gateway.getStoreScopedProducts(chainCode, page, signal);
+        } catch (error) {
+          if (signal.aborted) throw error;
+          if (error instanceof KassalappGatewayError && error.code === "CANCELLED") throw error;
+          failed += 1;
+          continue;
+        }
+        if (
+          normalized.catalogOutcomes.length === 0
+          && normalized.priceOutcomes.length === 0
+        ) {
+          failed += 1;
+          continue;
+        }
+        sawAnyEvidence = sawAnyEvidence
+          || normalized.catalogOutcomes.length > 0
+          || normalized.priceOutcomes.length > 0;
+        catalogOutcomes.push(...normalized.catalogOutcomes.map((outcome) =>
+          mapCatalogOutcome(outcome, outcome.state === "accepted"
+            ? outcome.record.ean
+            : outcome.ean ?? outcome.sourceRecordId, recordedAt)));
+        priceOutcomes.push(...normalized.priceOutcomes.map((outcome) =>
+          mapPriceOutcome(outcome, new Map(), recordedAt)));
+      }
+    }
+
+    if (!sawAnyEvidence) return undefined;
+    return {
+      failed,
+      persist: async (handle, persistSignal) => {
+        // Catalog rows must persist first: price outcomes reference products
+        // that only exist once the catalog batch creates them.
+        await persistInBatches(
+          handle,
+          catalogOutcomes,
+          persistSignal,
+          recheckAccess,
+          (run, batch, batchSignal) => repository.persistCatalogOutcomes(run, batch, batchSignal),
+        );
+        await persistInBatches(
+          handle,
+          priceOutcomes,
+          persistSignal,
+          recheckAccess,
+          (run, batch, batchSignal) => repository.persistPriceOutcomes(run, batch, batchSignal),
+        );
+      },
+    };
+  });
+
   return {
     "benchmark-price-refresh": benchmarkPriceRefresh,
     "catalog-refresh": catalogRefresh,
     "historical-observation-collection": historicalObservationCollection,
     "physical-store-sync": physicalStoreSync,
+    "store-catalog-price-refresh": storeCatalogPriceRefresh,
   };
 }

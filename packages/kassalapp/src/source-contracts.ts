@@ -644,6 +644,182 @@ function priceSourceRecordId(
   return identity.join(":");
 }
 
+const storeScopedListingStoreSchema = z.object({
+  code: z.string().trim().min(1).max(100),
+});
+
+// Store-scoped product listing rows carry fewer fields than the full product
+// resource: store is a single object, category is absent, and price history
+// entries are always full timestamps. Only fields the catalog+price ingestion
+// consumes are declared; unrelated upstream additions are tolerated.
+const upstreamStoreScopedListingSchema = z.object({
+  id: sourceIdentifierSchema,
+  name: sourceStringSchema,
+  brand: z.string().max(500).nullable().optional(),
+  ean: z.string().trim().min(1).max(64).nullable(),
+  weight: z.number().finite().nullable().optional(),
+  weight_unit: z.string().trim().max(32).nullable().optional(),
+  current_price: z.number().finite().nullable(),
+  store: storeScopedListingStoreSchema.nullable(),
+  price_history: z.array(comparisonHistorySchema).max(10_000),
+  created_at: sourceTimestampSchema,
+  updated_at: sourceTimestampSchema,
+});
+
+const storeScopedListingEnvelopeSchema = z.object({
+  data: z.array(z.unknown()).max(100),
+});
+
+export interface StoreScopedProductNormalizationContext {
+  chainCode: string;
+  now: Date;
+  retrievedAt: string;
+}
+
+export interface StoreScopedProductPageOutcome {
+  readonly catalogOutcomes: SourceRecordOutcome<KassalappProductSourceRecordV1>[];
+  readonly priceOutcomes: SourceRecordOutcome<KassalappPriceSourceRecordV1>[];
+}
+
+/**
+ * Normalizes one store-scoped listing page into catalog outcomes (one per row)
+ * and price outcomes (one per row with a parseable current price on the
+ * requested chain). A row that fails parsing is quarantined for the catalog
+ * stream only; its price simply stays absent, mirroring the bulk-price model
+ * where malformed products contribute no price observations.
+ */
+export function normalizeStoreScopedProductPage(
+  input: unknown,
+  context: StoreScopedProductNormalizationContext,
+): StoreScopedProductPageOutcome {
+  const { nowMs, retrievedAt } = contextTimestamp(context.now, context.retrievedAt);
+  const envelope = storeScopedListingEnvelopeSchema.parse(input);
+  if (typeof context.chainCode !== "string" || context.chainCode.length < 1) {
+    throw new TypeError("Store-scoped normalization requires a non-empty chain code");
+  }
+  const chainId = CHAIN_BY_CODE[context.chainCode];
+  const catalogOutcomes: SourceRecordOutcome<KassalappProductSourceRecordV1>[] = [];
+  const priceOutcomes: SourceRecordOutcome<KassalappPriceSourceRecordV1>[] = [];
+
+  for (const [rowIndex, candidate] of envelope.data.entries()) {
+    const parsed = upstreamStoreScopedListingSchema.safeParse(candidate);
+    const sourceRecordId = safeSourceRecordId(
+      parsed.success ? parsed.data.id : (candidate as { id?: unknown })?.id,
+      `${context.chainCode}:listing-${rowIndex}`,
+    );
+    if (!parsed.success) {
+      catalogOutcomes.push({
+        state: "quarantined",
+        sourceRecordId,
+        reason: "MALFORMED_RECORD",
+      });
+      continue;
+    }
+    const row = parsed.data;
+    const ean = row.ean ?? "";
+    if (!isValidGtin(ean)) {
+      catalogOutcomes.push({
+        ...(ean === "" ? {} : { ean }),
+        state: "quarantined",
+        sourceRecordId,
+        reason: "INVALID_GTIN",
+      });
+      continue;
+    }
+    const sourceUpdatedAt = canonicalSourceTimestamp(row.updated_at);
+    if (timestampIsFuture(sourceUpdatedAt, nowMs)) {
+      catalogOutcomes.push({
+        ean,
+        state: "quarantined",
+        sourceRecordId,
+        reason: "FUTURE_TIMESTAMP",
+      });
+      continue;
+    }
+    const packageResult = normalizePackageMeasure(row.weight, row.weight_unit);
+    if (packageResult.state === "quarantined") {
+      catalogOutcomes.push({
+        ean,
+        state: "quarantined",
+        sourceRecordId,
+        reason: "INVALID_MEASURE",
+      });
+      continue;
+    }
+
+    const brand = row.brand === "" || row.brand === null || row.brand === undefined
+      ? undefined
+      : row.brand;
+    catalogOutcomes.push({
+      state: "accepted",
+      record: {
+        ...sourceBase(sourceRecordId, retrievedAt),
+        kind: "product",
+        ean,
+        name: row.name,
+        ...(brand === undefined ? {} : { brand }),
+        ...(packageResult.state === "normalized" ? { packageMeasure: packageResult.measure } : {}),
+        ...(packageResult.state === "unknown" ? {
+          packageMeasureState: packageResult.reason === "MISSING_MEASURE"
+            ? "missing" as const
+            : "unknown-unit" as const,
+        } : {}),
+        sourceUpdatedAt,
+      },
+    });
+
+    if (row.current_price === null || chainId === undefined) continue;
+    const parsedAmount = upstreamPriceAmountSchema.safeParse(row.current_price);
+    if (!parsedAmount.success) {
+      priceOutcomes.push({
+        chainCode: context.chainCode,
+        ean,
+        state: "quarantined",
+        sourceRecordId: priceSourceRecordId(ean, context.chainCode, "current", sourceUpdatedAt, undefined),
+        reason: "MALFORMED_RECORD",
+      });
+      continue;
+    }
+    const amountOre = Math.round(parsedAmount.data * 100);
+    const observedAt = canonicalSourceTimestamp(row.created_at);
+    if (timestampIsFuture(observedAt, nowMs)) {
+      priceOutcomes.push({
+        chainCode: context.chainCode,
+        ean,
+        state: "quarantined",
+        sourceRecordId: priceSourceRecordId(ean, context.chainCode, "current", observedAt, undefined),
+        reason: "FUTURE_TIMESTAMP",
+      });
+      continue;
+    }
+    const priceRecordId = priceSourceRecordId(
+      ean,
+      context.chainCode,
+      "current",
+      observedAt,
+      amountOre,
+    );
+    priceOutcomes.push({
+      state: "accepted",
+      record: {
+        ...sourceBase(priceRecordId, retrievedAt),
+        amountOre,
+        chainCode: context.chainCode,
+        chainId,
+        ean,
+        kind: "price",
+        observationKind: "current",
+        observedAt,
+      },
+    });
+  }
+
+  return {
+    catalogOutcomes: canonicalizeSourceRecordOutcomes(catalogOutcomes),
+    priceOutcomes: canonicalizeSourceRecordOutcomes(priceOutcomes),
+  };
+}
+
 export function normalizePriceSourceResponse(
   input: unknown,
   context: PriceNormalizationContext,

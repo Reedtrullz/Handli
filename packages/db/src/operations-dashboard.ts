@@ -247,6 +247,14 @@ function metricsFromRow(
       state: row.historical_ingestion_status,
       terminalizedAt: row.historical_ingestion_terminalized_at,
     }, at),
+    // Store-scoped walks have no dedicated legacy dashboard column; the
+    // migration-024 persistence boundary keeps their evidence, so report
+    // unknown until that reader consumes the new kind. Unknown is alerting.
+    "store-catalog-price-refresh": workerJobEvidence("store-catalog-price-refresh", {
+      completedAt: null,
+      state: null,
+      terminalizedAt: null,
+    }, at),
     // Source-neutral official-offer jobs are part of the fixed vocabulary, but
     // this legacy richer reader cannot trust them until it is moved behind the
     // migration-024 persistence boundary. Unknown is intentionally alerting.
