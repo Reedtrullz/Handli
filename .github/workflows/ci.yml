@@ -115,6 +115,10 @@ jobs:
         if: ${{ github.event_name == 'push' }}
         env:
           APP_COMMIT_SHA: ${{ github.sha }}
+          APP_DATABASE_PASSWORD: ci_app_url_safe_0000000000000000001
+          OPERATIONS_DATABASE_PASSWORD: ci_operations_url_safe_000000000001
+          POSTGRES_PASSWORD: ci_admin_url_safe_0000000000000001
+          REVIEW_DATABASE_PASSWORD: ci_review_url_safe_00000000000000001
           WEB_DATABASE_PASSWORD: ci_web_url_safe_0000000000000000001
         run: |
           set -eu
@@ -126,8 +130,36 @@ jobs:
           previous_archive=.artifacts/security/handleplan-previous-source.tar
           previous_image="handleplan:previous-$previous_revision"
           previous_container="handleplan-previous-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          previous_database="handleplan_previous_smoke_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          previous_migrate() {
+            env CI=true \
+              APP_DATABASE_PASSWORD="$APP_DATABASE_PASSWORD" \
+              WEB_DATABASE_PASSWORD="$WEB_DATABASE_PASSWORD" \
+              REVIEW_DATABASE_PASSWORD="$REVIEW_DATABASE_PASSWORD" \
+              OPERATIONS_DATABASE_PASSWORD="$OPERATIONS_DATABASE_PASSWORD" \
+              MIGRATIONS_DIR="$PWD/deploy/migrations" \
+              DATABASE_MIGRATION_URL="postgresql://handleplan:$POSTGRES_PASSWORD@127.0.0.1:5432/$previous_database" \
+              node deploy/migrate.mjs
+          }
+          restore_legacy_fixture() {
+            docker run --rm -i --network host \
+              --env PGPASSWORD="$POSTGRES_PASSWORD" \
+              --volume "$PWD/tests/acceptance/fixtures/legacy040:/fixtures:ro" \
+              postgres:16.10-alpine@sha256:ab8380566c3ea09690a9ecaa85a59d82bfc6eb86744151a2a54335866c83a3e9 \
+              psql --host 127.0.0.1 --port 5432 --username handleplan \
+                --dbname "$previous_database" --set ON_ERROR_STOP=1 \
+                --single-transaction --file="/fixtures/$1"
+          }
           cleanup_previous_smoke() {
             docker rm -f "$previous_container" >/dev/null 2>&1 || true
+            previous_cleanup_database
+          }
+          previous_cleanup_database() {
+            docker run --rm --network host \
+              --env PGPASSWORD="$POSTGRES_PASSWORD" \
+              postgres:16.10-alpine@sha256:ab8380566c3ea09690a9ecaa85a59d82bfc6eb86744151a2a54335866c83a3e9 \
+              sh -c 'dropdb --host 127.0.0.1 --port 5432 --username handleplan --if-exists --force "$1"' \
+              sh "$previous_database" || true
           }
           trap cleanup_previous_smoke EXIT HUP INT TERM
           git archive --format=tar --output="$previous_archive" "$previous_revision"
@@ -136,11 +168,22 @@ jobs:
           docker build --platform=linux/amd64 \
             --build-arg APP_COMMIT_SHA="$previous_revision" \
             --tag "$previous_image" - < "$previous_archive"
+          # The readiness probe inside the previous image is frozen at the
+          # legacy migration-ledger contract. Restore the authentic legacy040
+          # production shape (the same checksummed schema, ledger, and seed
+          # fixtures the upgrade prover applies), then run the full migration
+          # so the smoke database reaches HEAD the way a legacy install does:
+          # the post-040 suffix applied on a complete ledger.
+          previous_cleanup_database
+          restore_legacy_fixture legacy040-production-schema.sql
+          restore_legacy_fixture legacy040-production-ledger.sql
+          restore_legacy_fixture legacy040-canonical-seed.sql
+          previous_migrate
           docker run --detach --name "$previous_container" --network host \
             --read-only --cap-drop ALL --security-opt no-new-privileges:true \
             --tmpfs /tmp:rw,noexec,nosuid,size=64m \
             --env APP_COMMIT_SHA="$previous_revision" \
-            --env DATABASE_URL="postgresql://handleplan_web:$WEB_DATABASE_PASSWORD@127.0.0.1:5432/handleplan" \
+            --env DATABASE_URL="postgresql://handleplan_web:$WEB_DATABASE_PASSWORD@127.0.0.1:5432/$previous_database" \
             --env NEXT_TELEMETRY_DISABLED=1 --env NODE_ENV=production \
             --env PORT=3014 "$previous_image" >/dev/null
           previous_ready=0
