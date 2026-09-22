@@ -69,3 +69,37 @@ None. No fetched response carried geographic scope information. The kundeavis pa
 BLOCKED
 
 Reason: a structured offer payload was not reachable within the three-request budget; the viewer-configuration probe failed with HTTP 500 and the bootstrap JS exposes only publication-level services. Next step for a later approved round: capture the exact parameter set the live viewer sends (browser observation of requests to secure.viewer.zmags.com), then probe `/services/publicationInfo` and the inner viewer enrichment endpoints with those parameters.
+
+## 2026-09-22 — Browser-observation probe (live viewer session; two page loads max, no endpoint replay)
+
+**Method.** Bounded observation of the kundeavis viewer in an already-loaded Chrome tab via the CUA Playwright/CDP bridge. The two permitted page loads were consumed in the initial session; all later evidence was collected with zero new page loads by evaluating the live `secure.viewer.zmags.com/services/htmlviewer/content/3b50b26c?pubVersion=7&environment=2&locale=en&viewerID=993db7ef` frame. No authenticated endpoints, no replay of unobserved URLs, no probing beyond observed traffic. `functions.exec` was unavailable all session ("too many active cells"), so no response bodies could be dumped to /tmp; every fact below was transcribed live from the viewer session and re-verified in-frame on 2026-09-22.
+
+**Network requests observed to *.zmags.com / *.zma.gs (11 total across both page loads):**
+
+1. `GET https://secure.api.viewer.zmags.com/viewer/viewer.js` — 200, application/javascript (public viewer bootstrap).
+2.–9. Eight `GET https://cas.zma.gs/static/90b27b5d/*.js|css` — 200, static viewer assets (eight separate asset files under the same path prefix).
+10. `GET https://secure.stats.zmags.com/services/launchpage?brand=viewer.zmags.com&launchPage=viewer_api_html` — stats beacon.
+11. `GET https://cas.zma.gs/64d296c9b6fc7c5ba76fbd60/ssr/experiences/64e4d5ad6df9f10f7607589c/init.js` — 200, SSR bootstrapper, 58,761 chars. Contains `companyId 64d296c9b6fc7c5ba76fbd60`, `experienceId 64e4d5ad6df9f10f7607589c`; expects inline `preload_data_<experienceId>` / `behaviors_data_<experienceId>`. Zero occurrences of offer/product/hotspot/validity/quantity fields; the single `price` hit is a generic rule-engine `conditionType === 'price'`, not offer data. References `https://connect-adapter.api.zmags.com` and `/api/companies/{companyId}/experiences/…` only as code literals — never fetched in observed traffic.
+
+**No dedicated offer/enrichment JSON endpoint was observed in any load.**
+
+**Viewer-frame URL grammar (from the inline bootstrap script, 5,733 chars; re-verified live 2026-09-22):**
+
+- `publicationApiURL: https://secure.api.viewer.zmags.com/publication`
+- `serviceBaseURL: https://secure.viewer.zmags.com/services` with `publicationInfoServicePath: /publicationInfo`, `accessControlServicePath: /AccessControlJSON`
+- `resourceServicePath: /resource`
+- enrichmentDescriptor template: `/pub/{publicationID}/enr/{version}/{firstPageNumber}-{lastPageNumber}`
+- productsDescriptor template: `/pub/{publicationID}/product/{version}/{firstPageNumber}-{lastPageNumber}`
+- publicationDescriptor: `/pub/{publicationID}/{version}`
+- pageRepresentation: `/pub/{publicationID}/pg{width}x{height}/{version}/{pageNumber}`
+- publicationImage: `/pub/{publicationID}/image/{imageID}/{version}?maxWidth={maxWidth}&maxHeight={maxHeight}`
+- `productIndexPath: https://secure.viewer.zmags.com/services/publicationapi/resource/a1a7bb78/prodidx/3b50b26c/7/`
+- locale: `/locale/4/{locale}`; serviceConfiguration: `/service/{version}`; viewerConfiguration: `/viewer/993db7ef/7`
+
+**Publication descriptor (inline config):** title "DM 39-26 MYBRING", 14 pages, `pageAspectRatio: 0.7835365853658537`, `firstPageIsCoverPage: true`, **`pagesWithProducts: []` (empty — no commerce/product data configured for this publication)**, `pagesWithEnrichments: [1,2,3,4,5,6,7,8,9,10,11,12,13,14]`, hex pageIDs beginning `cd8fac00, e92e8d44, cd8e8d04, 692fac60, 4d8fac20, 692e8d64, 4d8e8d24, …`.
+
+**Live frame state (re-verified 2026-09-22 via in-frame DOM eval):** five page images fetched (`…/pg470x600/7/{1..5}?viewerID=993db7ef`); five `div.EnrichmentsContainer` elements, each containing only an empty hidden wrapper div (no hotspot or offer nodes); no `/enr/` or `/product/` request in resource timing or CDP traffic. Viewer core (642,103 chars inline) gates enrichment/product descriptor fetches behind a commerce flag (`if (w)`) and a per-active-page load flow (`enrichmentsDescriptorResourceID` + `productsDescriptorResourceID`, then `pageProductsDescriptor` / `pageEnrichments`). Startup console recorded `Uncaught Error: Mismatched anonymous define() module` from require.min.js plus `Uncaught SyntaxError: JSON.parse` at 126:60 and 2206:70 in the frame document — a malformed inline config blob at viewer startup may have killed enrichment initialization.
+
+**Offer fields:** name / price / before-price / quantity / unit / validity / conditions were **not** found in any observed payload. No JSON offer document was captured, so no JSON paths can be recorded.
+
+**Verdict upgrade: BLOCKED → PARTIAL.** Structured-data endpoints demonstrably exist and are documented in the viewer's own runtime configuration, and the viewer core contains the code path to fetch per-page enrichment/product descriptors. However, `pagesWithProducts` is empty for this publication, no enrichment/product JSON was ever observed on the wire across two full page loads plus the long-lived session, and the grammar-derived `/enr/` and `/product/` URLs remain unproven live — fetching them would be active probing beyond observed traffic, which is out of scope. Treat the URL grammar as a lead requiring its own bounded authorization, not as available data.
