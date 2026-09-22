@@ -108,6 +108,11 @@ describe("price-cache mappings", () => {
 
 const runDatabaseIntegration = process.env.RUN_DB_INTEGRATION === "1";
 const integrationNonce = String(Date.now() % 1_000_000_000).padStart(9, "0");
+// The evidence-reader governance tests exercise permission boundaries against a
+// dedicated fixture source. Sharing the production kassalapp source with the
+// ingestion suite let concurrently running test files overwrite each other
+// latest permission rows and quarantine otherwise-approved price outcomes.
+const mirrorSourceId = `price-cache-mirror-${integrationNonce}`;
 
 function integrationEan(suffix: number): string {
   return `703${integrationNonce.slice(0, 8)}${String(suffix).padStart(2, "0")}`;
@@ -143,6 +148,11 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
     connection = createDatabase(process.env.DATABASE_URL);
     cache = new PostgresPriceCache(connection.db);
     await connection.sql`delete from price_cache`;
+    await connection.sql`
+      insert into data_sources (id, display_name, source_kind, runtime_state)
+      values (${mirrorSourceId}, ${`Price cache mirror fixture ${integrationNonce}`},
+        'ordinary_price', 'conditional') on conflict (id) do nothing
+    `;
   });
 
   afterAll(async () => {
@@ -324,12 +334,12 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       returning id
     `;
     await connection.sql`
-      insert into product_identifiers (
-        product_id, scheme, value, source_id, confidence
-      ) values (${wrongProduct!.id}, 'source', ${ean}, 'kassalapp', 100)
-    `;
+        insert into product_identifiers (
+          product_id, scheme, value, source_id, confidence
+        ) values (${wrongProduct!.id}, 'source', ${ean}, 'kassalapp', 100)
+      `;
 
-    await cache.putMany([{ ...observation, ean }]);
+      await cache.putMany([{ ...observation, ean }]);
 
     const [resolved] = await connection.sql`
       select po.product_id, pi.scheme
@@ -359,9 +369,9 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       connection.sql`
         insert into product_identifiers (
           product_id, scheme, value, source_id, confidence
-        ) values (${firstProduct!.id}, 'ean13', ${integrationEan(4)}, 'kassalapp', 100)
-      `,
-    ).rejects.toThrow(/product_identifiers_source_scope/i);
+        ) values (${firstProduct!.id}, 'ean13', ${integrationEan(4)}, ${mirrorSourceId}, 100)
+        `,
+      ).rejects.toThrow(/product_identifiers_source_scope/i);
     await expect(
       connection.sql`
         insert into product_identifiers (
@@ -374,16 +384,16 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       insert into product_identifiers (
         product_id, scheme, value, source_id, confidence
       ) values
-        (${firstProduct!.id}, 'source', ${scopedValue}, 'kassalapp', 100),
+        (${firstProduct!.id}, 'source', ${scopedValue}, ${mirrorSourceId}, 100),
         (${secondProduct!.id}, 'source', ${scopedValue}, 'legacy-import', 100)
     `;
     await expect(
       connection.sql`
         insert into product_identifiers (
           product_id, scheme, value, source_id, confidence
-        ) values (${secondProduct!.id}, 'source', ${scopedValue}, 'kassalapp', 100)
-      `,
-    ).rejects.toThrow(/product_identifiers_source_value_unique/i);
+        ) values (${secondProduct!.id}, 'source', ${scopedValue}, ${mirrorSourceId}, 100)
+        `,
+      ).rejects.toThrow(/product_identifiers_source_value_unique/i);
 
     const canonicalEan = integrationEan(5);
     await connection.sql`
@@ -432,7 +442,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       set runtime_state = 'approved',
           permission_reviewed_at = now(),
           permission_expires_at = now() + interval '1 day'
-      where id = 'kassalapp'
+      where id = ${mirrorSourceId}
     `;
     try {
       const [scope] = await connection.sql`
@@ -480,11 +490,11 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
           )
         `;
         const [run] = await connection.sql`
-          insert into ingestion_runs (
-            source_id, run_type, status, started_at, completed_at, counts,
-            created_at
-          ) values (
-            'kassalapp', 'benchmark-prices', 'running',
+        insert into ingestion_runs (
+          source_id, run_type, status, started_at, completed_at, counts,
+          created_at
+        ) values (
+            ${mirrorSourceId}, 'benchmark-prices', 'running',
             coalesce(
               ${overrides.createdAt ?? null}::timestamptz,
               statement_timestamp() - interval '1 second'
@@ -503,7 +513,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
           ) values (
             ${`eligible-reader-${ean}-${integrationNonce}`}, ${product!.id}, 'extra',
             2490, ${overrides.observedAt ?? eligibleObservedAt},
-            ${overrides.fetchedAt ?? "2026-07-15T12:00:00.000Z"}, 'kassalapp',
+            ${overrides.fetchedAt ?? "2026-07-15T12:00:00.000Z"}, ${mirrorSourceId},
             'fixture:eligible-reader', ${run!.id}, ${scope!.id}, 'chain', 100,
             'ordinary_only',
             'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -574,7 +584,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
         insert into source_permissions (
           source_id, decision, reviewed_at, valid_until, permissions, notes
         ) values (
-          'kassalapp', 'approved', statement_timestamp() - interval '1 second',
+          ${mirrorSourceId}, 'approved', statement_timestamp() - interval '1 second',
           statement_timestamp() + interval '1 hour',
           '{"ordinaryPrice": false}'::jsonb,
           ${`reader-without-ordinary-price-${integrationNonce}`}
@@ -586,10 +596,10 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
 
       await connection.sql.begin(async (transaction) => {
         const [approvedPermission] = await transaction`
-          insert into source_permissions (
-            source_id, decision, reviewed_at, valid_until, permissions, notes
-          ) values (
-            'kassalapp', 'approved', statement_timestamp(),
+        insert into source_permissions (
+          source_id, decision, reviewed_at, valid_until, permissions, notes
+        ) values (
+            ${mirrorSourceId}, 'approved', statement_timestamp(),
             statement_timestamp() + interval '1 hour',
             '{"ordinaryPrice": true}'::jsonb, ${`reader-approved-${integrationNonce}`}
           )
@@ -602,7 +612,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
           update data_sources
           set permission_reviewed_at = ${approvedPermission.reviewed_at},
               permission_expires_at = ${approvedPermission.valid_until}
-          where id = 'kassalapp'
+          where id = ${mirrorSourceId}
         `;
       });
 
@@ -613,7 +623,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
           chain: "extra",
           ean: eligibleEan,
           observedAt: eligibleObservedAt,
-          source: "kassalapp",
+          source: mirrorSourceId,
         },
       ]);
       await expect(
@@ -734,7 +744,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       ).resolves.toHaveLength(1);
 
       await connection.sql`
-        update data_sources set runtime_state = 'blocked' where id = 'kassalapp'
+        update data_sources set runtime_state = 'blocked' where id = ${mirrorSourceId}
       `;
       await expect(reader.getMany([eligibleEan])).resolves.toEqual([]);
       const [sourceSnapshotClock] = await connection.sql`
@@ -742,7 +752,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       `;
       const sourceSnapshotAt = databaseDate(sourceSnapshotClock!.snapshot_at);
       await connection.sql`
-        update data_sources set runtime_state = 'approved' where id = 'kassalapp'
+        update data_sources set runtime_state = 'approved' where id = ${mirrorSourceId}
       `;
       await expect(
         new PostgresEvidencePriceReader(
@@ -758,7 +768,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
         insert into source_permissions (
           source_id, decision, reviewed_at, permissions, notes
         ) values (
-          'kassalapp', 'blocked', statement_timestamp() + interval '1 day',
+          ${mirrorSourceId}, 'blocked', statement_timestamp() + interval '1 day',
           '{"ordinaryPrice": true}'::jsonb,
           ${`reader-future-blocked-${integrationNonce}`}
         )
@@ -772,7 +782,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
         set runtime_state = 'conditional',
             permission_reviewed_at = null,
             permission_expires_at = null
-        where id = 'kassalapp'
+        where id = ${mirrorSourceId}
       `;
     }
   });
@@ -803,7 +813,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
       insert into source_permissions (
         source_id, decision, reviewed_at, permissions, notes
       ) values (
-        'kassalapp', 'conditional', now(), '{}', ${`append-only-test-${integrationNonce}`}
+        ${mirrorSourceId}, 'conditional', now(), '{}', ${`append-only-test-${integrationNonce}`}
       )
       returning id
     `;
@@ -855,7 +865,7 @@ describe.skipIf(!runDatabaseIntegration)("PostgresPriceCache integration", () =>
         offer_key, source_id, source_reference, chain, geographic_scope_id,
         amount_ore, valid_from, valid_until, approved_at
       ) values (
-        ${offerKey}, 'kassalapp', 'fixture:offer', 'extra', ${scope!.id},
+        ${offerKey}, ${mirrorSourceId}, 'fixture:offer', 'extra', ${scope!.id},
         2490, '2026-07-15T00:00:00.000Z', '2026-07-20T00:00:00.000Z',
         '2026-07-15T12:00:00.000Z'
       )
