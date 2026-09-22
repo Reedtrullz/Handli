@@ -939,7 +939,7 @@ git commit -m "fix: align reviewed discovery products with planning eligibility"
 **Interfaces:** Consumes current authorized prices/offers/stores/reviewed identities; produces existing V2 candidate and runner-attestation artifacts with real measurements. Retain independent oracle; candidate code must not self-certify its answer.
 
 
-- [ ] **Step 1: Retain the blocked baseline**
+- [x] **Step 1: Retain the blocked baseline** — run 2026-09-22: `corepack pnpm acceptance:v1-baskets:check` exits 2 with all 60 corpus runs pending (`corpus-run-pending`, report `basket-report:sha256:0324256975c1e3abda9c0ce7627a801f7762cb66071d935cbfd06613f9c23e6e`). Expected retained baseline: SPAR/Joker/Europris offer ingestion is BLOCKED (source-rights/structured-feed gates), so the seven-chain corpus cannot execute pending runs yet. This is not a test failure to suppress; Steps 2-5 remain blocked on the same source gates.
 
 ```bash
 corepack pnpm acceptance:v1-baskets:check
@@ -990,7 +990,7 @@ git commit -m "test: retain real-source basket acceptance and reconciliation"
 **Interfaces:** Consumes real accepted plan and immutable trip snapshot; produces exact-candidate browser and physical-device reports. Do not cache private API responses or introduce background location storage.
 
 
-- [ ] **Step 1: Run automated browser journeys**
+- [x] **Step 1: Run automated browser journeys** — 2026-09-22: 45/45 passed (v1-accessibility + planlegg across chromium/firefox/webkit) and 12/12 handlemodus browser matrix passed, against the sealed public build `e82e322f…`/`ee9ec798…` (`docs/evidence/release-readiness/device-accessibility.md`).
 
 ```bash
 corepack pnpm exec playwright test tests/e2e/v1-accessibility.spec.ts tests/e2e/planlegg.spec.ts
@@ -999,12 +999,12 @@ corepack pnpm e2e:handlemodus
 Use the configured production harness, not a development server with substituted source claims.
 
 
-- [ ] **Step 2: Test physical iOS and Android trips**
+- [ ] **Step 2: Test physical iOS and Android trips** — EXTERNAL GATE: not performed (requires reviewer's physical devices); recorded as non-claim in `device-accessibility.md`.
 
 Install PWA; create a real plan online; enter shopping mode; disable network; reload; check/uncheck items; close/reopen; reconnect. Confirm progress, stale/evicted snapshot message, touch target usability and no silent price freshness claim while offline. Record device/OS/browser/build and actual results.
 
 
-- [ ] **Step 3: Test accessible completion**
+- [ ] **Step 3: Test accessible completion** — EXTERNAL GATE: keyboard-only/VoiceOver human pass not performed; automated WCAG/axe/resize/reflow suites pass (see `device-accessibility.md`).
 
 Complete browse→list→plan→shopping via keyboard only and VoiceOver, native zoom and narrow viewport. Confirm labels and errors for empty/partial chains, member eligibility and changing totals. Any failure gets its smallest regression in existing suites before a UI fix.
 
@@ -1032,7 +1032,7 @@ git commit -m "test: verify accessible offline shopping on release devices"
 **Interfaces:** Consumes optional location consent and existing ephemeral location tokens; produces route-aware totals only when live route service and privacy requirements pass. Disabled travel must remain clearly disabled.
 
 
-- [ ] **Step 1: Run current travel tests**
+- [x] **Step 1: Run current travel tests** — 2026-09-22: 17/17 passed (geocoder + gateway + production service, 651 ms; `docs/evidence/release-readiness/travel-privacy.md`).
 
 ```bash
 corepack pnpm --filter web exec vitest run lib/server/travel/kartverket-geocoder.test.ts lib/server/travel/valhalla-route-matrix-gateway.test.ts lib/server/travel/travel-plan-service.production.test.ts
@@ -1077,7 +1077,7 @@ git commit -m "docs: retain live travel and location privacy acceptance"
 In disposable staging exercise source disabled,429,timeout,SQL failure,partial extraction,review backlog,empty source,stale data and expired offer. Compare API/UI status and job counters for each. Expected: no misleading current/complete claim; SQL/transport errors visible.
 
 
-- [ ] **Step 2: Run monitor contracts**
+- [x] **Step 2: Run monitor contracts** — 2026-09-22: monitor 11/0 pass, worker health 4/4 (`docs/evidence/release-readiness/refresh-observation.md`). Step 1 staging failure matrix remains external.
 
 ```bash
 corepack pnpm operations:monitor:test
@@ -1113,7 +1113,7 @@ git commit -m "docs: verify price refresh and failure observability"
 **Interfaces:** Consumes exact candidate schema/private captures and protected operator configuration; produces authenticated off-host backup, clean restore, rollback and delivered test-alert evidence.
 
 
-- [ ] **Step 1: Run operational checks**
+- [x] **Step 1: Run operational checks** — 2026-09-22: backup 45/0, image 17/0, monitor 11/0 (`docs/evidence/release-readiness/operations.md`). Steps 2-4 (off-host adapter, restore drill, alert delivery, rollback) remain external gates.
 
 ```bash
 corepack pnpm operations:backup:test
@@ -1159,7 +1159,7 @@ git commit -m "docs: prove backup restore rollback and alert delivery"
 **Interfaces:** Consumes current authority, operator and infrastructure facts; produces reviewed G1/G6/G9/G12 evidence without treating old documentation as current truth.
 
 
-- [ ] **Step 1: Run repository supply-chain checks**
+- [x] **Step 1: Run repository supply-chain checks** — 2026-09-22: audit exit 0 (2 moderate remain), licenses 451 packages ok, secrets 724 files ok, security scripts 10/0 (`docs/evidence/release-readiness/security-governance.md`). Steps 2-3 (image/history scans, Tjek key owner classification, operator facts) remain external gates; Step 4 ledger re-assessment applied 2026-09-22 with statuses unchanged.
 
 ```bash
 corepack pnpm security:audit
