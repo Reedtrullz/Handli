@@ -1,0 +1,439 @@
+--- /private/tmp/task2b1-proof.UaoLrK/canonical-1.sql	2026-09-08 17:53:10
++++ /private/tmp/task2b1-proof.UaoLrK/artifact.sql	2026-09-08 17:53:10
+@@ -5834,8 +5834,8 @@
+     operations_boundary_version smallint,
+     persisted_at timestamp with time zone,
+     CONSTRAINT alert_events_operations_boundary_pair CHECK ((((operations_boundary_version IS NULL) AND (persisted_at IS NULL)) OR ((operations_boundary_version = 1) AND (persisted_at IS NOT NULL)))),
+-    CONSTRAINT alert_events_severity CHECK (((severity)::text = ANY ((ARRAY['info'::character varying, 'warning'::character varying, 'critical'::character varying])::text[]))),
+-    CONSTRAINT alert_events_status CHECK (((status)::text = ANY ((ARRAY['open'::character varying, 'acknowledged'::character varying, 'closed'::character varying])::text[]))),
++    CONSTRAINT alert_events_severity CHECK (((severity)::text = ANY (ARRAY[('info'::character varying)::text, ('warning'::character varying)::text, ('critical'::character varying)::text]))),
++    CONSTRAINT alert_events_status CHECK (((status)::text = ANY (ARRAY[('open'::character varying)::text, ('acknowledged'::character varying)::text, ('closed'::character varying)::text]))),
+     CONSTRAINT alert_events_time_range CHECK (((closed_at IS NULL) OR (closed_at >= opened_at)))
+ );
+ 
+@@ -5886,11 +5886,11 @@
+     CONSTRAINT approved_offers_amount_ore_nonnegative CHECK ((amount_ore >= 0)),
+     CONSTRAINT approved_offers_before_amount_ore_nonnegative CHECK (((before_amount_ore IS NULL) OR (before_amount_ore >= 0))),
+     CONSTRAINT approved_offers_before_not_lower CHECK (((before_amount_ore IS NULL) OR (before_amount_ore >= amount_ore))),
+-    CONSTRAINT approved_offers_chain_supported CHECK (((chain)::text = ANY ((ARRAY['bunnpris'::character varying, 'extra'::character varying, 'rema-1000'::character varying, 'fudi'::character varying, 'holdbart'::character varying, 'meny'::character varying, 'havaristen'::character varying, 'joker'::character varying, 'spar'::character varying, 'fastcandy'::character varying, 'europris'::character varying, 'engrossnett'::character varying, 'oda'::character varying])::text[]))),
+-    CONSTRAINT approved_offers_membership_requirement CHECK (((membership_requirement)::text = ANY ((ARRAY['public'::character varying, 'member'::character varying])::text[]))),
++    CONSTRAINT approved_offers_chain_supported CHECK (((chain)::text = ANY (ARRAY[('bunnpris'::character varying)::text, ('extra'::character varying)::text, ('rema-1000'::character varying)::text, ('fudi'::character varying)::text, ('holdbart'::character varying)::text, ('meny'::character varying)::text, ('havaristen'::character varying)::text, ('joker'::character varying)::text, ('spar'::character varying)::text, ('fastcandy'::character varying)::text, ('europris'::character varying)::text, ('engrossnett'::character varying)::text, ('oda'::character varying)::text]))),
++    CONSTRAINT approved_offers_membership_requirement CHECK (((membership_requirement)::text = ANY (ARRAY[('public'::character varying)::text, ('member'::character varying)::text]))),
+     CONSTRAINT approved_offers_multibuy_pair CHECK ((((multibuy_quantity IS NULL) AND (multibuy_group_amount_ore IS NULL)) OR ((multibuy_quantity IS NOT NULL) AND (multibuy_quantity > 1) AND (multibuy_group_amount_ore IS NOT NULL) AND (multibuy_group_amount_ore >= 0)))),
+     CONSTRAINT approved_offers_published_candidate_binding CHECK ((((status)::text <> 'published'::text) OR (candidate_id IS NOT NULL))),
+-    CONSTRAINT approved_offers_status CHECK (((status)::text = ANY ((ARRAY['approved'::character varying, 'published'::character varying, 'expired'::character varying, 'revoked'::character varying])::text[]))),
++    CONSTRAINT approved_offers_status CHECK (((status)::text = ANY (ARRAY[('approved'::character varying)::text, ('published'::character varying)::text, ('expired'::character varying)::text, ('revoked'::character varying)::text]))),
+     CONSTRAINT approved_offers_valid_range CHECK ((valid_until > valid_from)),
+     CONSTRAINT approved_offers_version_positive CHECK ((version > 0))
+ );
+@@ -5931,9 +5931,9 @@
+     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+     public_state_changed_at timestamp with time zone DEFAULT now() NOT NULL,
+     CONSTRAINT canonical_products_package_amount_positive CHECK (((package_amount IS NULL) OR (package_amount > 0))),
+-    CONSTRAINT canonical_products_package_unit CHECK (((package_unit IS NULL) OR ((package_unit)::text = ANY ((ARRAY['g'::character varying, 'ml'::character varying, 'piece'::character varying, 'package'::character varying])::text[])))),
++    CONSTRAINT canonical_products_package_unit CHECK (((package_unit IS NULL) OR ((package_unit)::text = ANY (ARRAY[('g'::character varying)::text, ('ml'::character varying)::text, ('piece'::character varying)::text, ('package'::character varying)::text])))),
+     CONSTRAINT canonical_products_public_state_clock CHECK ((public_state_changed_at >= created_at)),
+-    CONSTRAINT canonical_products_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'quarantined'::character varying, 'retired'::character varying])::text[]))),
++    CONSTRAINT canonical_products_status CHECK (((status)::text = ANY (ARRAY[('active'::character varying)::text, ('quarantined'::character varying)::text, ('retired'::character varying)::text]))),
+     CONSTRAINT canonical_products_units_per_pack_positive CHECK ((units_per_pack > 0))
+ );
+ 
+@@ -5986,7 +5986,7 @@
+     CONSTRAINT catalog_observations_gtin_shape CHECK (((gtin)::text ~ '^([0-9]{8}|[0-9]{13})$'::text)),
+     CONSTRAINT catalog_observations_hash_shape CHECK ((raw_record_hash ~ '^[0-9a-f]{64}$'::text)),
+     CONSTRAINT catalog_observations_package_amount_positive CHECK (((package_amount IS NULL) OR (package_amount > 0))),
+-    CONSTRAINT catalog_observations_package_unit CHECK (((package_unit IS NULL) OR ((package_unit)::text = ANY ((ARRAY['g'::character varying, 'ml'::character varying, 'piece'::character varying, 'package'::character varying])::text[])))),
++    CONSTRAINT catalog_observations_package_unit CHECK (((package_unit IS NULL) OR ((package_unit)::text = ANY (ARRAY[('g'::character varying)::text, ('ml'::character varying)::text, ('piece'::character varying)::text, ('package'::character varying)::text])))),
+     CONSTRAINT catalog_observations_source_time_order CHECK (((source_updated_at IS NULL) OR (source_updated_at <= retrieved_at))),
+     CONSTRAINT catalog_observations_units_per_pack_positive CHECK ((units_per_pack > 0))
+ );
+@@ -6027,10 +6027,10 @@
+     created_at timestamp with time zone DEFAULT now() NOT NULL,
+     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+     public_state_changed_at timestamp with time zone DEFAULT now() NOT NULL,
+-    CONSTRAINT data_sources_kind CHECK (((source_kind)::text = ANY ((ARRAY['catalog'::character varying, 'ordinary_price'::character varying, 'offer'::character varying, 'store'::character varying, 'geocoder'::character varying, 'routing'::character varying, 'legacy'::character varying])::text[]))),
++    CONSTRAINT data_sources_kind CHECK (((source_kind)::text = ANY (ARRAY[('catalog'::character varying)::text, ('ordinary_price'::character varying)::text, ('offer'::character varying)::text, ('store'::character varying)::text, ('geocoder'::character varying)::text, ('routing'::character varying)::text, ('legacy'::character varying)::text]))),
+     CONSTRAINT data_sources_permission_range CHECK (((permission_expires_at IS NULL) OR (permission_reviewed_at IS NULL) OR (permission_expires_at > permission_reviewed_at))),
+     CONSTRAINT data_sources_public_state_clock CHECK ((public_state_changed_at >= created_at)),
+-    CONSTRAINT data_sources_runtime_state CHECK (((runtime_state)::text = ANY ((ARRAY['approved'::character varying, 'conditional'::character varying, 'blocked'::character varying, 'revoked'::character varying])::text[])))
++    CONSTRAINT data_sources_runtime_state CHECK (((runtime_state)::text = ANY (ARRAY[('approved'::character varying)::text, ('conditional'::character varying)::text, ('blocked'::character varying)::text, ('revoked'::character varying)::text])))
+ );
+ 
+ 
+@@ -6048,7 +6048,7 @@
+     anomaly_codes jsonb DEFAULT '[]'::jsonb NOT NULL,
+     created_at timestamp with time zone DEFAULT now() NOT NULL,
+     CONSTRAINT extracted_offer_candidates_confidence_range CHECK (((confidence >= 0) AND (confidence <= 100))),
+-    CONSTRAINT extracted_offer_candidates_status CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'approved'::character varying, 'rejected'::character varying, 'superseded'::character varying])::text[])))
++    CONSTRAINT extracted_offer_candidates_status CHECK (((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('approved'::character varying)::text, ('rejected'::character varying)::text, ('superseded'::character varying)::text])))
+ );
+ 
+ 
+@@ -6095,8 +6095,8 @@
+     empty_confirmation jsonb,
+     empty_confirmation_observed_at timestamp with time zone,
+     CONSTRAINT extraction_runs_empty_confirmation_pair CHECK (((empty_result IS NULL) OR ((((empty_result)::text = 'confirmed-empty'::text) AND (empty_confirmation IS NOT NULL) AND (empty_confirmation_observed_at IS NOT NULL)) OR (((empty_result)::text <> 'confirmed-empty'::text) AND (empty_confirmation IS NULL) AND (empty_confirmation_observed_at IS NULL))))),
+-    CONSTRAINT extraction_runs_empty_result_allowed CHECK (((empty_result IS NULL) OR ((empty_result)::text = ANY ((ARRAY['not-empty'::character varying, 'confirmed-empty'::character varying, 'unexpected-empty'::character varying])::text[])))),
+-    CONSTRAINT extraction_runs_method_allowed CHECK (((extraction_method IS NULL) OR ((extraction_method)::text = ANY ((ARRAY['structured'::character varying, 'embedded-text'::character varying, 'ocr'::character varying])::text[])))),
++    CONSTRAINT extraction_runs_empty_result_allowed CHECK (((empty_result IS NULL) OR ((empty_result)::text = ANY (ARRAY[('not-empty'::character varying)::text, ('confirmed-empty'::character varying)::text, ('unexpected-empty'::character varying)::text])))),
++    CONSTRAINT extraction_runs_method_allowed CHECK (((extraction_method IS NULL) OR ((extraction_method)::text = ANY (ARRAY[('structured'::character varying)::text, ('embedded-text'::character varying)::text, ('ocr'::character varying)::text])))),
+     CONSTRAINT extraction_runs_ocr_permission_pair CHECK (((extraction_method IS NULL) OR (((extraction_method)::text = 'ocr'::text) = (ocr_permission_id IS NOT NULL)))),
+     CONSTRAINT extraction_runs_permission_capabilities_shape CHECK (((permission_capabilities IS NULL) OR
+ CASE
+@@ -6105,7 +6105,7 @@
+ END)),
+     CONSTRAINT extraction_runs_permission_fence_complete CHECK ((((extraction_method IS NULL) AND (extraction_permission_id IS NULL) AND (ocr_permission_id IS NULL) AND (permission_capabilities IS NULL) AND (source_started_at IS NULL) AND (source_completed_at IS NULL) AND (empty_result IS NULL) AND (empty_confirmation IS NULL) AND (empty_confirmation_observed_at IS NULL)) OR ((extraction_method IS NOT NULL) AND (extraction_permission_id IS NOT NULL) AND (permission_capabilities IS NOT NULL) AND (source_started_at IS NOT NULL) AND (source_completed_at IS NOT NULL) AND (empty_result IS NOT NULL)))),
+     CONSTRAINT extraction_runs_source_time_range CHECK (((source_started_at IS NULL) OR (source_completed_at >= source_started_at))),
+-    CONSTRAINT extraction_runs_status CHECK (((status)::text = ANY ((ARRAY['running'::character varying, 'completed'::character varying, 'degraded'::character varying, 'failed'::character varying])::text[]))),
++    CONSTRAINT extraction_runs_status CHECK (((status)::text = ANY (ARRAY[('running'::character varying)::text, ('completed'::character varying)::text, ('degraded'::character varying)::text, ('failed'::character varying)::text]))),
+     CONSTRAINT extraction_runs_time_range CHECK (((completed_at IS NULL) OR (completed_at >= started_at)))
+ );
+ 
+@@ -6148,7 +6148,7 @@
+     CONSTRAINT family_taxonomy_versions_checksum_shape CHECK ((content_sha256 ~ '^[0-9a-f]{64}$'::text)),
+     CONSTRAINT family_taxonomy_versions_content_array CHECK ((jsonb_typeof(content_json) = 'array'::text)),
+     CONSTRAINT family_taxonomy_versions_contract_version CHECK ((contract_version = 1)),
+-    CONSTRAINT family_taxonomy_versions_family_count_range CHECK ((((expected_family_count >= 1) AND (expected_family_count <= 500)) AND (jsonb_array_length(content_json) = expected_family_count))),
++    CONSTRAINT family_taxonomy_versions_family_count_range CHECK (((expected_family_count >= 1) AND (expected_family_count <= 500) AND (jsonb_array_length(content_json) = expected_family_count))),
+     CONSTRAINT family_taxonomy_versions_publication_not_future_created CHECK ((published_at <= created_at)),
+     CONSTRAINT family_taxonomy_versions_semver_shape CHECK (((taxonomy_version)::text ~ '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'::text)),
+     CONSTRAINT family_taxonomy_versions_taxonomy_id_shape CHECK (((taxonomy_id)::text ~ '^[a-z0-9]+(-[a-z0-9]+)*$'::text)),
+@@ -6183,7 +6183,7 @@
+     CONSTRAINT geographic_postal_directory_region_code_nonempty CHECK ((length(TRIM(BOTH FROM region_code)) > 0)),
+     CONSTRAINT geographic_postal_directory_region_count CHECK (((((coverage_state)::text = 'complete'::text) AND ((postal_count >= 1) AND (postal_count <= 10000))) OR (((coverage_state)::text = 'ambiguous'::text) AND ((postal_count >= 0) AND (postal_count <= 10000))))),
+     CONSTRAINT geographic_postal_directory_region_evidence_nonempty CHECK ((length(TRIM(BOTH FROM evidence_reference)) > 0)),
+-    CONSTRAINT geographic_postal_directory_region_state CHECK (((coverage_state)::text = ANY ((ARRAY['complete'::character varying, 'ambiguous'::character varying])::text[])))
++    CONSTRAINT geographic_postal_directory_region_state CHECK (((coverage_state)::text = ANY (ARRAY[('complete'::character varying)::text, ('ambiguous'::character varying)::text])))
+ );
+ 
+ 
+@@ -6207,8 +6207,8 @@
+     CONSTRAINT geographic_postal_directory_evidence_nonempty CHECK ((length(TRIM(BOTH FROM evidence_reference)) > 0)),
+     CONSTRAINT geographic_postal_directory_review_clock CHECK ((reviewed_at <= created_at)),
+     CONSTRAINT geographic_postal_directory_seal_clock CHECK (((sealed_at IS NULL) OR (sealed_at >= created_at))),
+-    CONSTRAINT geographic_postal_directory_seal_state CHECK (((((status)::text = 'building'::text) AND (sealed_at IS NULL)) OR (((status)::text = ANY ((ARRAY['approved'::character varying, 'blocked'::character varying, 'retired'::character varying])::text[])) AND (sealed_at IS NOT NULL)))),
+-    CONSTRAINT geographic_postal_directory_status CHECK (((status)::text = ANY ((ARRAY['building'::character varying, 'approved'::character varying, 'blocked'::character varying, 'retired'::character varying])::text[]))),
++    CONSTRAINT geographic_postal_directory_seal_state CHECK (((((status)::text = 'building'::text) AND (sealed_at IS NULL)) OR (((status)::text = ANY (ARRAY[('approved'::character varying)::text, ('blocked'::character varying)::text, ('retired'::character varying)::text])) AND (sealed_at IS NOT NULL)))),
++    CONSTRAINT geographic_postal_directory_status CHECK (((status)::text = ANY (ARRAY[('building'::character varying)::text, ('approved'::character varying)::text, ('blocked'::character varying)::text, ('retired'::character varying)::text]))),
+     CONSTRAINT geographic_postal_directory_validity CHECK (((valid_until IS NULL) OR (valid_until > valid_from)))
+ );
+ 
+@@ -6262,9 +6262,9 @@
+     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+     public_state_changed_at timestamp with time zone DEFAULT now() NOT NULL,
+     CONSTRAINT geographic_scopes_country_shape CHECK ((country_code ~ '^[A-Z]{2}$'::text)),
+-    CONSTRAINT geographic_scopes_kind CHECK (((scope_kind)::text = ANY ((ARRAY['national'::character varying, 'region'::character varying, 'postal_set'::character varying, 'store_set'::character varying])::text[]))),
++    CONSTRAINT geographic_scopes_kind CHECK (((scope_kind)::text = ANY (ARRAY[('national'::character varying)::text, ('region'::character varying)::text, ('postal_set'::character varying)::text, ('store_set'::character varying)::text]))),
+     CONSTRAINT geographic_scopes_public_state_clock CHECK ((public_state_changed_at >= created_at)),
+-    CONSTRAINT geographic_scopes_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'retired'::character varying])::text[])))
++    CONSTRAINT geographic_scopes_status CHECK (((status)::text = ANY (ARRAY[('active'::character varying)::text, ('retired'::character varying)::text])))
+ );
+ 
+ 
+@@ -6302,7 +6302,7 @@
+     distinct_observation_days integer NOT NULL,
+     computed_at timestamp with time zone NOT NULL,
+     CONSTRAINT historical_price_statistics_amount_nonnegative CHECK ((median_amount_ore >= 0)),
+-    CONSTRAINT historical_price_statistics_chain_supported CHECK (((chain)::text = ANY ((ARRAY['bunnpris'::character varying, 'extra'::character varying, 'rema-1000'::character varying, 'fudi'::character varying, 'holdbart'::character varying, 'meny'::character varying, 'havaristen'::character varying, 'joker'::character varying, 'spar'::character varying, 'fastcandy'::character varying, 'europris'::character varying, 'engrossnett'::character varying, 'oda'::character varying])::text[]))),
++    CONSTRAINT historical_price_statistics_chain_supported CHECK (((chain)::text = ANY (ARRAY[('bunnpris'::character varying)::text, ('extra'::character varying)::text, ('rema-1000'::character varying)::text, ('fudi'::character varying)::text, ('holdbart'::character varying)::text, ('meny'::character varying)::text, ('havaristen'::character varying)::text, ('joker'::character varying)::text, ('spar'::character varying)::text, ('fastcandy'::character varying)::text, ('europris'::character varying)::text, ('engrossnett'::character varying)::text, ('oda'::character varying)::text]))),
+     CONSTRAINT historical_price_statistics_counts CHECK (((observation_count >= distinct_observation_days) AND (distinct_observation_days >= 7))),
+     CONSTRAINT historical_price_statistics_window_range CHECK ((window_end > window_start))
+ );
+@@ -6325,7 +6325,7 @@
+     job_id character varying(200),
+     terminalized_at timestamp with time zone,
+     CONSTRAINT ingestion_runs_completion_not_after_terminalization CHECK ((((status)::text = 'running'::text) OR (completed_at <= terminalized_at))),
+-    CONSTRAINT ingestion_runs_status CHECK (((status)::text = ANY ((ARRAY['running'::character varying, 'completed'::character varying, 'degraded'::character varying, 'failed'::character varying, 'cancelled'::character varying])::text[]))),
++    CONSTRAINT ingestion_runs_status CHECK (((status)::text = ANY (ARRAY[('running'::character varying)::text, ('completed'::character varying)::text, ('degraded'::character varying)::text, ('failed'::character varying)::text, ('cancelled'::character varying)::text]))),
+     CONSTRAINT ingestion_runs_terminalization_state CHECK (((((status)::text = 'running'::text) AND (completed_at IS NULL) AND (terminalized_at IS NULL)) OR (((status)::text <> 'running'::text) AND (completed_at IS NOT NULL) AND (terminalized_at IS NOT NULL) AND (terminalized_at >= created_at)))),
+     CONSTRAINT ingestion_runs_time_range CHECK (((completed_at IS NULL) OR (completed_at >= started_at)))
+ );
+@@ -6372,10 +6372,10 @@
+     raw_record_hash character(64),
+     created_at timestamp with time zone DEFAULT now() NOT NULL,
+     CONSTRAINT price_observations_amount_ore_nonnegative CHECK ((amount_ore >= 0)),
+-    CONSTRAINT price_observations_chain_supported CHECK (((chain)::text = ANY ((ARRAY['bunnpris'::character varying, 'extra'::character varying, 'rema-1000'::character varying, 'fudi'::character varying, 'holdbart'::character varying, 'meny'::character varying, 'havaristen'::character varying, 'joker'::character varying, 'spar'::character varying, 'fastcandy'::character varying, 'europris'::character varying, 'engrossnett'::character varying, 'oda'::character varying])::text[]))),
+-    CONSTRAINT price_observations_claim_eligibility CHECK (((claim_eligibility)::text = ANY ((ARRAY['ordinary_only'::character varying, 'historical_eligible'::character varying])::text[]))),
++    CONSTRAINT price_observations_chain_supported CHECK (((chain)::text = ANY (ARRAY[('bunnpris'::character varying)::text, ('extra'::character varying)::text, ('rema-1000'::character varying)::text, ('fudi'::character varying)::text, ('holdbart'::character varying)::text, ('meny'::character varying)::text, ('havaristen'::character varying)::text, ('joker'::character varying)::text, ('spar'::character varying)::text, ('fastcandy'::character varying)::text, ('europris'::character varying)::text, ('engrossnett'::character varying)::text, ('oda'::character varying)::text]))),
++    CONSTRAINT price_observations_claim_eligibility CHECK (((claim_eligibility)::text = ANY (ARRAY[('ordinary_only'::character varying)::text, ('historical_eligible'::character varying)::text]))),
+     CONSTRAINT price_observations_confidence_range CHECK (((confidence >= 0) AND (confidence <= 100))),
+-    CONSTRAINT price_observations_evidence_level CHECK (((evidence_level)::text = ANY ((ARRAY['chain'::character varying, 'branch'::character varying])::text[]))),
++    CONSTRAINT price_observations_evidence_level CHECK (((evidence_level)::text = ANY (ARRAY[('chain'::character varying)::text, ('branch'::character varying)::text]))),
+     CONSTRAINT price_observations_hash_shape CHECK (((raw_record_hash IS NULL) OR (raw_record_hash ~ '^[0-9a-f]{64}$'::text))),
+     CONSTRAINT price_observations_time_range CHECK ((fetched_at >= observed_at))
+ );
+@@ -6416,7 +6416,7 @@
+     condition_type character varying(32) NOT NULL,
+     condition_value jsonb NOT NULL,
+     created_at timestamp with time zone DEFAULT transaction_timestamp() NOT NULL,
+-    CONSTRAINT offer_conditions_type CHECK (((condition_type)::text = ANY ((ARRAY['membership'::character varying, 'quantity'::character varying, 'channel'::character varying, 'payment'::character varying, 'other'::character varying])::text[])))
++    CONSTRAINT offer_conditions_type CHECK (((condition_type)::text = ANY (ARRAY[('membership'::character varying)::text, ('quantity'::character varying)::text, ('channel'::character varying)::text, ('payment'::character varying)::text, ('other'::character varying)::text])))
+ );
+ 
+ 
+@@ -6452,7 +6452,7 @@
+     created_at timestamp with time zone DEFAULT now() NOT NULL,
+     CONSTRAINT offer_targets_confidence_range CHECK (((match_confidence >= 0) AND (match_confidence <= 100))),
+     CONSTRAINT offer_targets_exactly_one_target CHECK ((((product_id IS NOT NULL) AND (family_slug IS NULL)) OR ((product_id IS NULL) AND (family_slug IS NOT NULL)))),
+-    CONSTRAINT offer_targets_match_method CHECK (((match_method)::text = ANY ((ARRAY['exact_identifier'::character varying, 'deterministic_rule'::character varying, 'human_review'::character varying])::text[])))
++    CONSTRAINT offer_targets_match_method CHECK (((match_method)::text = ANY (ARRAY[('exact_identifier'::character varying)::text, ('deterministic_rule'::character varying)::text, ('human_review'::character varying)::text])))
+ );
+ 
+ 
+@@ -6479,10 +6479,10 @@
+     result_sha256 character(64) NOT NULL,
+     created_at timestamp with time zone NOT NULL,
+     CONSTRAINT official_offer_lifecycle_job_results_batch CHECK (((batch_limit >= 1) AND (batch_limit <= 50))),
+-    CONSTRAINT official_offer_lifecycle_job_results_counts CHECK ((((expiry_examined >= 0) AND (expiry_examined <= batch_limit)) AND ((expired_count >= 0) AND (expired_count <= expiry_examined)) AND ((revoked_count >= 0) AND (revoked_count <= expiry_examined)) AND ((expired_count + revoked_count) <= expiry_examined) AND ((publication_examined >= 0) AND (publication_examined <= batch_limit)) AND ((published_count >= 0) AND (published_count <= publication_examined)) AND (skipped_count = ((((expiry_examined + publication_examined) - expired_count) - revoked_count) - published_count)) AND (skipped_count >= 0))),
++    CONSTRAINT official_offer_lifecycle_job_results_counts CHECK (((expiry_examined >= 0) AND (expiry_examined <= batch_limit) AND ((expired_count >= 0) AND (expired_count <= expiry_examined)) AND ((revoked_count >= 0) AND (revoked_count <= expiry_examined)) AND ((expired_count + revoked_count) <= expiry_examined) AND ((publication_examined >= 0) AND (publication_examined <= batch_limit)) AND ((published_count >= 0) AND (published_count <= publication_examined)) AND (skipped_count = ((((expiry_examined + publication_examined) - expired_count) - revoked_count) - published_count)) AND (skipped_count >= 0))),
+     CONSTRAINT official_offer_lifecycle_job_results_hash CHECK ((result_sha256 ~ '^[0-9a-f]{64}$'::text)),
+-    CONSTRAINT official_offer_lifecycle_job_results_publication CHECK (((publication_authorized AND publication_requested AND ((publication_state)::text = ANY ((ARRAY['source-ineligible'::character varying, 'evaluated'::character varying])::text[]))) OR ((NOT publication_authorized) AND ((publication_state)::text = 'foundation-disabled'::text)))),
+-    CONSTRAINT official_offer_lifecycle_job_results_state CHECK (((publication_state)::text = ANY ((ARRAY['foundation-disabled'::character varying, 'source-ineligible'::character varying, 'evaluated'::character varying])::text[]))),
++    CONSTRAINT official_offer_lifecycle_job_results_publication CHECK (((publication_authorized AND publication_requested AND ((publication_state)::text = ANY (ARRAY[('source-ineligible'::character varying)::text, ('evaluated'::character varying)::text]))) OR ((NOT publication_authorized) AND ((publication_state)::text = 'foundation-disabled'::text)))),
++    CONSTRAINT official_offer_lifecycle_job_results_state CHECK (((publication_state)::text = ANY (ARRAY[('foundation-disabled'::character varying)::text, ('source-ineligible'::character varying)::text, ('evaluated'::character varying)::text]))),
+     CONSTRAINT official_offer_lifecycle_job_results_time CHECK (((created_at >= evaluated_at) AND (lease_expires_at >= created_at))),
+     CONSTRAINT official_offer_lifecycle_job_results_token CHECK ((lease_token ~ '^[0-9a-f]{64}$'::text))
+ );
+@@ -6503,7 +6503,7 @@
+     completed_at timestamp with time zone,
+     expiry_cursor_offer_id bigint DEFAULT 0 NOT NULL,
+     publication_cursor_offer_id bigint DEFAULT 0 NOT NULL,
+-    CONSTRAINT official_offer_lifecycle_leases_cursors CHECK ((((expiry_cursor_offer_id >= 0) AND (expiry_cursor_offer_id <= '9007199254740991'::bigint)) AND ((publication_cursor_offer_id >= 0) AND (publication_cursor_offer_id <= '9007199254740991'::bigint)))),
++    CONSTRAINT official_offer_lifecycle_leases_cursors CHECK (((expiry_cursor_offer_id >= 0) AND (expiry_cursor_offer_id <= '9007199254740991'::bigint) AND ((publication_cursor_offer_id >= 0) AND (publication_cursor_offer_id <= '9007199254740991'::bigint)))),
+     CONSTRAINT official_offer_lifecycle_leases_kind CHECK (((lease_kind)::text = 'official-offer-lifecycle-v1'::text)),
+     CONSTRAINT official_offer_lifecycle_leases_time CHECK (((expires_at > acquired_at) AND ((completed_at IS NULL) OR ((completed_at >= acquired_at) AND (completed_at <= expires_at))))),
+     CONSTRAINT official_offer_lifecycle_leases_token CHECK ((lease_token ~ '^[0-9a-f]{64}$'::text))
+@@ -6580,13 +6580,13 @@
+     postal_code character varying(4),
+     CONSTRAINT physical_store_observations_branch_key_binding CHECK (((branch_key)::text = encode(sha256(convert_to(((((octet_length((source_id)::text))::text || ':'::text) || (source_id)::text) || (external_id)::text), 'UTF8'::name)), 'hex'::text))),
+     CONSTRAINT physical_store_observations_branch_key_shape CHECK ((branch_key ~ '^[0-9a-f]{64}$'::text)),
+-    CONSTRAINT physical_store_observations_chain_supported CHECK (((chain)::text = ANY ((ARRAY['bunnpris'::character varying, 'extra'::character varying, 'rema-1000'::character varying, 'fudi'::character varying, 'holdbart'::character varying, 'meny'::character varying, 'havaristen'::character varying, 'joker'::character varying, 'spar'::character varying, 'fastcandy'::character varying, 'europris'::character varying, 'engrossnett'::character varying, 'oda'::character varying])::text[]))),
++    CONSTRAINT physical_store_observations_chain_supported CHECK (((chain)::text = ANY (ARRAY[('bunnpris'::character varying)::text, ('extra'::character varying)::text, ('rema-1000'::character varying)::text, ('fudi'::character varying)::text, ('holdbart'::character varying)::text, ('meny'::character varying)::text, ('havaristen'::character varying)::text, ('joker'::character varying)::text, ('spar'::character varying)::text, ('fastcandy'::character varying)::text, ('europris'::character varying)::text, ('engrossnett'::character varying)::text, ('oda'::character varying)::text]))),
+     CONSTRAINT physical_store_observations_latitude_range CHECK (((latitude >= ('-90'::integer)::numeric) AND (latitude <= (90)::numeric))),
+     CONSTRAINT physical_store_observations_longitude_range CHECK (((longitude >= ('-180'::integer)::numeric) AND (longitude <= (180)::numeric))),
+     CONSTRAINT physical_store_observations_name_nonempty CHECK ((length(TRIM(BOTH FROM name)) > 0)),
+     CONSTRAINT physical_store_observations_observed_before_creation CHECK ((observed_at <= created_at)),
+     CONSTRAINT physical_store_observations_postal_shape CHECK (((postal_code IS NULL) OR ((postal_code)::text ~ '^[0-9]{4}$'::text))),
+-    CONSTRAINT physical_store_observations_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'closed'::character varying, 'unknown'::character varying])::text[])))
++    CONSTRAINT physical_store_observations_status CHECK (((status)::text = ANY (ARRAY[('active'::character varying)::text, ('closed'::character varying)::text, ('unknown'::character varying)::text])))
+ );
+ 
+ 
+@@ -6618,11 +6618,11 @@
+     record_count integer NOT NULL,
+     checked_at timestamp with time zone NOT NULL,
+     created_at timestamp with time zone DEFAULT now() NOT NULL,
+-    CONSTRAINT physical_store_coverage_checks_chain_supported CHECK (((chain)::text = ANY ((ARRAY['bunnpris'::character varying, 'extra'::character varying, 'rema-1000'::character varying, 'fudi'::character varying, 'holdbart'::character varying, 'meny'::character varying, 'havaristen'::character varying, 'joker'::character varying, 'spar'::character varying, 'fastcandy'::character varying, 'europris'::character varying, 'engrossnett'::character varying, 'oda'::character varying])::text[]))),
++    CONSTRAINT physical_store_coverage_checks_chain_supported CHECK (((chain)::text = ANY (ARRAY[('bunnpris'::character varying)::text, ('extra'::character varying)::text, ('rema-1000'::character varying)::text, ('fudi'::character varying)::text, ('holdbart'::character varying)::text, ('meny'::character varying)::text, ('havaristen'::character varying)::text, ('joker'::character varying)::text, ('spar'::character varying)::text, ('fastcandy'::character varying)::text, ('europris'::character varying)::text, ('engrossnett'::character varying)::text, ('oda'::character varying)::text]))),
+     CONSTRAINT physical_store_coverage_checks_checked_before_creation CHECK ((checked_at <= created_at)),
+-    CONSTRAINT physical_store_coverage_checks_reason_state CHECK (((((state)::text = 'complete'::text) AND (reason IS NULL) AND (record_count > 0)) OR (((state)::text = 'unknown'::text) AND ((reason)::text = ANY ((ARRAY['DUPLICATE_IDENTITY'::character varying, 'INVALID_RECORDS'::character varying, 'MISSING_SUPPORTED_CHAIN'::character varying, 'POSSIBLY_TRUNCATED'::character varying, 'REQUEST_FAILED'::character varying])::text[]))))),
++    CONSTRAINT physical_store_coverage_checks_reason_state CHECK (((((state)::text = 'complete'::text) AND (reason IS NULL) AND (record_count > 0)) OR (((state)::text = 'unknown'::text) AND ((reason)::text = ANY (ARRAY[('DUPLICATE_IDENTITY'::character varying)::text, ('INVALID_RECORDS'::character varying)::text, ('MISSING_SUPPORTED_CHAIN'::character varying)::text, ('POSSIBLY_TRUNCATED'::character varying)::text, ('REQUEST_FAILED'::character varying)::text]))))),
+     CONSTRAINT physical_store_coverage_checks_record_count_range CHECK (((record_count >= 0) AND (record_count <= 1000))),
+-    CONSTRAINT physical_store_coverage_checks_state CHECK (((state)::text = ANY ((ARRAY['complete'::character varying, 'unknown'::character varying])::text[])))
++    CONSTRAINT physical_store_coverage_checks_state CHECK (((state)::text = ANY (ARRAY[('complete'::character varying)::text, ('unknown'::character varying)::text])))
+ );
+ 
+ 
+@@ -6717,10 +6717,10 @@
+     observed_at timestamp with time zone NOT NULL,
+     created_at timestamp with time zone DEFAULT now() NOT NULL,
+     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+-    CONSTRAINT physical_stores_chain_supported CHECK (((chain)::text = ANY ((ARRAY['bunnpris'::character varying, 'extra'::character varying, 'rema-1000'::character varying, 'fudi'::character varying, 'holdbart'::character varying, 'meny'::character varying, 'havaristen'::character varying, 'joker'::character varying, 'spar'::character varying, 'fastcandy'::character varying, 'europris'::character varying, 'engrossnett'::character varying, 'oda'::character varying])::text[]))),
++    CONSTRAINT physical_stores_chain_supported CHECK (((chain)::text = ANY (ARRAY[('bunnpris'::character varying)::text, ('extra'::character varying)::text, ('rema-1000'::character varying)::text, ('fudi'::character varying)::text, ('holdbart'::character varying)::text, ('meny'::character varying)::text, ('havaristen'::character varying)::text, ('joker'::character varying)::text, ('spar'::character varying)::text, ('fastcandy'::character varying)::text, ('europris'::character varying)::text, ('engrossnett'::character varying)::text, ('oda'::character varying)::text]))),
+     CONSTRAINT physical_stores_latitude_range CHECK (((latitude >= ('-90'::integer)::numeric) AND (latitude <= (90)::numeric))),
+     CONSTRAINT physical_stores_longitude_range CHECK (((longitude >= ('-180'::integer)::numeric) AND (longitude <= (180)::numeric))),
+-    CONSTRAINT physical_stores_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'closed'::character varying, 'unknown'::character varying])::text[])))
++    CONSTRAINT physical_stores_status CHECK (((status)::text = ANY (ARRAY[('active'::character varying)::text, ('closed'::character varying)::text, ('unknown'::character varying)::text])))
+ );
+ 
+ 
+@@ -6754,7 +6754,7 @@
+     observed_at timestamp with time zone NOT NULL,
+     fetched_at timestamp with time zone DEFAULT now() NOT NULL,
+     CONSTRAINT price_cache_amount_ore_nonnegative CHECK ((amount_ore >= 0)),
+-    CONSTRAINT price_cache_chain_supported CHECK (((chain)::text = ANY ((ARRAY['bunnpris'::character varying, 'extra'::character varying, 'rema-1000'::character varying, 'fudi'::character varying, 'holdbart'::character varying, 'meny'::character varying, 'havaristen'::character varying, 'joker'::character varying, 'spar'::character varying, 'fastcandy'::character varying, 'europris'::character varying, 'engrossnett'::character varying, 'oda'::character varying])::text[]))),
++    CONSTRAINT price_cache_chain_supported CHECK (((chain)::text = ANY (ARRAY[('bunnpris'::character varying)::text, ('extra'::character varying)::text, ('rema-1000'::character varying)::text, ('fudi'::character varying)::text, ('holdbart'::character varying)::text, ('meny'::character varying)::text, ('havaristen'::character varying)::text, ('joker'::character varying)::text, ('spar'::character varying)::text, ('fastcandy'::character varying)::text, ('europris'::character varying)::text, ('engrossnett'::character varying)::text, ('oda'::character varying)::text]))),
+     CONSTRAINT price_cache_ean_shape CHECK (((ean)::text ~ '^([0-9]{8}|[0-9]{13})$'::text))
+ );
+ 
+@@ -6773,8 +6773,8 @@
+     reason character varying(160) NOT NULL,
+     checked_at timestamp with time zone NOT NULL,
+     created_at timestamp with time zone DEFAULT now() NOT NULL,
+-    CONSTRAINT price_coverage_checks_chain_supported CHECK (((chain)::text = ANY ((ARRAY['bunnpris'::character varying, 'extra'::character varying, 'rema-1000'::character varying, 'fudi'::character varying, 'holdbart'::character varying, 'meny'::character varying, 'havaristen'::character varying, 'joker'::character varying, 'spar'::character varying, 'fastcandy'::character varying, 'europris'::character varying, 'engrossnett'::character varying, 'oda'::character varying])::text[]))),
+-    CONSTRAINT price_coverage_checks_state CHECK (((state)::text = ANY ((ARRAY['priced'::character varying, 'known_not_carried'::character varying, 'stale'::character varying, 'ineligible'::character varying, 'unknown'::character varying])::text[])))
++    CONSTRAINT price_coverage_checks_chain_supported CHECK (((chain)::text = ANY (ARRAY[('bunnpris'::character varying)::text, ('extra'::character varying)::text, ('rema-1000'::character varying)::text, ('fudi'::character varying)::text, ('holdbart'::character varying)::text, ('meny'::character varying)::text, ('havaristen'::character varying)::text, ('joker'::character varying)::text, ('spar'::character varying)::text, ('fastcandy'::character varying)::text, ('europris'::character varying)::text, ('engrossnett'::character varying)::text, ('oda'::character varying)::text]))),
++    CONSTRAINT price_coverage_checks_state CHECK (((state)::text = ANY (ARRAY[('priced'::character varying)::text, ('known_not_carried'::character varying)::text, ('stale'::character varying)::text, ('ineligible'::character varying)::text, ('unknown'::character varying)::text])))
+ );
+ 
+ 
+@@ -6875,10 +6875,10 @@
+     CONSTRAINT private_review_evidence_renders_checksum CHECK ((capture_checksum ~ '^[0-9a-f]{64}$'::text)),
+     CONSTRAINT private_review_evidence_renders_crop_reference CHECK (((crop_reference)::text ~ '^review-crop:[0-9a-f]{64}$'::text)),
+     CONSTRAINT private_review_evidence_renders_expected_version CHECK ((expected_version >= 0)),
+-    CONSTRAINT private_review_evidence_renders_image_mime CHECK (((mime_type)::text = ANY ((ARRAY['image/jpeg'::character varying, 'image/png'::character varying, 'image/webp'::character varying])::text[]))),
++    CONSTRAINT private_review_evidence_renders_image_mime CHECK (((mime_type)::text = ANY (ARRAY[('image/jpeg'::character varying)::text, ('image/png'::character varying)::text, ('image/webp'::character varying)::text]))),
+     CONSTRAINT private_review_evidence_renders_presentation CHECK (((presentation)::text = 'full_capture'::text)),
+     CONSTRAINT private_review_evidence_renders_proof CHECK ((evidence_proof_sha256 ~ '^[0-9a-f]{64}$'::text)),
+-    CONSTRAINT private_review_evidence_renders_rights CHECK (((rights_classification)::text = ANY ((ARRAY['private_review'::character varying, 'public_display'::character varying])::text[]))),
++    CONSTRAINT private_review_evidence_renders_rights CHECK (((rights_classification)::text = ANY (ARRAY[('private_review'::character varying)::text, ('public_display'::character varying)::text]))),
+     CONSTRAINT private_review_evidence_renders_session CHECK (((reviewer_session_id)::text ~ '^access-session:[0-9a-f]{64}$'::text)),
+     CONSTRAINT private_review_evidence_renders_time CHECK (((rendered_at = created_at) AND (expires_at > rendered_at)))
+ );
+@@ -6912,7 +6912,7 @@
+     label_no character varying(160) NOT NULL,
+     status character varying(16) DEFAULT 'active'::character varying NOT NULL,
+     created_at timestamp with time zone DEFAULT now() NOT NULL,
+-    CONSTRAINT product_families_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'retired'::character varying])::text[])))
++    CONSTRAINT product_families_status CHECK (((status)::text = ANY (ARRAY[('active'::character varying)::text, ('retired'::character varying)::text])))
+ );
+ 
+ 
+@@ -6929,8 +6929,8 @@
+     rule_version character varying(64),
+     reviewed_at timestamp with time zone,
+     CONSTRAINT product_family_memberships_confidence_range CHECK (((confidence >= 0) AND (confidence <= 100))),
+-    CONSTRAINT product_family_memberships_method CHECK (((method)::text = ANY ((ARRAY['exact_identifier'::character varying, 'deterministic_rule'::character varying, 'human_review'::character varying])::text[]))),
+-    CONSTRAINT product_family_memberships_review_state CHECK (((review_state)::text = ANY ((ARRAY['approved'::character varying, 'candidate'::character varying, 'rejected'::character varying])::text[])))
++    CONSTRAINT product_family_memberships_method CHECK (((method)::text = ANY (ARRAY[('exact_identifier'::character varying)::text, ('deterministic_rule'::character varying)::text, ('human_review'::character varying)::text]))),
++    CONSTRAINT product_family_memberships_review_state CHECK (((review_state)::text = ANY (ARRAY[('approved'::character varying)::text, ('candidate'::character varying)::text, ('rejected'::character varying)::text])))
+ );
+ 
+ 
+@@ -6951,8 +6951,8 @@
+     CONSTRAINT product_identifiers_confidence_range CHECK (((confidence >= 0) AND (confidence <= 100))),
+     CONSTRAINT product_identifiers_ean_shape CHECK (((((scheme)::text = 'ean8'::text) AND ((value)::text ~ '^[0-9]{8}$'::text)) OR (((scheme)::text = 'ean13'::text) AND ((value)::text ~ '^[0-9]{13}$'::text)) OR (((scheme)::text = 'source'::text) AND ((length((value)::text) >= 1) AND (length((value)::text) <= 128))))),
+     CONSTRAINT product_identifiers_public_state_clock CHECK ((public_state_changed_at >= created_at)),
+-    CONSTRAINT product_identifiers_scheme CHECK (((scheme)::text = ANY ((ARRAY['ean8'::character varying, 'ean13'::character varying, 'source'::character varying])::text[]))),
+-    CONSTRAINT product_identifiers_source_scope CHECK (((((scheme)::text = ANY ((ARRAY['ean8'::character varying, 'ean13'::character varying])::text[])) AND (source_id IS NULL)) OR (((scheme)::text = 'source'::text) AND (source_id IS NOT NULL))))
++    CONSTRAINT product_identifiers_scheme CHECK (((scheme)::text = ANY (ARRAY[('ean8'::character varying)::text, ('ean13'::character varying)::text, ('source'::character varying)::text]))),
++    CONSTRAINT product_identifiers_source_scope CHECK (((((scheme)::text = ANY (ARRAY[('ean8'::character varying)::text, ('ean13'::character varying)::text])) AND (source_id IS NULL)) OR (((scheme)::text = 'source'::text) AND (source_id IS NOT NULL))))
+ );
+ 
+ 
+@@ -6993,7 +6993,7 @@
+ CREATE TABLE public.public_api_request_budget_events (
+     route_key character varying(32) NOT NULL,
+     claimed_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+-    CONSTRAINT public_api_request_budget_events_route_key_allowed CHECK (((route_key)::text = ANY ((ARRAY['discovery-impact'::character varying, 'discovery-search'::character varying, 'locations-current'::character varying, 'locations-search'::character varying, 'plan-candidates'::character varying, 'plans'::character varying, 'plans-travel'::character varying, 'products-search'::character varying, 'source-status'::character varying])::text[])))
++    CONSTRAINT public_api_request_budget_events_route_key_allowed CHECK (((route_key)::text = ANY (ARRAY[('discovery-impact'::character varying)::text, ('discovery-search'::character varying)::text, ('locations-current'::character varying)::text, ('locations-search'::character varying)::text, ('plan-candidates'::character varying)::text, ('plans'::character varying)::text, ('plans-travel'::character varying)::text, ('products-search'::character varying)::text, ('source-status'::character varying)::text])))
+ );
+ 
+ 
+@@ -7021,7 +7021,7 @@
+     ELSE false
+ END)),
+     CONSTRAINT publication_captures_permission_fence_complete CHECK ((((capture_permission_id IS NULL) AND (capture_permission_capabilities IS NULL)) OR ((capture_permission_id IS NOT NULL) AND (capture_permission_capabilities IS NOT NULL)))),
+-    CONSTRAINT publication_captures_rights_classification CHECK (((rights_classification)::text = ANY ((ARRAY['private_review'::character varying, 'extract_only'::character varying, 'public_display'::character varying])::text[])))
++    CONSTRAINT publication_captures_rights_classification CHECK (((rights_classification)::text = ANY (ARRAY[('private_review'::character varying)::text, ('extract_only'::character varying)::text, ('public_display'::character varying)::text])))
+ );
+ 
+ 
+@@ -7065,12 +7065,12 @@
+     declared_geographic_scope jsonb,
+     edition_identity_sha256 character(64),
+     discovery_permission_id bigint,
+-    CONSTRAINT publications_chain_supported CHECK (((chain)::text = ANY ((ARRAY['bunnpris'::character varying, 'extra'::character varying, 'rema-1000'::character varying, 'fudi'::character varying, 'holdbart'::character varying, 'meny'::character varying, 'havaristen'::character varying, 'joker'::character varying, 'spar'::character varying, 'fastcandy'::character varying, 'europris'::character varying, 'engrossnett'::character varying, 'oda'::character varying])::text[]))),
+-    CONSTRAINT publications_content_kind_allowed CHECK (((content_kind IS NULL) OR ((content_kind)::text = ANY ((ARRAY['structured-feed'::character varying, 'publication'::character varying])::text[])))),
++    CONSTRAINT publications_chain_supported CHECK (((chain)::text = ANY (ARRAY[('bunnpris'::character varying)::text, ('extra'::character varying)::text, ('rema-1000'::character varying)::text, ('fudi'::character varying)::text, ('holdbart'::character varying)::text, ('meny'::character varying)::text, ('havaristen'::character varying)::text, ('joker'::character varying)::text, ('spar'::character varying)::text, ('fastcandy'::character varying)::text, ('europris'::character varying)::text, ('engrossnett'::character varying)::text, ('oda'::character varying)::text]))),
++    CONSTRAINT publications_content_kind_allowed CHECK (((content_kind IS NULL) OR ((content_kind)::text = ANY (ARRAY[('structured-feed'::character varying)::text, ('publication'::character varying)::text])))),
+     CONSTRAINT publications_declared_scope_object CHECK (((declared_geographic_scope IS NULL) OR (jsonb_typeof(declared_geographic_scope) = 'object'::text))),
+     CONSTRAINT publications_edition_identity_sha256_shape CHECK (((edition_identity_sha256 IS NULL) OR (edition_identity_sha256 ~ '^[0-9a-f]{64}$'::text))),
+     CONSTRAINT publications_offer_identity_complete CHECK ((((content_kind IS NULL) AND (declared_geographic_scope IS NULL) AND (edition_identity_sha256 IS NULL) AND (discovery_permission_id IS NULL)) OR ((content_kind IS NOT NULL) AND (declared_geographic_scope IS NOT NULL) AND (edition_identity_sha256 IS NOT NULL) AND (discovery_permission_id IS NOT NULL)))),
+-    CONSTRAINT publications_status CHECK (((status)::text = ANY ((ARRAY['discovered'::character varying, 'captured'::character varying, 'published'::character varying, 'expired'::character varying, 'failed'::character varying])::text[]))),
++    CONSTRAINT publications_status CHECK (((status)::text = ANY (ARRAY[('discovered'::character varying)::text, ('captured'::character varying)::text, ('published'::character varying)::text, ('expired'::character varying)::text, ('failed'::character varying)::text]))),
+     CONSTRAINT publications_valid_range CHECK ((valid_until > valid_from))
+ );
+ 
+@@ -7111,7 +7111,7 @@
+     acted_at timestamp with time zone NOT NULL,
+     created_at timestamp with time zone DEFAULT now() NOT NULL,
+     decision_boundary_version smallint DEFAULT 1,
+-    CONSTRAINT review_actions_action CHECK (((action)::text = ANY ((ARRAY['approve'::character varying, 'correct_and_approve'::character varying, 'reject'::character varying, 'revoke'::character varying])::text[]))),
++    CONSTRAINT review_actions_action CHECK (((action)::text = ANY (ARRAY[('approve'::character varying)::text, ('correct_and_approve'::character varying)::text, ('reject'::character varying)::text, ('revoke'::character varying)::text]))),
+     CONSTRAINT review_actions_decision_boundary_version CHECK (((decision_boundary_version IS NULL) OR (decision_boundary_version = ANY (ARRAY[1, 2])))),
+     CONSTRAINT review_actions_expected_version_nonnegative CHECK ((expected_version >= 0))
+ );
+@@ -7166,7 +7166,7 @@
+     CONSTRAINT reviewed_family_definitions_label_nonempty CHECK ((length(TRIM(BOTH FROM label_no)) > 0)),
+     CONSTRAINT reviewed_family_definitions_parent_not_self CHECK (((parent_family_id IS NULL) OR ((parent_family_id)::text <> (family_id)::text))),
+     CONSTRAINT reviewed_family_definitions_slug_shape CHECK (((slug)::text ~ '^[a-z0-9]+(-[a-z0-9]+)*$'::text)),
+-    CONSTRAINT reviewed_family_definitions_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'retired'::character varying])::text[])))
++    CONSTRAINT reviewed_family_definitions_status CHECK (((status)::text = ANY (ARRAY[('active'::character varying)::text, ('retired'::character varying)::text])))
+ );
+ 
+ 
+@@ -7187,8 +7187,8 @@
+     rule_version character varying(80),
+     created_at timestamp with time zone DEFAULT now() NOT NULL,
+     CONSTRAINT reviewed_family_membership_decisions_confidence_range CHECK (((confidence >= 0) AND (confidence <= 100))),
+-    CONSTRAINT reviewed_family_membership_decisions_decision CHECK (((decision)::text = ANY ((ARRAY['approved'::character varying, 'candidate'::character varying, 'rejected'::character varying])::text[]))),
+-    CONSTRAINT reviewed_family_membership_decisions_method CHECK (((method)::text = ANY ((ARRAY['deterministic_rule'::character varying, 'human_review'::character varying])::text[]))),
++    CONSTRAINT reviewed_family_membership_decisions_decision CHECK (((decision)::text = ANY (ARRAY[('approved'::character varying)::text, ('candidate'::character varying)::text, ('rejected'::character varying)::text]))),
++    CONSTRAINT reviewed_family_membership_decisions_method CHECK (((method)::text = ANY (ARRAY[('deterministic_rule'::character varying)::text, ('human_review'::character varying)::text]))),
+     CONSTRAINT reviewed_family_membership_decisions_provenance CHECK (((((method)::text = 'human_review'::text) AND (reviewer_id IS NOT NULL) AND (length(TRIM(BOTH FROM reviewer_id)) > 0) AND (rule_version IS NULL)) OR (((method)::text = 'deterministic_rule'::text) AND (reviewer_id IS NULL) AND (rule_version IS NOT NULL) AND (length(TRIM(BOTH FROM rule_version)) > 0)))),
+     CONSTRAINT reviewed_family_membership_decisions_review_not_future_created CHECK ((reviewed_at <= created_at))
+ );
+@@ -7255,7 +7255,7 @@
+     CONSTRAINT source_health_snapshots_operations_boundary_pair CHECK ((((operations_boundary_version IS NULL) AND (persisted_at IS NULL)) OR ((operations_boundary_version = 1) AND (persisted_at IS NOT NULL)))),
+     CONSTRAINT source_health_snapshots_queue_nonnegative CHECK ((review_queue_count >= 0)),
+     CONSTRAINT source_health_snapshots_review_age_nonnegative CHECK (((oldest_review_age_seconds IS NULL) OR (oldest_review_age_seconds >= 0))),
+-    CONSTRAINT source_health_snapshots_status CHECK (((status)::text = ANY ((ARRAY['healthy'::character varying, 'degraded'::character varying, 'failed'::character varying, 'disabled'::character varying])::text[]))),
++    CONSTRAINT source_health_snapshots_status CHECK (((status)::text = ANY (ARRAY[('healthy'::character varying)::text, ('degraded'::character varying)::text, ('failed'::character varying)::text, ('disabled'::character varying)::text]))),
+     CONSTRAINT source_health_snapshots_success_clocks_not_future CHECK (((worker_job_id IS NULL) OR (((last_discovery_success_at IS NULL) OR (last_discovery_success_at <= recorded_at)) AND ((last_capture_success_at IS NULL) OR (last_capture_success_at <= recorded_at)) AND ((last_publish_success_at IS NULL) OR (last_publish_success_at <= recorded_at)) AND ((newest_eligible_evidence_at IS NULL) OR (newest_eligible_evidence_at <= recorded_at))))),
+     CONSTRAINT source_health_snapshots_worker_payload_allowlist CHECK (((worker_job_id IS NULL) OR ((details = '{}'::jsonb) AND (review_queue_count = 0) AND (oldest_review_age_seconds IS NULL))))
+ );
+@@ -7295,7 +7295,7 @@
+     permissions jsonb DEFAULT '{}'::jsonb NOT NULL,
+     notes text,
+     created_at timestamp with time zone DEFAULT now() NOT NULL,
+-    CONSTRAINT source_permissions_decision CHECK (((decision)::text = ANY ((ARRAY['approved'::character varying, 'conditional'::character varying, 'blocked'::character varying, 'revoked'::character varying])::text[]))),
++    CONSTRAINT source_permissions_decision CHECK (((decision)::text = ANY (ARRAY[('approved'::character varying)::text, ('conditional'::character varying)::text, ('blocked'::character varying)::text, ('revoked'::character varying)::text]))),
+     CONSTRAINT source_permissions_valid_range CHECK (((valid_until IS NULL) OR (valid_until > reviewed_at)))
+ );
+ 
+@@ -7333,7 +7333,7 @@
+     first_seen_at timestamp with time zone NOT NULL,
+     last_seen_at timestamp with time zone NOT NULL,
+     CONSTRAINT source_products_hash_shape CHECK ((raw_record_hash ~ '^[0-9a-f]{64}$'::text)),
+-    CONSTRAINT source_products_match_state CHECK (((match_state)::text = ANY ((ARRAY['unmatched'::character varying, 'candidate'::character varying, 'matched'::character varying, 'quarantined'::character varying])::text[]))),
++    CONSTRAINT source_products_match_state CHECK (((match_state)::text = ANY (ARRAY[('unmatched'::character varying)::text, ('candidate'::character varying)::text, ('matched'::character varying)::text, ('quarantined'::character varying)::text]))),
+     CONSTRAINT source_products_seen_range CHECK ((last_seen_at >= first_seen_at))
+ );
+ 
+@@ -7356,11 +7356,11 @@
+     outcome_hash character(64) NOT NULL,
+     recorded_at timestamp with time zone NOT NULL,
+     created_at timestamp with time zone DEFAULT now() NOT NULL,
+-    CONSTRAINT source_record_outcomes_chain_supported CHECK (((subject_chain IS NULL) OR ((subject_chain)::text = ANY ((ARRAY['bunnpris'::character varying, 'extra'::character varying, 'rema-1000'::character varying, 'fudi'::character varying, 'holdbart'::character varying, 'meny'::character varying, 'havaristen'::character varying, 'joker'::character varying, 'spar'::character varying, 'fastcandy'::character varying, 'europris'::character varying, 'engrossnett'::character varying, 'oda'::character varying])::text[])))),
++    CONSTRAINT source_record_outcomes_chain_supported CHECK (((subject_chain IS NULL) OR ((subject_chain)::text = ANY (ARRAY[('bunnpris'::character varying)::text, ('extra'::character varying)::text, ('rema-1000'::character varying)::text, ('fudi'::character varying)::text, ('holdbart'::character varying)::text, ('meny'::character varying)::text, ('havaristen'::character varying)::text, ('joker'::character varying)::text, ('spar'::character varying)::text, ('fastcandy'::character varying)::text, ('europris'::character varying)::text, ('engrossnett'::character varying)::text, ('oda'::character varying)::text])))),
+     CONSTRAINT source_record_outcomes_ean_shape CHECK (((subject_ean IS NULL) OR ((subject_ean)::text ~ '^([0-9]{8}|[0-9]{13})$'::text))),
+     CONSTRAINT source_record_outcomes_hash_shape CHECK ((outcome_hash ~ '^[0-9a-f]{64}$'::text)),
+-    CONSTRAINT source_record_outcomes_reason_state CHECK (((((outcome_state)::text = 'accepted'::text) AND (reason IS NULL)) OR (((outcome_state)::text = ANY ((ARRAY['quarantined'::character varying, 'unknown'::character varying])::text[])) AND (reason IS NOT NULL)))),
+-    CONSTRAINT source_record_outcomes_state CHECK (((outcome_state)::text = ANY ((ARRAY['accepted'::character varying, 'quarantined'::character varying, 'unknown'::character varying])::text[])))
++    CONSTRAINT source_record_outcomes_reason_state CHECK (((((outcome_state)::text = 'accepted'::text) AND (reason IS NULL)) OR (((outcome_state)::text = ANY (ARRAY[('quarantined'::character varying)::text, ('unknown'::character varying)::text])) AND (reason IS NOT NULL)))),
++    CONSTRAINT source_record_outcomes_state CHECK (((outcome_state)::text = ANY (ARRAY[('accepted'::character varying)::text, ('quarantined'::character varying)::text, ('unknown'::character varying)::text])))
+ );
+ 
+ 
+@@ -7404,9 +7404,9 @@
+     persisted_at timestamp with time zone,
+     CONSTRAINT worker_job_results_counts_object CHECK ((jsonb_typeof(counts) = 'object'::text)),
+     CONSTRAINT worker_job_results_hash_shape CHECK ((result_hash ~ '^[0-9a-f]{64}$'::text)),
+-    CONSTRAINT worker_job_results_job_kind CHECK (((job_kind)::text = ANY ((ARRAY['catalog-refresh'::character varying, 'benchmark-price-refresh'::character varying, 'physical-store-sync'::character varying, 'historical-observation-collection'::character varying, 'open-prices-benchmark-refresh'::character varying, 'official-offer-discovery'::character varying, 'official-offer-fetch'::character varying, 'official-offer-ingestion'::character varying, 'official-offer-lifecycle-reconcile'::character varying])::text[]))),
++    CONSTRAINT worker_job_results_job_kind CHECK (((job_kind)::text = ANY (ARRAY[('catalog-refresh'::character varying)::text, ('benchmark-price-refresh'::character varying)::text, ('physical-store-sync'::character varying)::text, ('historical-observation-collection'::character varying)::text, ('open-prices-benchmark-refresh'::character varying)::text, ('official-offer-discovery'::character varying)::text, ('official-offer-fetch'::character varying)::text, ('official-offer-ingestion'::character varying)::text, ('official-offer-lifecycle-reconcile'::character varying)::text]))),
+     CONSTRAINT worker_job_results_operations_boundary_pair CHECK ((((operations_boundary_version IS NULL) AND (persisted_at IS NULL)) OR ((operations_boundary_version = 1) AND (persisted_at IS NOT NULL)))),
+-    CONSTRAINT worker_job_results_status CHECK (((status)::text = ANY ((ARRAY['succeeded'::character varying, 'partial'::character varying, 'cancelled'::character varying, 'timed-out'::character varying, 'failed'::character varying])::text[]))),
++    CONSTRAINT worker_job_results_status CHECK (((status)::text = ANY (ARRAY[('succeeded'::character varying)::text, ('partial'::character varying)::text, ('cancelled'::character varying)::text, ('timed-out'::character varying)::text, ('failed'::character varying)::text]))),
+     CONSTRAINT worker_job_results_time_range CHECK (((completed_at >= started_at) AND (completed_at >= scheduled_at)))
+ );
+ 
+@@ -8329,7 +8329,7 @@
+ -- Name: product_identifiers_gtin_value_unique; Type: INDEX; Schema: public; Owner: -
+ --
+ 
+-CREATE UNIQUE INDEX product_identifiers_gtin_value_unique ON public.product_identifiers USING btree (value) WHERE ((scheme)::text = ANY ((ARRAY['ean8'::character varying, 'ean13'::character varying])::text[]));
++CREATE UNIQUE INDEX product_identifiers_gtin_value_unique ON public.product_identifiers USING btree (value) WHERE ((scheme)::text = ANY (ARRAY[('ean8'::character varying)::text, ('ean13'::character varying)::text]));
+ 
+ 
+ --

@@ -522,6 +522,7 @@ function parseBackupSnapshotSessionOutput(text) {
   const snapshots = [];
   const relations = [];
   const ledgerRows = [];
+  const baselines = [];
   let readyCount = 0;
   for (const line of text.replaceAll("\r\n", "\n").split("\n")) {
     if (line.length === 0) continue;
@@ -535,6 +536,16 @@ function parseBackupSnapshotSessionOutput(text) {
       relations.push(line.slice("HP_RELATIONS\t".length));
     } else if (line.startsWith("HP_LEDGER\t")) {
       ledgerRows.push(line.slice("HP_LEDGER\t".length));
+    } else if (line.startsWith("HP_BASELINE\t")) {
+      const value = line.slice("HP_BASELINE\t".length);
+      if (value.length > 128 * 1024) fail("backup baseline provenance exceeds its bound");
+      if (value.length > 0) {
+        try {
+          baselines.push(JSON.parse(value));
+        } catch {
+          fail("backup baseline provenance is not valid JSON");
+        }
+      }
     } else {
       fail("backup snapshot session returned an unexpected response");
     }
@@ -551,6 +562,7 @@ function parseBackupSnapshotSessionOutput(text) {
   return {
     identity: parseBackupDatabaseIdentity(identities[0]),
     migrationLedger: parseLedger(ledgerRows.join("\n"), "backup source"),
+    baseline: baselines.length > 1 ? fail("backup source returned multiple baseline rows") : (baselines[0] ?? null),
     requiredRelations: relations[0],
     snapshotId: snapshots[0],
   };
@@ -632,10 +644,16 @@ export async function openBackupSnapshotSession(config) {
   const sql = [
     "\\set ON_ERROR_STOP on",
     "begin transaction isolation level repeatable read read only;",
-    "select 'HP_IDENTITY' || E'\\t' || concat_ws(E'\\t', current_database(), current_user, encode(sha256(convert_to(system_identifier::text, 'UTF8')), 'hex'), (select rolsuper from pg_roles where rolname = current_user), (select rolcreaterole from pg_roles where rolname = current_user), (select rolcreatedb from pg_roles where rolname = current_user), (select rolreplication from pg_roles where rolname = current_user), (select rolbypassrls from pg_roles where rolname = current_user), (select count(*) = 0 from pg_auth_members where member = (select oid from pg_roles where rolname = current_user)), (select count(*) = 0 from pg_database where datdba = (select oid from pg_roles where rolname = current_user))) from pg_control_system();",
+    "select 'HP_IDENTITY' || E'\\t' || concat_ws(E'\\t', current_database(), current_user, encode(sha256(convert_to(system_identifier::text, 'UTF8')), 'hex'), ((select rolsuper from pg_roles where rolname = current_user))::text, ((select rolcreaterole from pg_roles where rolname = current_user))::text, ((select rolcreatedb from pg_roles where rolname = current_user))::text, ((select rolreplication from pg_roles where rolname = current_user))::text, ((select rolbypassrls from pg_roles where rolname = current_user))::text, ((select count(*) = 0 from pg_auth_members where member = (select oid from pg_roles where rolname = current_user)))::text, ((select count(*) = 0 from pg_database where datdba = (select oid from pg_roles where rolname = current_user)))::text) from pg_control_system();",
     "select 'HP_SNAPSHOT' || E'\\t' || pg_export_snapshot();",
     "select 'HP_LEDGER' || E'\\t' || id || E'\\t' || checksum from handleplan_schema_migrations order by id;",
-    "select 'HP_RELATIONS' || E'\\t' || concat_ws(E'\\t', to_regclass('public.ingestion_runs') is not null, to_regclass('public.price_observations') is not null, to_regclass('public.source_permissions') is not null, to_regclass('public.publication_captures') is not null);",
+    "select case when to_regclass('public.handleplan_schema_baselines') is null then 'false' else 'true' end as hp_baseline_exists \\gset",
+    "\\if :hp_baseline_exists",
+    "select 'HP_BASELINE' || E'\\t' || row_to_json(baseline_row)::text from (select baseline_id, manifest_sha256, artifact_sha256, covered_migrations, resulting_schema_sha256, provenance from public.handleplan_schema_baselines order by baseline_id limit 2) baseline_row;",
+    "\\else",
+    "select 'HP_BASELINE' || E'\\t';",
+    "\\endif",
+    "select 'HP_RELATIONS' || E'\\t' || concat_ws(E'\\t', (to_regclass('public.ingestion_runs') is not null)::text, (to_regclass('public.price_observations') is not null)::text, (to_regclass('public.source_permissions') is not null)::text, (to_regclass('public.publication_captures') is not null)::text);",
     "select 'HP_READY';",
     "",
   ].join("\n");
@@ -739,6 +757,7 @@ export async function runEncryptedDumpPipeline(config) {
   const ledgerExtract = spawn(config.pgRestoreBinary, [
     "--data-only",
     "--table=handleplan_schema_migrations",
+    "--file=-",
   ], {
     env: { HOME: process.env.HOME ?? "/nonexistent", LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
     stdio: ["pipe", "pipe", "ignore"],
@@ -746,17 +765,30 @@ export async function runEncryptedDumpPipeline(config) {
   const captureExtract = spawn(config.pgRestoreBinary, [
     "--data-only",
     "--table=publication_captures",
+    "--file=-",
   ], {
     env: { HOME: process.env.HOME ?? "/nonexistent", LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
     stdio: ["pipe", "pipe", "ignore"],
   });
+  const baselineExtract = config.includeBaseline
+    ? spawn(config.pgRestoreBinary, [
+      "--data-only",
+      "--table=handleplan_schema_baselines",
+      "--file=-",
+    ], {
+      env: { HOME: process.env.HOME ?? "/nonexistent", LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
+      stdio: ["pipe", "pipe", "ignore"],
+    })
+    : null;
   children.push(pgDump, age, archiveList, ledgerExtract, captureExtract);
+  if (baselineExtract) children.push(baselineExtract);
   for (const stream of [
     pgDump.stdout,
     age.stdin,
     archiveList.stdin,
     ledgerExtract.stdin,
     captureExtract.stdin,
+    ...(baselineExtract ? [baselineExtract.stdin] : []),
   ]) {
     stream.on("error", () => stopAll());
   }
@@ -768,11 +800,15 @@ export async function runEncryptedDumpPipeline(config) {
     config.maxCaptureLedgerBytes,
     stopAll,
   );
+  const baselineOutput = baselineExtract
+    ? collectBounded(baselineExtract.stdout, 256 * 1024, stopAll)
+    : Promise.resolve("");
   const completions = children.map((child) => childCompletion(child, stopAll));
   pgDump.stdout.pipe(age.stdin);
   pgDump.stdout.pipe(archiveList.stdin);
   pgDump.stdout.pipe(ledgerExtract.stdin);
   pgDump.stdout.pipe(captureExtract.stdin);
+  if (baselineExtract) pgDump.stdout.pipe(baselineExtract.stdin);
 
   let oversized = false;
   const sizeGuard = setInterval(() => {
@@ -793,11 +829,12 @@ export async function runEncryptedDumpPipeline(config) {
   }, config.commandTimeoutMs);
   timeout.unref();
   try {
-    const [statusesResult, listResult, ledgerResult, captureLedgerResult] = await Promise.allSettled([
+    const [statusesResult, listResult, ledgerResult, captureLedgerResult, baselineResult] = await Promise.allSettled([
       Promise.all(completions),
       archiveListOutput,
       ledgerOutput,
       captureLedgerOutput,
+      baselineOutput,
     ]);
     if (timedOut) fail("streaming backup pipeline exceeded its timeout");
     if (oversized) fail("streaming backup pipeline exceeded its artifact limit");
@@ -805,10 +842,11 @@ export async function runEncryptedDumpPipeline(config) {
     const listText = fulfilledValue(listResult);
     const ledgerText = fulfilledValue(ledgerResult);
     const captureLedgerSql = fulfilledValue(captureLedgerResult);
+    const baselineSql = fulfilledValue(baselineResult);
     if (statuses.some((success) => !success)) {
       fail("streaming pg_dump encryption or archive validation failed");
     }
-    return { archiveList: listText, captureLedgerSql, ledgerSql: ledgerText };
+    return { archiveList: listText, baselineSql, captureLedgerSql, ledgerSql: ledgerText };
   } finally {
     clearInterval(sizeGuard);
     clearTimeout(timeout);
@@ -1616,6 +1654,75 @@ function repositoryMigrationLedger(migrationsDirectory) {
   });
 }
 
+function repositoryBaselineContract(migrationsDirectory) {
+  const bootstrapDirectory = join(migrationsDirectory, "../bootstrap");
+  const manifestPath = join(bootstrapDirectory, "040_manifest.json");
+  const artifactPath = join(bootstrapDirectory, "040_schema.sql");
+  let manifestSource;
+  let artifactSource;
+  try {
+    manifestSource = readFileSync(manifestPath, "utf8");
+    artifactSource = readFileSync(artifactPath, "utf8");
+  } catch {
+    return null;
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(manifestSource);
+  } catch {
+    fail("bootstrap manifest is not valid JSON");
+  }
+  const manifestSha256 = createHash("sha256").update(manifestSource).digest("hex");
+  const artifactSha256 = createHash("sha256").update(artifactSource).digest("hex");
+  if (
+    manifest?.baseline_id !== "handleplan-040-canonical-v1"
+    || manifest?.artifact?.path !== "deploy/bootstrap/040_schema.sql"
+    || manifest?.artifact?.sha256 !== artifactSha256
+    || !Array.isArray(manifest.covered_migrations)
+    || manifest.covered_migrations.length !== 40
+    || !SAFE_SHA256.test(manifestSha256)
+  ) {
+    fail("bootstrap manifest does not match its artifact");
+  }
+  return {
+    artifactSha256,
+    baselineId: manifest.baseline_id,
+    coveredMigrations: manifest.covered_migrations,
+    manifest,
+    manifestSha256,
+    resultingSchemaSha256: manifest.canonical_contract?.schema_catalog_sha256,
+  };
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalJson(entry)]),
+    );
+  }
+  return value;
+}
+
+function requireBaselineMatch(actual, expected, label) {
+  // Baseline coverage remains separate from the actual execution ledger.
+  if (actual === null) return;
+  if (expected === null) fail(`${label} baseline provenance is unavailable for validation`);
+  if (
+    typeof actual !== "object"
+    || actual.baseline_id !== expected.baselineId
+    || actual.manifest_sha256 !== expected.manifestSha256
+    || actual.artifact_sha256 !== expected.artifactSha256
+    || actual.resulting_schema_sha256 !== expected.resultingSchemaSha256
+    || JSON.stringify(actual.covered_migrations) !== JSON.stringify(expected.coveredMigrations)
+    || JSON.stringify(canonicalJson(actual.provenance))
+      !== JSON.stringify(canonicalJson(expected.manifest.provenance))
+  ) {
+    fail(`${label} baseline provenance does not match the reviewed artifact`);
+  }
+}
+
 function requireLedgerPrefix(actual, current, { exact, label }) {
   if (actual.length === 0 || actual.length > current.length) {
     fail(`${label} migration ledger is not a valid prefix of this source revision`);
@@ -1630,6 +1737,31 @@ function requireLedgerPrefix(actual, current, { exact, label }) {
   }
   if (exact && actual.length !== current.length) {
     fail(`${label} migration ledger is not current for this source revision`);
+  }
+}
+
+function requireBaselineAwareLedger(actual, current, baseline, { exact, label }) {
+  if (baseline === null) {
+    requireLedgerPrefix(actual, current, { exact, label });
+    return;
+  }
+  const coveredIds = new Set(
+    (baseline.covered_migrations ?? []).map((entry) => entry?.id),
+  );
+  const forward = current.filter(({ id }) => !coveredIds.has(id));
+  if (actual.length === 0 || actual.length > forward.length) {
+    fail(`${label} migration ledger is not a valid post-baseline suffix`);
+  }
+  for (let index = 0; index < actual.length; index += 1) {
+    if (
+      actual[index].id !== forward[index].id
+      || actual[index].checksum !== forward[index].checksum
+    ) {
+      fail(`${label} migration ledger is not a valid post-baseline suffix`);
+    }
+  }
+  if (exact && actual.length !== forward.length) {
+    fail(`${label} migration ledger is not current for this baseline revision`);
   }
 }
 
@@ -1661,7 +1793,102 @@ function parseExtractedLedger(sqlText) {
     rows.push(`${fields[0]}\t${fields[1]}`);
   }
   if (!ended) fail("custom archive migration-ledger COPY block is unterminated");
-  return parseLedger(rows.join("\n"), "custom archive");
+  return parseLedger(rows.sort((left, right) => left.localeCompare(right)).join("\n"), "custom archive");
+}
+
+function decodeCopyField(value) {
+  let decoded = "";
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== "\\") {
+      decoded += value[index];
+      continue;
+    }
+    const escaped = value[index + 1];
+    if (escaped === undefined) fail("custom archive baseline row has an incomplete escape");
+    index += 1;
+    decoded += ({
+      b: "\b",
+      f: "\f",
+      n: "\n",
+      r: "\r",
+      t: "\t",
+      v: "\v",
+    })[escaped] ?? escaped;
+  }
+  return decoded;
+}
+
+function parseExtractedBaseline(sqlText) {
+  if (typeof sqlText !== "string" || Buffer.byteLength(sqlText) > 256 * 1024) {
+    fail("dump baseline provenance exceeds its bound");
+  }
+  const lines = sqlText.replaceAll("\r\n", "\n").split("\n");
+  const copyPattern = /^COPY (?:public\.)?handleplan_schema_baselines \(([^)]+)\) FROM stdin;$/u;
+  const copyIndex = lines.findIndex((line) => copyPattern.test(line));
+  if (copyIndex < 0) return null;
+  const header = copyPattern.exec(lines[copyIndex]);
+  const columns = header[1].split(", ");
+  const requiredColumns = [
+    "baseline_id",
+    "manifest_sha256",
+    "artifact_sha256",
+    "covered_migrations",
+    "resulting_schema_sha256",
+    "provenance",
+  ];
+  if (
+    columns.length === 0
+    || new Set(columns).size !== columns.length
+    || requiredColumns.some((column) => !columns.includes(column))
+  ) {
+    fail("custom archive baseline provenance columns are invalid");
+  }
+  const rows = [];
+  let ended = false;
+  for (const line of lines.slice(copyIndex + 1)) {
+    if (line === "\\.") {
+      ended = true;
+      break;
+    }
+    rows.push(line.split("\t").map(decodeCopyField));
+  }
+  if (!ended) fail("custom archive baseline provenance COPY block is unterminated");
+  if (rows.length === 0) return null;
+  if (rows.length !== 1) fail("custom archive contains multiple baseline provenance rows");
+  const row = rows[0];
+  if (row.length !== columns.length) fail("custom archive baseline provenance row is invalid");
+  const value = (column) => row[columns.indexOf(column)];
+  let coveredMigrations;
+  let provenance;
+  try {
+    coveredMigrations = JSON.parse(value("covered_migrations"));
+    provenance = JSON.parse(value("provenance"));
+  } catch {
+    fail("custom archive baseline provenance JSON is invalid");
+  }
+  if (
+    !SAFE_ID.test(value("baseline_id") ?? "")
+    || !SAFE_SHA256.test(value("manifest_sha256") ?? "")
+    || !SAFE_SHA256.test(value("artifact_sha256") ?? "")
+    || !SAFE_SHA256.test(value("resulting_schema_sha256") ?? "")
+    || !Array.isArray(coveredMigrations)
+    || provenance === null
+    || typeof provenance !== "object"
+  ) {
+    fail("custom archive baseline provenance row is invalid");
+  }
+  return {
+    artifact_sha256: value("artifact_sha256"),
+    baseline_id: value("baseline_id"),
+    covered_migrations: coveredMigrations,
+    manifest_sha256: value("manifest_sha256"),
+    provenance,
+    resulting_schema_sha256: value("resulting_schema_sha256"),
+  };
+}
+
+function baselineRowsEqual(left, right) {
+  return JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right));
 }
 
 function parseExtractedCaptureLedger(sqlText, maximumBytes) {
@@ -2054,11 +2281,21 @@ function validateBackupSnapshotSession(session, config) {
     serializeLedger(session.migrationLedger ?? []),
     "backup source",
   );
-  requireLedgerPrefix(migrationLedger, repositoryMigrationLedger(config.migrationsDirectory), {
-    exact: true,
-    label: "backup source",
-  });
-  return { identity, migrationLedger, snapshotId: session.snapshotId };
+  const baselineContract = repositoryBaselineContract(config.migrationsDirectory);
+  const baseline = session.baseline ?? null;
+  requireBaselineMatch(baseline, baselineContract, "backup source");
+  requireBaselineAwareLedger(
+    migrationLedger,
+    repositoryMigrationLedger(config.migrationsDirectory),
+    baseline,
+    { exact: true, label: "backup source" },
+  );
+  return {
+    baseline,
+    identity,
+    migrationLedger,
+    snapshotId: session.snapshotId,
+  };
 }
 
 export async function createBackup({
@@ -2110,17 +2347,28 @@ export async function createBackup({
       sourceBefore = validateBackupSnapshotSession(sourceSession, operationConfig);
       const pipeline = await pipelineRunner({
         ...operationConfig,
+        includeBaseline: sourceBefore.baseline !== null,
         encryptedPath,
         snapshotId: sourceBefore.snapshotId,
       });
       validateArchiveList(pipeline.archiveList);
+      if (
+        sourceBefore.baseline !== null
+        && !pipeline.archiveList.includes("TABLE DATA public handleplan_schema_baselines")
+      ) {
+        fail("exported-snapshot archive is missing the baseline provenance table");
+      }
       const archivedLedger = parseExtractedLedger(pipeline.ledgerSql);
+      const archivedBaseline = parseExtractedBaseline(pipeline.baselineSql ?? "");
       archivedCaptureLedger = parseExtractedCaptureLedger(
         pipeline.captureLedgerSql,
         config.maxCaptureLedgerBytes,
       );
       if (serializeLedger(archivedLedger) !== serializeLedger(sourceBefore.migrationLedger)) {
         fail("exported-snapshot archive migration ledger does not match its source session");
+      }
+      if (!baselineRowsEqual(archivedBaseline, sourceBefore.baseline)) {
+        fail("exported-snapshot archive baseline provenance does not match its source session");
       }
     } finally {
       if (typeof sourceSession?.close === "function") {
@@ -2220,6 +2468,7 @@ export async function createBackup({
       schemaVersion: 2,
       source: {
         archiveSessionBinding: "postgresql-exported-snapshot-v1",
+        baseline: sourceBefore.baseline,
         database: sourceBefore.identity.database,
         migrationLedger: sourceBefore.migrationLedger,
         role: sourceBefore.identity.role,
@@ -2510,6 +2759,11 @@ function parseManifest(path) {
     || value?.source?.archiveSessionBinding !== "postgresql-exported-snapshot-v1"
     || value?.source?.schemaContract !== "handleplan-evidence-relations-v1"
     || !Array.isArray(value?.source?.migrationLedger)
+    || (
+      value?.source?.baseline !== undefined
+      && value.source.baseline !== null
+      && (typeof value.source.baseline !== "object" || Array.isArray(value.source.baseline))
+    )
   ) {
     fail("restore manifest does not satisfy the v2 backup contract");
   }
@@ -2517,7 +2771,14 @@ function parseManifest(path) {
     value.source.migrationLedger.map((entry) => `${entry?.id ?? ""}\t${entry?.checksum ?? ""}`).join("\n"),
     "manifest source",
   );
-  return { ...value, source: { ...value.source, migrationLedger } };
+  return {
+    ...value,
+    source: {
+      ...value.source,
+      baseline: value.source.baseline ?? null,
+      migrationLedger,
+    },
+  };
 }
 
 async function query(runner, config, sql, failureMessage, { maxBuffer = 64 * 1024 } = {}) {
@@ -2598,7 +2859,7 @@ const CLEAN_ROOM_CATALOG_QUERY = [
 
 const CLEAN_ROOM_CATALOG_VECTOR = "0\t0\t0\t0\t0\t0";
 
-const RESTORE_IDENTITY_QUERY = "select concat_ws(E'\\t', current_database(), current_user, encode(sha256(convert_to(system_identifier::text, 'UTF8')), 'hex'), (select pg_get_userbyid(datdba) = current_user from pg_database where datname = current_database()), (select rolsuper from pg_roles where rolname = current_user), (select rolcreaterole from pg_roles where rolname = current_user), (select rolcreatedb from pg_roles where rolname = current_user), (select rolreplication from pg_roles where rolname = current_user), (select rolbypassrls from pg_roles where rolname = current_user), (select count(*) = 0 from pg_auth_members where member = (select oid from pg_roles where rolname = current_user)), (select count(*) = 0 from pg_database where datdba = (select oid from pg_roles where rolname = current_user) and datname <> current_database())) from pg_control_system()";
+const RESTORE_IDENTITY_QUERY = "select concat_ws(E'\\t', current_database(), current_user, encode(sha256(convert_to(system_identifier::text, 'UTF8')), 'hex'), ((select pg_get_userbyid(datdba) = current_user from pg_database where datname = current_database()))::text, ((select rolsuper from pg_roles where rolname = current_user))::text, ((select rolcreaterole from pg_roles where rolname = current_user))::text, ((select rolcreatedb from pg_roles where rolname = current_user))::text, ((select rolreplication from pg_roles where rolname = current_user))::text, ((select rolbypassrls from pg_roles where rolname = current_user))::text, ((select count(*) = 0 from pg_auth_members where member = (select oid from pg_roles where rolname = current_user)))::text, ((select count(*) = 0 from pg_database where datdba = (select oid from pg_roles where rolname = current_user) and datname <> current_database()))::text) from pg_control_system()";
 
 export async function verifyRestore({
   capturePipelineRunner = runPrivateCaptureArchiveVerification,
@@ -2649,10 +2910,17 @@ export async function verifyRestore({
       fail("encrypted backup exceeds the bounded restore size limit");
     }
     const currentLedger = repositoryMigrationLedger(config.migrationsDirectory);
-    requireLedgerPrefix(manifest.source.migrationLedger, currentLedger, {
-      exact: false,
-      label: "selected backup",
-    });
+    requireBaselineMatch(
+      manifest.source.baseline,
+      repositoryBaselineContract(config.migrationsDirectory),
+      "selected backup",
+    );
+    requireBaselineAwareLedger(
+      manifest.source.migrationLedger,
+      currentLedger,
+      manifest.source.baseline ?? null,
+      { exact: false, label: "selected backup" },
+    );
 
     const pinnedServiceFile = join(scratch, "pg_service.conf");
     copyBoundedPrivate(config.pgServiceFile, pinnedServiceFile, 64 * 1024, "libpq service file");
@@ -2724,6 +2992,12 @@ export async function verifyRestore({
       expectedExecutionIdentity: identityBefore,
     });
     validateArchiveList(restorePipeline.archiveList);
+    if (
+      manifest.source.baseline !== null
+      && !restorePipeline.archiveList.includes("TABLE DATA public handleplan_schema_baselines")
+    ) {
+      fail("restore archive is missing the selected baseline provenance table");
+    }
     requireRestoreExecutionProof(restorePipeline, identityBefore);
     const identityAfter = parseDatabaseIdentity(await query(
       runner,
@@ -2743,11 +3017,33 @@ export async function verifyRestore({
     if (serializeLedger(restoredLedger) !== serializeLedger(manifest.source.migrationLedger)) {
       fail("restored migration ledger does not match the selected backup manifest");
     }
+    const restoredBaselineExists = await query(
+      runner,
+      operationConfig,
+      "select to_regclass('public.handleplan_schema_baselines') is not null",
+      "could not read back restored baseline provenance state",
+    );
+    let restoredBaseline = null;
+    if (restoredBaselineExists === "t" || restoredBaselineExists === "true") {
+      restoredBaseline = JSON.parse(await query(
+        runner,
+        operationConfig,
+        "select row_to_json(baseline_row)::text from (select baseline_id, manifest_sha256, artifact_sha256, covered_migrations, resulting_schema_sha256, provenance from public.handleplan_schema_baselines order by baseline_id limit 2) baseline_row",
+        "could not read back restored baseline provenance",
+      ));
+    }
+    if (manifest.source.baseline === null) {
+      if (restoredBaseline !== null) {
+        fail("restored database contains unexpected baseline provenance");
+      }
+    } else if (JSON.stringify(restoredBaseline) !== JSON.stringify(manifest.source.baseline)) {
+      fail("restored baseline provenance does not match the selected backup manifest");
+    }
 
     const requiredRelations = await query(
       runner,
       operationConfig,
-      "select concat_ws(E'\\t', to_regclass('public.ingestion_runs') is not null, to_regclass('public.price_observations') is not null, to_regclass('public.source_permissions') is not null, to_regclass('public.publication_captures') is not null)",
+      "select concat_ws(E'\\t', (to_regclass('public.ingestion_runs') is not null)::text, (to_regclass('public.price_observations') is not null)::text, (to_regclass('public.source_permissions') is not null)::text, (to_regclass('public.publication_captures') is not null)::text)",
       "could not verify required restored relations",
     );
     if (requiredRelations !== "true\ttrue\ttrue\ttrue") {

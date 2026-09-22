@@ -23,10 +23,9 @@ describe("private review image-only evidence boundary", () => {
       readFile(imageBoundaryPath, "utf8"),
     ]);
 
-    expect(files.filter((file) => /^\d{3}_[a-z0-9_]+\.sql$/u.test(file)).sort().at(-9))
-      .toBe("032_seed_national_scope.sql");
-    expect(files.filter((file) => /^\d{3}_[a-z0-9_]+\.sql$/u.test(file)).sort().at(-8))
-      .toBe("033_open_prices_source.sql");
+    const sorted = files.filter((file) => /^\d{3}_[a-z0-9_]+\.sql$/u.test(file)).sort();
+    const openPricesIndex = sorted.indexOf("033_open_prices_source.sql");
+    expect(sorted[openPricesIndex - 1]).toBe("032_seed_national_scope.sql");
     expect(historicalRenderer).toContain(
       "mime_type in ('application/pdf', 'image/jpeg', 'image/png', 'image/webp')",
     );

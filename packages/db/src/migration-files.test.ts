@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,6 +61,59 @@ function runMigrationWith(overrides: Record<string, string>) {
 }
 
 describe("forward-only v1 migrations", () => {
+  it("preflights and activates the reviewed baseline without blanket worker grants", async () => {
+    const runner = await readFile(migrationRunner, "utf8");
+    const baselineBranch = runner.indexOf("handleplan_schema_baselines");
+    expect(baselineBranch).toBeGreaterThan(-1);
+    expect(runner.indexOf("handleplan_schema_migrations")).toBeGreaterThan(-1);
+    expect(runner.indexOf("handleplan_schema_baselines")).toBeLessThan(
+      runner.indexOf("create table public.handleplan_schema_migrations"),
+    );
+    expect(runner).toContain("040_manifest.json");
+    expect(runner).toContain("040_schema.sql");
+    expect(runner).toContain("Baseline target must be an empty catalog");
+    expect(runner).toContain("CI_MAX_MIGRATION_ID cannot use the empty-database baseline");
+    expect(runner).not.toMatch(/grant execute on all functions in schema public to \$\{workerRole\}/u);
+    expect(runner).not.toMatch(/grant select on all tables in schema public to \$\{workerRole\}/u);
+    expect(runner).not.toMatch(/grant usage on all sequences in schema public to \$\{workerRole\}/u);
+    expect(runner).toContain("revoke insert on table approved_offers, review_actions, offer_targets, offer_conditions");
+  });
+
+  it("keeps backup provenance separate from the execution ledger", async () => {
+    const toolkit = await readFile(
+      fileURLToPath(new URL("../../../deploy/backup/toolkit.mjs", import.meta.url)),
+      "utf8",
+    );
+    expect(toolkit).toContain("HP_BASELINE");
+    expect(toolkit).toContain("handleplan_schema_baselines");
+    expect(toolkit).toContain("source.baseline");
+    expect(toolkit).toContain("Baseline coverage remains separate");
+  });
+
+  it("ships the hash-bound bootstrap through the privileged runtime and ops bundle", async () => {
+    const [dockerfile, verifier, deploy] = await Promise.all([
+      readFile(fileURLToPath(new URL("../../../Dockerfile", import.meta.url)), "utf8"),
+      readFile(fileURLToPath(new URL("../../../scripts/operations/verify-production-image.mjs", import.meta.url)), "utf8"),
+      readFile(productionDeploy, "utf8"),
+    ]);
+    expect(dockerfile).toContain("/app/.handleplan-runtime-stage/deploy/bootstrap");
+    expect(dockerfile).toContain("/app/deploy/bootstrap");
+    expect(verifier).toContain('"bootstrap"');
+    expect(deploy).toContain('"$deployment_source_dir/deploy/bootstrap"');
+    expect(deploy).toContain('"$release_dir/deploy/bootstrap"');
+  });
+
+  it("creates only a missing non-login worker before migrations that grant to it", async () => {
+    const runner = await readFile(migrationRunner, "utf8");
+    const start = runner.indexOf("do $worker_role_prerequisite$");
+    const end = runner.indexOf("$worker_role_prerequisite$;", start);
+    expect(start).toBeGreaterThan(runner.indexOf("select pg_advisory_lock"));
+    expect(end).toBeLessThan(runner.indexOf("for (const id of migrationFiles)"));
+    const prerequisite = runner.slice(start, end);
+    expect(prerequisite).toContain("if not exists (select 1 from pg_roles where rolname = '${workerRole}')");
+    expect(prerequisite).toContain("create role ${workerRole} with nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls");
+    expect(prerequisite).not.toMatch(/alter role|password|grant /i);
+  });
   it("keeps the complete ordered migration set", async () => {
     const files = (await readdir(migrationsDirectory))
       .filter((file) => /^\d{3}_[a-z0-9_]+\.sql$/.test(file))
@@ -106,6 +160,9 @@ describe("forward-only v1 migrations", () => {
       "038_tjek_function_grants.sql",
       "039_tjek_null_comparison_fix.sql",
       "040_offer_backed_discovery.sql",
+      "041_public_offer_projection_repair.sql",
+      "042_official_offer_worker_boundary.sql",
+      "043_meny_official_offer_source.sql",
     ]);
   });
 
@@ -115,7 +172,7 @@ describe("forward-only v1 migrations", () => {
       .sort();
     expect(files[0]).toBe("001_price_cache.sql");
     const guardedFiles = files.slice(1);
-    expect(guardedFiles.at(-1)).toBe("040_offer_backed_discovery.sql");
+    expect(guardedFiles.at(-1)).toBe("043_meny_official_offer_source.sql");
     const source = (
       await Promise.all(
         guardedFiles.map((file) => readFile(path.join(migrationsDirectory, file), "utf8")),
@@ -127,6 +184,57 @@ describe("forward-only v1 migrations", () => {
     expect(source).toContain("insert into price_observations");
     expect(source).toContain("legacy-import");
     expect(source).not.toContain("drop table price_cache");
+  });
+
+  it("pins the literal bootstrap artifact and the reviewed 041 correction", async () => {
+    const [artifact, manifest, repair] = await Promise.all([
+      readFile(fileURLToPath(new URL("../../../deploy/bootstrap/040_schema.sql", import.meta.url)), "utf8"),
+      readFile(fileURLToPath(new URL("../../../deploy/bootstrap/040_manifest.json", import.meta.url)), "utf8"),
+      readFile(path.join(migrationsDirectory, "041_public_offer_projection_repair.sql"), "utf8"),
+    ]);
+    const parsed = JSON.parse(manifest);
+    expect(createHash("sha256").update(artifact).digest("hex")).toBe(parsed.artifact.sha256);
+    expect(parsed.covered_migrations).toHaveLength(40);
+    expect(parsed.covered_migrations.at(-1).id).toBe("040_offer_backed_discovery.sql");
+    expect(parsed.correction_semantics.migration_039_execution).toMatch(/not executed/u);
+    for (const entry of parsed.covered_migrations) {
+      const checksum = createHash("sha256")
+        .update(await readFile(path.join(migrationsDirectory, entry.id)))
+        .digest("hex");
+      expect(checksum, entry.id).toBe(entry.sha256);
+    }
+    expect(artifact).not.toMatch(/^\\(?:restrict|unrestrict)\\b/mu);
+    expect(artifact).not.toContain("CREATE SCHEMA public");
+    expect(artifact).not.toContain("handleplan_schema_migrations");
+    expect(artifact).not.toContain("handleplan_schema_baselines");
+    expect(artifact).not.toMatch(/GRANT .* TO handleplan_(app|web|review|operations)/u);
+    expect(artifact).not.toContain("2026-07-17");
+    expect(artifact).toContain("pg_catalog.transaction_timestamp()");
+    expect(artifact).toContain("pg_catalog.clock_timestamp()");
+    expect(parsed.canonical_contract.object_counts).toEqual({
+      relations: 52,
+      columns: 499,
+      constraints: 339,
+      indexes: 105,
+      triggers: 87,
+      public_functions: 47,
+      sequences: 26,
+    });
+    expect(parsed.canonical_contract.normalized_seed_sha256)
+      .toBe("3ec6e86709734a1adea946c6702f2fb40d5e4dae48abd86bb63f5c14169bcd3a");
+    expect(parsed.canonical_contract.sequence_state_sha256)
+      .toBe("73b72c9fd5fdb4e0b34c683d95673a2475bf3dfa8b4940c89b4ce1bd399d6279");
+    expect(parsed.canonical_contract.public_acl_security_sha256)
+      .toBe("5e959cc908463fd52a6b9a3724c2caba269d74c328b28684db1484a62190ea35");
+    expect(parsed.correction_semantics.corrected_official_function_definition_sha256)
+      .toBe("256e213b63ba618bfe2edf3fb27e3499e4ff584a0e040f6f77e2f3189d7c3e94");
+    expect(parsed.correction_semantics.offer_backed_function_definition_sha256)
+      .toBe("b98b8c64a00adaa36b3983bf9127f05c4f17403faaaa23e5882b7d961611ad12");
+    expect(repair).toContain("CREATE OR REPLACE FUNCTION public.public_official_offer_rows_v1");
+    expect(repair).toContain("PARALLEL UNSAFE");
+    expect(repair).toContain("candidate.normalized_fields #> '{candidate,exactCanonicalProductId}'");
+    expect(repair).toContain("jsonb_typeof(");
+    expect(repair).not.toMatch(/regexp_replace|pg_proc|prosrc|execute\s+/iu);
   });
 
   it("keeps unverified mirror and legacy coverage explicitly ineligible", async () => {

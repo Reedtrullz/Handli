@@ -142,6 +142,40 @@ describe("ReviewEvidenceService", () => {
     expect(read).not.toHaveBeenCalled();
   });
 
+  it("rejects structured JSON captures before reading or returning private bytes", async () => {
+    const jsonLocator = { ...locator, mimeType: "application/json" as const };
+    const read = vi.fn<PrivateReviewEvidenceReader["read"]>();
+    const service = new ReviewEvidenceService(
+      repository({ getPrivateCaptureLocator: async () => jsonLocator }),
+      reader({ read }),
+      new ReviewEvidenceChallengeCodec(SECRET, () => NOW),
+      new ReviewEvidenceProofCodec(SECRET, () => NOW),
+      () => NOW,
+    );
+
+    await expect(service.render(jsonLocator.candidateId, principal))
+      .rejects.toEqual(new ReviewServiceError("EVIDENCE_UNAVAILABLE"));
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("keeps structured JSON acknowledgement fail-closed without recording a receipt", async () => {
+    const jsonLocator = { ...locator, mimeType: "application/json" as const };
+    const recordEvidenceRender = vi.fn<ReviewQueueRepository["recordEvidenceRender"]>();
+    const challengeCodec = new ReviewEvidenceChallengeCodec(SECRET, () => NOW);
+    const service = new ReviewEvidenceService(
+      repository({ getPrivateCaptureLocator: async () => jsonLocator, recordEvidenceRender }),
+      reader({}),
+      challengeCodec,
+      new ReviewEvidenceProofCodec(SECRET, () => NOW),
+      () => NOW,
+    );
+    const challenge = challengeCodec.issue(bindingFor(jsonLocator), principal);
+
+    await expect(service.acknowledge(ackRequest(challenge.token), principal))
+      .rejects.toEqual(new ReviewServiceError("EVIDENCE_UNAVAILABLE"));
+    expect(recordEvidenceRender).not.toHaveBeenCalled();
+  });
+
   it("issues and records an approval proof only after a current image challenge and full digest acknowledgement", async () => {
     const recordEvidenceRender = vi.fn<ReviewQueueRepository["recordEvidenceRender"]>()
       .mockImplementation(async (input) => ({

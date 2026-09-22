@@ -31,6 +31,7 @@ RUN set -eu; \
     install -d -m 0755 \
       /app/.handleplan-runtime-stage/apps/worker/dist \
       /app/.handleplan-runtime-stage/deploy/migrations \
+      /app/.handleplan-runtime-stage/deploy/bootstrap \
       /app/.handleplan-runtime-stage/node_modules/postgres; \
     install -m 0644 /app/apps/worker/dist/main.mjs \
       /app/.handleplan-runtime-stage/apps/worker/dist/main.mjs; \
@@ -40,6 +41,8 @@ RUN set -eu; \
       /app/.handleplan-runtime-stage/deploy/migrate.mjs; \
     cp -R /app/deploy/migrations/. \
       /app/.handleplan-runtime-stage/deploy/migrations/; \
+    cp -R /app/deploy/bootstrap/. \
+      /app/.handleplan-runtime-stage/deploy/bootstrap/; \
     cp -R /app/node_modules/.pnpm/postgres@3.4.9/node_modules/postgres/. \
       /app/.handleplan-runtime-stage/node_modules/postgres/; \
     node scripts/operations/verify-production-image.mjs seal-runtime \

@@ -117,6 +117,11 @@ if (
 const migrationsDirectory = path.resolve(
   process.env.MIGRATIONS_DIR ?? "/app/deploy/migrations",
 );
+const bootstrapDirectory = path.resolve(
+  process.env.BOOTSTRAP_DIR ?? path.join(migrationsDirectory, "../bootstrap"),
+);
+const bootstrapManifestPath = path.join(bootstrapDirectory, "040_manifest.json");
+const bootstrapArtifactPath = path.join(bootstrapDirectory, "040_schema.sql");
 const ciMaxMigrationId = process.env.CI_MAX_MIGRATION_ID;
 
 if (ciMaxMigrationId !== undefined) {
@@ -146,6 +151,53 @@ if (
 const migrationFiles = ciMaxMigrationId === undefined
   ? repositoryMigrationFiles
   : repositoryMigrationFiles.filter((file) => file <= ciMaxMigrationId);
+
+const migrationSources = new Map(
+  await Promise.all(repositoryMigrationFiles.map(async (id) => {
+    const source = await readFile(path.join(migrationsDirectory, id), "utf8");
+    return [id, {
+      source,
+      checksum: createHash("sha256").update(source).digest("hex"),
+    }];
+  })),
+);
+const bootstrapManifestSource = await readFile(bootstrapManifestPath, "utf8");
+const bootstrapArtifactSource = await readFile(bootstrapArtifactPath, "utf8");
+const bootstrapManifestSha256 = createHash("sha256")
+  .update(bootstrapManifestSource)
+  .digest("hex");
+const bootstrapArtifactSha256 = createHash("sha256")
+  .update(bootstrapArtifactSource)
+  .digest("hex");
+let bootstrapManifest;
+try {
+  bootstrapManifest = JSON.parse(bootstrapManifestSource);
+} catch {
+  throw new Error("Bootstrap manifest is not valid JSON");
+}
+if (
+  bootstrapManifest?.baseline_id !== "handleplan-040-canonical-v1"
+  || bootstrapManifest?.artifact?.path !== "deploy/bootstrap/040_schema.sql"
+  || bootstrapManifest?.artifact?.sha256 !== bootstrapArtifactSha256
+  || !Array.isArray(bootstrapManifest.covered_migrations)
+  || bootstrapManifest.covered_migrations.length !== 40
+  || bootstrapManifest.canonical_contract?.schema_catalog_sha256 === undefined
+) {
+  throw new Error("Bootstrap manifest is incomplete or does not match its artifact");
+}
+for (const [index, entry] of bootstrapManifest.covered_migrations.entries()) {
+  const expectedId = repositoryMigrationFiles[index];
+  const actual = migrationSources.get(entry.id);
+  if (entry.id !== expectedId || actual?.checksum !== entry.sha256) {
+    throw new Error(`Bootstrap manifest migration checksum mismatch: ${entry.id ?? "unknown"}`);
+  }
+}
+if (
+  bootstrapManifest.correction_semantics?.migration_041_sha256
+  !== migrationSources.get("041_public_offer_projection_repair.sql")?.checksum
+) {
+  throw new Error("Bootstrap manifest 041 checksum mismatch");
+}
 
 const sql = postgres(databaseMigrationUrl, {
   connect_timeout: 10,
@@ -178,6 +230,9 @@ const officialOfferLifecycleRuntimeEnabled = migrationFiles.includes(
 );
 const officialOfferEditionIdentityEnabled = migrationFiles.includes(
   "038_tjek_function_grants.sql",
+);
+const officialOfferFoundationWorkerBoundaryEnabled = migrationFiles.includes(
+  "042_official_offer_worker_boundary.sql",
 );
 const officialOfferPublicationHealthEnabled = migrationFiles.includes(
   "027_official_offer_publication_health.sql",
@@ -215,7 +270,7 @@ const insertUpdateTables = [
 
 const replaceableTables = ["worker_leases"];
 
-const officialOfferWorkerTables = [
+const officialOfferWorkerReadTables = [
   "publications",
   "publication_captures",
   "extraction_runs",
@@ -226,15 +281,18 @@ const officialOfferWorkerTables = [
   "offer_conditions",
 ];
 
-const officialOfferWorkerSequences = [
+const officialOfferWorkerWriteTables = [
+  "publications",
+  "publication_captures",
+  "extraction_runs",
+  "extracted_offer_candidates",
+];
+
+const officialOfferWorkerWriteSequences = [
   "publications_id_seq",
   "publication_captures_id_seq",
   "extraction_runs_id_seq",
   "extracted_offer_candidates_id_seq",
-  "approved_offers_id_seq",
-  "review_actions_id_seq",
-  
-  "offer_conditions_id_seq",
 ];
 
 const ephemeralRequestBudgetTables = ["provider_request_budget_events"];
@@ -421,6 +479,17 @@ function identifiers(values) {
   return values.map(identifier).join(", ");
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalJson(entry)]),
+    );
+  }
+  return value;
+}
+
 async function revokeRoleMemberships(transaction, role) {
   const memberships = await transaction`
     select granted.rolname as granted_role, member.rolname as member_role
@@ -435,6 +504,18 @@ async function revokeRoleMemberships(transaction, role) {
       `revoke ${identifier(membership.granted_role)} from ${identifier(membership.member_role)}`,
     );
   }
+}
+
+async function ensureWorkerRole(transaction) {
+  await transaction.unsafe(`
+    do $worker_role_bootstrap$
+    begin
+      if not exists (select 1 from pg_roles where rolname = '${workerRole}') then
+        create role ${workerRole} with nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
+      end if;
+    end
+    $worker_role_bootstrap$;
+  `);
 }
 
 async function configureRuntimeRoles() {
@@ -621,9 +702,13 @@ async function configureRuntimeRoles() {
       grant select, insert, delete on table ${identifiers(ephemeralRequestBudgetTables)}
         to ${workerRole};
       grant usage on sequence ${identifiers(runtimeSequences)} to ${workerRole};
-      grant select, insert on table ${identifiers(officialOfferWorkerTables)}
+      grant select on table ${identifiers(officialOfferWorkerReadTables)}
         to ${workerRole};
-      grant usage on sequence ${identifiers(officialOfferWorkerSequences)} to ${workerRole};
+      ${officialOfferFoundationWorkerBoundaryEnabled ? "" : `
+      grant insert on table ${identifiers(officialOfferWorkerWriteTables)}
+        to ${workerRole};
+      grant usage on sequence ${identifiers(officialOfferWorkerWriteSequences)} to ${workerRole};
+      `}
 
       grant select on table ${identifiers(webReadOnlyTables)} to ${webRole};
       grant select on table latest_price_evidence to ${webRole};
@@ -748,12 +833,33 @@ async function configureRuntimeRoles() {
     if (officialOfferEditionIdentityEnabled) {
       // Tjek and other official-offer handlers call into SQL functions that
       // are invoked indirectly (e.g. via INSERT triggers/SECURITY DEFINER).
-      // The blanket REVOKE above strips all EXECUTE grants from the worker
-      // role, so we restore blanket EXECUTE on all public functions here.
-      await transaction.unsafe(`
-        grant execute on all functions in schema public to ${workerRole};
-        grant select on all tables in schema public to ${workerRole};
-        grant usage on all sequences in schema public to ${workerRole};
+      // Keep the worker boundary explicit. The blanket grants formerly used
+      // here also exposed review/governance functions and every application
+      // table to the worker role.
+      await transaction.unsafe(officialOfferFoundationWorkerBoundaryEnabled ? `
+        revoke all on function public.canonical_official_offer_edition_identity(
+          text, text, text, text, text, bigint, jsonb,
+          timestamp with time zone, timestamp with time zone, timestamp with time zone
+        ) from ${workerRole};
+        revoke all on function public.canonical_official_offer_scope_identity(jsonb)
+          from ${workerRole};
+        grant execute on function public.record_official_offer_edition_v1(jsonb, jsonb)
+          to ${workerRole};
+        grant execute on function public.record_official_offer_capture_v1(jsonb, text, jsonb)
+          to ${workerRole};
+        grant execute on function public.record_official_offer_extraction_v1(bigint, jsonb)
+          to ${workerRole};
+      ` : `
+        grant execute on function public.canonical_official_offer_edition_identity(
+          text, text, text, text, text, bigint, jsonb,
+          timestamp with time zone, timestamp with time zone, timestamp with time zone
+        ) to ${workerRole};
+        grant execute on function public.canonical_official_offer_scope_identity(jsonb)
+          to ${workerRole};
+        revoke insert on table approved_offers, review_actions, offer_targets, offer_conditions
+          from ${workerRole};
+        revoke usage on sequence approved_offers_id_seq, review_actions_id_seq
+          from ${workerRole};
       `);
     }
 
@@ -794,17 +900,63 @@ async function configureRuntimeRoles() {
 try {
   await sql.unsafe("set search_path = public, pg_catalog");
   await sql`select pg_advisory_lock(${advisoryLockId})`;
-  await sql`
-    create table if not exists public.handleplan_schema_migrations (
-      id varchar(255) primary key,
-      checksum char(64) not null,
-      applied_at timestamptz not null default now()
-    )
+  const [catalogState] = await sql`
+    select
+      to_regclass('public.handleplan_schema_migrations') is not null as ledger_exists,
+      to_regclass('public.handleplan_schema_baselines') is not null as baseline_exists,
+      (
+        select count(*)::integer
+        from pg_catalog.pg_namespace
+        where nspname not in ('pg_catalog', 'information_schema', 'public')
+          and nspname !~ '^pg_(toast|temp)'
+      ) as custom_schemas,
+      (
+        select count(*)::integer
+        from pg_catalog.pg_class relation
+        join pg_catalog.pg_namespace namespace on namespace.oid = relation.relnamespace
+        where namespace.nspname not in ('pg_catalog', 'information_schema')
+          and namespace.nspname !~ '^pg_(toast|temp)'
+          and not (
+            namespace.nspname = 'public'
+            and relation.relname in ('handleplan_schema_migrations', 'handleplan_schema_baselines')
+          )
+      ) as custom_relations,
+      (
+        select count(*)::integer
+        from pg_catalog.pg_proc procedure
+        join pg_catalog.pg_namespace namespace on namespace.oid = procedure.pronamespace
+        where namespace.nspname not in ('pg_catalog', 'information_schema')
+          and namespace.nspname !~ '^pg_(toast|temp)'
+      ) as custom_functions,
+      (
+        select count(*)::integer
+        from pg_catalog.pg_type type
+        join pg_catalog.pg_namespace namespace on namespace.oid = type.typnamespace
+        where namespace.nspname not in ('pg_catalog', 'information_schema')
+          and namespace.nspname !~ '^pg_(toast|temp)'
+          and type.typtype <> 'p'
+      ) as custom_types,
+      (
+        select count(*)::integer
+        from pg_catalog.pg_extension extension
+        join pg_catalog.pg_namespace namespace on namespace.oid = extension.extnamespace
+        where not (extension.extname = 'plpgsql' and namespace.nspname = 'pg_catalog')
+      ) as non_default_extensions,
+      (select count(*)::integer from pg_catalog.pg_event_trigger) as event_triggers
   `;
-
-  const appliedMigrations = await sql`
-    select id from public.handleplan_schema_migrations order by id
-  `;
+  const catalogIsEmpty = Object.values(catalogState)
+    .slice(2)
+    .every((value) => value === 0);
+  const [appliedMigrations, baselineRows] = await Promise.all([
+    catalogState.ledger_exists
+      ? sql`select id, checksum from public.handleplan_schema_migrations order by id`
+      : Promise.resolve([]),
+    catalogState.baseline_exists
+      ? sql`select baseline_id, manifest_sha256, artifact_sha256, covered_migrations,
+          resulting_schema_sha256, provenance
+          from public.handleplan_schema_baselines order by baseline_id`
+      : Promise.resolve([]),
+  ]);
   const missingMigrationIds = appliedMigrations
     .map(({ id }) => id)
     .filter((id) => !repositoryMigrationFiles.includes(id));
@@ -813,14 +965,180 @@ try {
       `Applied migration is absent from the repository: ${missingMigrationIds.join(", ")}`,
     );
   }
+  for (const row of appliedMigrations) {
+    const expected = migrationSources.get(row.id)?.checksum;
+    if (expected === undefined || row.checksum !== expected) {
+      throw new Error(`Applied migration checksum changed: ${row.id}`);
+    }
+  }
+  if (baselineRows.length === 0) {
+    const selectedPrefix = repositoryMigrationFiles.slice(0, appliedMigrations.length);
+    if (appliedMigrations.some(({ id }, index) => id !== selectedPrefix[index])) {
+      throw new Error("Applied migration ledger is not an ordered repository prefix");
+    }
+  } else {
+    const expectedForwardIds = repositoryMigrationFiles.filter(
+      (id) => !bootstrapManifest.covered_migrations.some((entry) => entry.id === id),
+    );
+    if (appliedMigrations.some(({ id }, index) => id !== expectedForwardIds[index])) {
+      throw new Error("Applied migration ledger is not an ordered post-baseline suffix");
+    }
+  }
+  if (ciMaxMigrationId === undefined && appliedMigrations.at(-1)?.id === "038_tjek_function_grants.sql") {
+    throw new Error("Incomplete historical 038 ledger refuses before mutation");
+  }
+  if (ciMaxMigrationId !== undefined && baselineRows.length > 0) {
+    throw new Error("CI_MAX_MIGRATION_ID cannot use the empty-database baseline");
+  }
+  if (baselineRows.length > 1) {
+    throw new Error("Bootstrap baseline metadata must contain exactly one row");
+  }
+  if (baselineRows.length === 1) {
+    const baseline = baselineRows[0];
+    let coveredMigrations;
+    let provenance;
+    try {
+      coveredMigrations = typeof baseline.covered_migrations === "string"
+        ? JSON.parse(baseline.covered_migrations)
+        : baseline.covered_migrations;
+      provenance = typeof baseline.provenance === "string"
+        ? JSON.parse(baseline.provenance)
+        : baseline.provenance;
+    } catch {
+      throw new Error("Bootstrap baseline metadata contains invalid JSON");
+    }
+    if (
+      baseline.baseline_id !== bootstrapManifest.baseline_id
+      || baseline.manifest_sha256 !== bootstrapManifestSha256
+      || baseline.artifact_sha256 !== bootstrapArtifactSha256
+      || baseline.resulting_schema_sha256 !== bootstrapManifest.canonical_contract.schema_catalog_sha256
+      || JSON.stringify(coveredMigrations) !== JSON.stringify(bootstrapManifest.covered_migrations)
+      || JSON.stringify(canonicalJson(provenance))
+        !== JSON.stringify(canonicalJson(bootstrapManifest.provenance))
+      || appliedMigrations.some(({ id }) => bootstrapManifest.covered_migrations.some((entry) => entry.id === id))
+    ) {
+      throw new Error("Bootstrap baseline metadata does not match its reviewed manifest");
+    }
+  } else if (catalogState.baseline_exists) {
+    throw new Error("Bootstrap baseline metadata table is present without its provenance row");
+  }
+
+  const baselineEligible = ciMaxMigrationId === undefined
+    && !catalogState.ledger_exists
+    && !catalogState.baseline_exists
+    && catalogIsEmpty;
+  if (
+    ciMaxMigrationId === undefined
+    && !catalogState.ledger_exists
+    && !catalogState.baseline_exists
+    && !baselineEligible
+  ) {
+    throw new Error("Baseline target must be an empty catalog");
+  }
+  if (baselineEligible) {
+    await sql.begin(async (transaction) => {
+      await transaction.unsafe("set local search_path = public, pg_catalog");
+      await transaction.unsafe(`
+        create table public.handleplan_schema_baselines (
+          baseline_id text primary key,
+          manifest_sha256 char(64) not null,
+          artifact_sha256 char(64) not null,
+          covered_migrations jsonb not null,
+          resulting_schema_sha256 char(64) not null,
+          provenance jsonb not null,
+          recorded_at timestamptz not null default pg_catalog.transaction_timestamp(),
+          constraint handleplan_schema_baselines_manifest_sha256
+            check (manifest_sha256 ~ '^[0-9a-f]{64}$'),
+          constraint handleplan_schema_baselines_artifact_sha256
+            check (artifact_sha256 ~ '^[0-9a-f]{64}$'),
+          constraint handleplan_schema_baselines_schema_sha256
+            check (resulting_schema_sha256 ~ '^[0-9a-f]{64}$')
+        );
+        create table public.handleplan_schema_migrations (
+          id varchar(255) primary key,
+          checksum char(64) not null,
+          applied_at timestamptz not null default pg_catalog.transaction_timestamp()
+        );
+      `);
+      await ensureWorkerRole(transaction);
+      if (process.env.HANDLEPLAN_BOOTSTRAP_FAIL_PHASE === "before-artifact") {
+        throw new Error("Injected bootstrap failure before artifact");
+      }
+      await transaction.unsafe(bootstrapArtifactSource);
+      await transaction.unsafe("set local search_path = public, pg_catalog");
+      await transaction.unsafe("set local check_function_bodies = on");
+      if (process.env.HANDLEPLAN_BOOTSTRAP_FAIL_PHASE === "after-artifact") {
+        throw new Error("Injected bootstrap failure after artifact");
+      }
+      await transaction`
+        insert into public.handleplan_schema_baselines
+          (baseline_id, manifest_sha256, artifact_sha256, covered_migrations,
+           resulting_schema_sha256, provenance)
+        values (
+          ${bootstrapManifest.baseline_id},
+          ${bootstrapManifestSha256},
+          ${bootstrapArtifactSha256},
+          ${transaction.json(bootstrapManifest.covered_migrations)},
+          ${bootstrapManifest.canonical_contract.schema_catalog_sha256},
+          ${transaction.json(bootstrapManifest.provenance)}
+        )
+      `;
+      if (process.env.HANDLEPLAN_BOOTSTRAP_FAIL_PHASE === "before-commit") {
+        throw new Error("Injected bootstrap failure before commit");
+      }
+    });
+    // pg_dump's session guards are intentionally scoped to the artifact;
+    // forward migrations must run with ordinary validation settings restored.
+    await sql.unsafe("set search_path = public, pg_catalog; set check_function_bodies = on");
+  } else if (!catalogState.ledger_exists) {
+    await sql`
+      create table public.handleplan_schema_migrations (
+        id varchar(255) primary key,
+        checksum char(64) not null,
+        applied_at timestamptz not null default pg_catalog.transaction_timestamp()
+      )
+    `;
+  }
+
+  const coveredBaselineIds = new Set(
+    baselineRows.length === 1
+      ? bootstrapManifest.covered_migrations.map(({ id }) => id)
+      : [],
+  );
+  if (baselineEligible) {
+    coveredBaselineIds.clear();
+    for (const entry of bootstrapManifest.covered_migrations) coveredBaselineIds.add(entry.id);
+  }
+  if (baselineRows.length === 1 && coveredBaselineIds.size !== 40) {
+    throw new Error("Bootstrap baseline coverage is incomplete");
+  }
+
+  // Migration 037 grants to this role; a fresh database has no runtime roles yet.
+  // Leave existing roles untouched; configureRuntimeRoles remains authoritative.
+  if (migrationFiles.includes("037_worker_official_offer_grants.sql") && !baselineEligible) {
+    await sql.unsafe(`
+      do $worker_role_prerequisite$
+      begin
+        if not exists (select 1 from pg_roles where rolname = '${workerRole}') then
+          create role ${workerRole} with nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
+        end if;
+      end
+      $worker_role_prerequisite$;
+    `);
+  }
 
   for (const id of migrationFiles) {
-    const source = await readFile(path.join(migrationsDirectory, id), "utf8");
-    const checksum = createHash("sha256").update(source).digest("hex");
+    const { source, checksum } = migrationSources.get(id);
     const existing = await sql`
       select checksum from public.handleplan_schema_migrations where id = ${id}
     `;
 
+    if (coveredBaselineIds.has(id)) {
+      if (existing.length > 0) {
+        throw new Error(`Baseline-covered migration is present in execution ledger: ${id}`);
+      }
+      continue;
+    }
     if (existing.length > 0) {
       if (existing[0].checksum !== checksum) {
         throw new Error(`Applied migration checksum changed: ${id}`);
@@ -831,6 +1149,8 @@ try {
     await sql.begin(async (transaction) => {
       await transaction.unsafe("set local search_path = public, pg_catalog");
       await transaction.unsafe(source);
+      await transaction.unsafe("set local search_path = public, pg_catalog");
+      await transaction.unsafe("set local check_function_bodies = on");
       await transaction`
         insert into public.handleplan_schema_migrations (id, checksum)
         values (${id}, ${checksum})

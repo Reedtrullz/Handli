@@ -427,7 +427,7 @@ export function computePrivilegedRuntimeShipmentSnapshot(runtimeRoot) {
   );
   assertExactDirectoryEntries(
     path.join(runtimeRoot, "deploy"),
-    ["entrypoint.sh", "migrate.mjs", "migrations"],
+    ["bootstrap", "entrypoint.sh", "migrate.mjs", "migrations"],
     "privileged runtime deploy root",
   );
   const entries = collectCanonicalEntries([

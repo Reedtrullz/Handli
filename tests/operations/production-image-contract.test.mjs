@@ -876,6 +876,9 @@ test("verifies copied image contents by immutable ID and always removes the stop
   writeFileSync(path.join(imageApps, "worker", "dist", "main.mjs"), "worker\n");
   writeFileSync(path.join(imageDeploy, "entrypoint.sh"), "#!/bin/sh\n");
   writeFileSync(path.join(imageDeploy, "migrate.mjs"), "export {};\n");
+  mkdirSync(path.join(imageDeploy, "bootstrap"), { recursive: true });
+  writeFileSync(path.join(imageDeploy, "bootstrap", "040_manifest.json"), "{}\n");
+  writeFileSync(path.join(imageDeploy, "bootstrap", "040_schema.sql"), "select 1;\n");
   mkdirSync(path.join(imageDeploy, "migrations"), { recursive: true });
   writeFileSync(path.join(imageDeploy, "migrations", "001.sql"), "select 1;\n");
   writeFileSync(
@@ -1076,6 +1079,7 @@ test("verifies copied image contents by immutable ID and always removes the stop
 
   const privilegedPayloadMutations = [
     [path.join(imageAppRoot, "apps", "worker", "dist", "main.mjs"), "worker\n"],
+    [path.join(imageAppRoot, "deploy", "bootstrap", "040_schema.sql"), "select 1;\n"],
     [path.join(imageAppRoot, "deploy", "migrations", "001.sql"), "select 1;\n"],
     [path.join(imageAppRoot, "node_modules", "postgres", "fixture.js"), "dependency\n"],
   ];

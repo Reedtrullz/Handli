@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "baseline_id": "handleplan-040-canonical-v1",
+  "artifact": {
+    "path": "deploy/bootstrap/040_schema.sql",
+    "sha256": "8febf33b13e7260e746e624714e8ee5e054b039f45df673da1cf8b1569198c7e",
+    "format": "literal-postgresql-sql",
+    "runner_owned_metadata_excluded": [
+      "public.handleplan_schema_migrations",
+      "public.handleplan_schema_baselines",
+      "manifest hash and recorded_at"
+    ],
+    "runtime_grants_excluded": [
+      "handleplan_app",
+      "handleplan_web",
+      "handleplan_review",
+      "handleplan_operations"
+    ]
+  },
+  "covered_migrations": [
+    {
+      "id": "001_price_cache.sql",
+      "sha256": "c1803a5179f3379a19fd3384561ee25ba8fc46dfa70779d63bd06f034ea20d9a"
+    },
+    {
+      "id": "002_sources_catalog.sql",
+      "sha256": "c5c5e7f7864cb1701835a7b93761545a4627a2e1b6f983ea53e64a13a61d3a05"
+    },
+    {
+      "id": "003_price_evidence_coverage.sql",
+      "sha256": "5e9ac6e2c21b2290d0160f45aa4c76c3b47a36ecbd3f738774faa80ab93f0f06"
+    },
+    {
+      "id": "004_geography_publications.sql",
+      "sha256": "f49d9d2ab8cd3f4e47f2453bd6d2b2d8313e94d8bda0ff1e53996b351ffe5943"
+    },
+    {
+      "id": "005_offers_reviews.sql",
+      "sha256": "e60b9d73561fc5c0e72ac5f5d0495b7c34dc8134ceba57f3e96871fa0b6b73bd"
+    },
+    {
+      "id": "006_source_health.sql",
+      "sha256": "490910604aa75a68910b22e5f4af1638890b2baf13b887a5233c7de1b14719dc"
+    },
+    {
+      "id": "007_append_only_guards.sql",
+      "sha256": "9c6ac9301b3a11dbbd800c6da87e57e811c2a9e37b4365ccbbfbcb95f977cb87"
+    },
+    {
+      "id": "008_provider_request_budget.sql",
+      "sha256": "4c51a2d5443b01323a36104eaff1d1c9fdc0f637fc2ef98c9a705621315d37ec"
+    },
+    {
+      "id": "009_ingestion_outcomes.sql",
+      "sha256": "b35d2c465283c7fd514f41566a0e514b896e31a5831cf0c9fef77e3b012dc469"
+    },
+    {
+      "id": "010_worker_job_results.sql",
+      "sha256": "8c99f7a11d8c33825c8e90d12f77ffb58a42d6b23d622447720c846cb586d6b4"
+    },
+    {
+      "id": "011_catalog_observations.sql",
+      "sha256": "0c5a8b06b9b71859990366864351705d772e6d47bbd2047fa839fef318d38dec"
+    },
+    {
+      "id": "012_reviewed_family_taxonomy.sql",
+      "sha256": "70101ad7f170617de7d26614661c69e208293601388f6259c6441a40c941fda3"
+    },
+    {
+      "id": "013_physical_store_directory.sql",
+      "sha256": "5a223d407b24d9848f35336ede86c8ab2be456273ac44e17b69860cf7d1a9088"
+    },
+    {
+      "id": "014_ingestion_completion_clock.sql",
+      "sha256": "52808f3e778e129a84928994f1d47acde58e134438aa390458506b2ee23b4a7a"
+    },
+    {
+      "id": "015_catalog_category_path.sql",
+      "sha256": "4a94b671f6a45cc04a0563a45952468a123a372381cbbccd33a0222cffbb79d6"
+    },
+    {
+      "id": "016_worker_source_health.sql",
+      "sha256": "bc84b6b41db1ea5ef01e3c60eb84b9be3027d728f9989362548bc199cd055d1a"
+    },
+    {
+      "id": "017_geographic_directory_region_proof.sql",
+      "sha256": "4fe8c7ce3aefb46d2af7f335f30b789d9a25bd662884713619247fdb448368c8"
+    },
+    {
+      "id": "018_review_candidate_immutability.sql",
+      "sha256": "67ebf517236564b41d825da519d9d10b524f6c34119288f02bbca2711a10c307"
+    },
+    {
+      "id": "019_public_api_request_budget.sql",
+      "sha256": "7ffc33c1e129134570437bbe6b2f185b4130734f1a55a7184e33edb1aed70f05"
+    },
+    {
+      "id": "020_official_offer_trust_fences.sql",
+      "sha256": "203a5c5b66b2ebdd50f9e2a94f7477d2b0b9c3c253f893744fa5d7d90ee2c931"
+    },
+    {
+      "id": "021_private_review_decision_boundary.sql",
+      "sha256": "6f34f5e4b211378942d4dabc9b95bbb0bbe66968b8fc8c3f2ff7138244443f3b"
+    },
+    {
+      "id": "022_public_official_offer_projection.sql",
+      "sha256": "4fb9f560ff89f062bf0a025118d582f7c3b3b60f63ce5b5917a91f63c6427249"
+    },
+    {
+      "id": "023_official_offer_worker_jobs.sql",
+      "sha256": "2eaf73fcc4298a308ba7e8074cb6a2a44ad11b9a23a18b940083d4bd35f5f15a"
+    },
+    {
+      "id": "024_operations_runtime_boundary.sql",
+      "sha256": "15df6f98c99fc81bb4750169613f288d9cb4b640d5f020bbdf648ad189b34336"
+    },
+    {
+      "id": "025_private_review_evidence_renderer.sql",
+      "sha256": "3d4da7bd3c35cce0393b0a98e52dea02f2b3a3c15425a623330ff443871e6417"
+    },
+    {
+      "id": "026_official_offer_publication_runtime.sql",
+      "sha256": "fd9b961e452e5ad2d42bca44a2d619321be78c7f93e9f97732e7f443a7c119de"
+    },
+    {
+      "id": "027_official_offer_publication_health.sql",
+      "sha256": "11a5cba1f7abd6e55f9899ca50c18684742012858423ee1a3060a1c5b1af15ea"
+    },
+    {
+      "id": "028_private_review_image_evidence_only.sql",
+      "sha256": "6654c9070920607e91e9ff70069fd3c3ca49a7109d80cf59ec5f9c04cc3fe4b7"
+    },
+    {
+      "id": "029_kassalapp_source_approval.sql",
+      "sha256": "49bc92e50fe08bdfd592e1ea386c791fb77c2a4ae2723fa25b7909f705e062bc"
+    },
+    {
+      "id": "030_catalog_measure_optional.sql",
+      "sha256": "5581093485475c44122652135b53e2aaca14eb68a1662fbe3cf2c1bc5802005c"
+    },
+    {
+      "id": "031_supported_chain_expansion.sql",
+      "sha256": "88b1edf5c1090f8a213546bead97d3413292d31c90e67ceb5a3dbd16004c36eb"
+    },
+    {
+      "id": "032_seed_national_scope.sql",
+      "sha256": "7e85910142e61a2e26bb07357debcb3883c28fa277bedd72e1c4cde2877a18b5"
+    },
+    {
+      "id": "033_open_prices_source.sql",
+      "sha256": "5b6d865c2dc3d3692e85e17371baa023926200ac5c6ef3b2d8c1c3bf5fdc7376"
+    },
+    {
+      "id": "034_open_prices_job_kind.sql",
+      "sha256": "3f5276c5a394f6863282cfc801923936a0aff59497f68736512bb86fb25cb4d6"
+    },
+    {
+      "id": "035_tjek_source.sql",
+      "sha256": "c3735f73530c85a6962e948f02c1da62ea4793a387822380c1baadcb24e70b94"
+    },
+    {
+      "id": "036_tjek_official_offer_permission.sql",
+      "sha256": "cf0752c0839335e5b64eaa3c231470816a97210d563743dbe9a14284cca873e8"
+    },
+    {
+      "id": "037_worker_official_offer_grants.sql",
+      "sha256": "7ed7dfe8939482b72a6eccf1958ce70c18af5f2643e600932f10b6bb29d7758c"
+    },
+    {
+      "id": "038_tjek_function_grants.sql",
+      "sha256": "58c688d05af7c18384d4aeb0bc037b023fb066bb4b719078c21fc38c2ac8e49c"
+    },
+    {
+      "id": "039_tjek_null_comparison_fix.sql",
+      "sha256": "b92edd7f8c6e23bcea67a28b40c8150c168999ac70b03dce2bb4334bce4002a8"
+    },
+    {
+      "id": "040_offer_backed_discovery.sql",
+      "sha256": "acc7a16e1e4ab4c0eed51df5724cd9cb92d08c8fd467d4d74f6f18f7bded809f"
+    }
+  ],
+  "correction_semantics": {
+    "migration_039_sha256": "b92edd7f8c6e23bcea67a28b40c8150c168999ac70b03dce2bb4334bce4002a8",
+    "migration_039_execution": "not executed; covered by the reviewed literal correction",
+    "migration_040_sha256": "acc7a16e1e4ab4c0eed51df5724cd9cb92d08c8fd467d4d74f6f18f7bded809f",
+    "migration_040_execution": "immutable semantics represented in the artifact",
+    "migration_041_path": "deploy/migrations/041_public_offer_projection_repair.sql",
+    "migration_041_sha256": "68f59cfd0b1ada2f600f8540334d9b6eefe19c7970d3827d0ec5ca218905433a",
+    "live_projection_capture_sha256": "07c3e5d2679ff9eda86d153ef3bdd438679de4225d960b8279b72deb2cb80f95",
+    "corrected_official_function_definition_sha256": "256e213b63ba618bfe2edf3fb27e3499e4ff584a0e040f6f77e2f3189d7c3e94",
+    "offer_backed_function_definition_sha256": "b98b8c64a00adaa36b3983bf9127f05c4f17403faaaa23e5882b7d961611ad12"
+  },
+  "canonical_contract": {
+    "schema_catalog_sha256": "b097f01ca5b22001f797056ea395a0039789fb89ae5970c675d5b25956b152a9",
+    "normalized_seed_sha256": "3ec6e86709734a1adea946c6702f2fb40d5e4dae48abd86bb63f5c14169bcd3a",
+    "sequence_state_sha256": "73b72c9fd5fdb4e0b34c683d95673a2475bf3dfa8b4940c89b4ce1bd399d6279",
+    "public_acl_security_sha256": "5e959cc908463fd52a6b9a3724c2caba269d74c328b28684db1484a62190ea35",
+    "object_counts": {
+      "relations": 52,
+      "columns": 499,
+      "constraints": 339,
+      "indexes": 105,
+      "triggers": 87,
+      "public_functions": 47,
+      "sequences": 26
+    },
+    "nonempty_seed_tables": [
+      "data_sources",
+      "family_taxonomy_versions",
+      "geographic_scopes",
+      "ingestion_runs",
+      "official_offer_publication_policy",
+      "reviewed_family_aliases",
+      "reviewed_family_definitions",
+      "source_permissions"
+    ],
+    "excluded_data": "products, prices, offers, approvals, captures, migration ledger, and baseline provenance"
+  },
+  "volatile_timestamp_policy": {
+    "expression": "pg_catalog.transaction_timestamp()",
+    "ordering_exception": "immutable 036 row id=4 preserves its clock_timestamp() reviewed_at expression; the install clock keeps it later than the preceding 035 row without manufacturing a fixed historical date",
+    "comparison_only_placeholder": "__installer_transaction_timestamp__",
+    "columns": [
+      "data_sources.created_at",
+      "data_sources.updated_at",
+      "data_sources.permission_reviewed_at",
+      "data_sources.public_state_changed_at",
+      "source_permissions.reviewed_at",
+      "source_permissions.created_at",
+      "family_taxonomy_versions.created_at",
+      "geographic_scopes.created_at",
+      "geographic_scopes.updated_at",
+      "geographic_scopes.public_state_changed_at",
+      "ingestion_runs.started_at",
+      "ingestion_runs.completed_at",
+      "ingestion_runs.created_at",
+      "ingestion_runs.terminalized_at",
+      "official_offer_publication_policy.updated_at",
+      "reviewed_family_aliases.created_at",
+      "reviewed_family_definitions.created_at"
+    ],
+    "note": "The placeholder is used only for disposable comparison; installed values come from the runner transaction clock and are not production evidence."
+  },
+  "ci_cap_policy": {
+    "max_migration_id_is_exact_lexical_prefix": true,
+    "empty_baseline_requires_uncapped_full_install": true,
+    "capped_runs_keep_historical_ledger_and_postcap_semantics": true,
+    "partial_038_uncapped_refuses_before_mutation": true,
+    "covered_039_is_never_inserted_as_executed": true
+  },
+  "provenance": {
+    "base_commit": "657de02baa531782d96f9127e7717b1d4eea6c8b",
+    "postgres_image": "postgres:16.10-alpine@sha256:ab8380566c3ea09690a9ecaa85a59d82bfc6eb86744151a2a54335866c83a3e9",
+    "node": "22.22.3",
+    "pnpm": "10.34.5",
+    "generator": "pg_dump 16.10 with schema=public, exclude-table=handleplan_schema_migrations, no-owner, no-comments, no-publications, no-subscriptions, column-inserts; remove pg_dump metacommands/default public schema; remove runtime-role grants; preserve explicit PUBLIC revocations.",
+    "manifest_self_hash": "excluded to avoid circularity; the future runner records the exact manifest hash separately"
+  }
+}

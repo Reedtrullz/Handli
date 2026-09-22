@@ -1032,7 +1032,11 @@ export class PostgresPublicCatalogIndexReader implements
         }
         canonicalProductIds.add(row.canonical_product_id);
         gtins.add(row.gtin);
-        const product = isOfferBackedRow
+        // Provenance must stay coherent: an offer-backed row without a
+        // catalog category path reports offer evidence, but a row carrying a
+        // real catalog category path must keep its catalog evidence so
+        // category provenance binds to the same reviewed source.
+        const product = isOfferBackedRow && categoryPath === null
           ? offerBackedCatalogProductFromRow(offerRowsByIdSummary.get(row.canonical_product_id as number)!)
           : catalogSummaryFromRow(row);
         if (query !== undefined && !summaryMatchesQuery(product, query)) {

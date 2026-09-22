@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { HandleplanDatabase } from "./client";
 import {
   catalogDiscoveryPageForCompletedRuns,
+  completedRunsForRotation,
   PostgresWorkerGtinTargetReader,
+  priceTargetPageState,
 } from "./worker-targets";
 
 function readerWith(rows: Array<{ ean: string }>) {
@@ -32,7 +34,7 @@ describe("PostgresWorkerGtinTargetReader", () => {
     await expect(prices.reader.getPriceGtins(100, "ordinary_only")).resolves.toEqual([
       "7038010000010",
     ]);
-    const priceSql = (prices.client.mock.calls[0]?.[0] as readonly string[]).join("?");
+    const priceSql = (prices.client.mock.calls[1]?.[0] as readonly string[]).join("?");
     expect(priceSql).toContain("product.status = 'active'");
     expect(priceSql).not.toContain("'quarantined'");
     expect(priceSql).toContain("observation.claim_eligibility =");
@@ -82,5 +84,48 @@ describe("PostgresWorkerGtinTargetReader", () => {
     controller.abort();
     await expect(targets).rejects.toMatchObject({ code: "CANCELLED" });
     expect(pending.cancel).toHaveBeenCalledOnce();
+  });
+  it("advances the price-target window one full page per completed run", async () => {
+    let clientCalls = 0;
+    const client = vi.fn((..._args: unknown[]) => {
+      clientCalls += 1;
+      return Object.assign(Promise.resolve([]), { cancel: vi.fn() });
+    });
+    const reader = new PostgresWorkerGtinTargetReader({ $client: client } as unknown as HandleplanDatabase);
+    await reader.getPriceGtins(2, "ordinary_only");
+    await reader.getGapPriceGtins(2, ["bunnpris", "extra", "rema-1000"]);
+    expect(clientCalls).toBe(4);
+    const sqlOf = (call: readonly unknown[]) => (call.join("")).replace(/\s+/g, " ");
+    const priceCursorSql = sqlOf(client.mock.calls[0]![0] as readonly string[]);
+    const pricePageSql = sqlOf(client.mock.calls[1]![0] as readonly string[]);
+    const gapCursorSql = sqlOf(client.mock.calls[2]![0] as readonly string[]);
+    const gapPageSql = sqlOf(client.mock.calls[3]![0] as readonly string[]);
+    // Rotation cursor counts mirror the page-query filters.
+    expect(priceCursorSql).toContain("run_type = any (array['benchmark-prices', 'historical-prices'])");
+    expect(priceCursorSql).toContain("product.status = 'active'");
+    expect(priceCursorSql).not.toContain("not exists");
+    expect(pricePageSql).toMatch(/limit offset\s*$/);
+    expect(gapCursorSql).toContain("run_type = any (array['benchmark-prices'])");
+    expect(gapCursorSql).toContain("not exists");
+    expect(gapPageSql).toMatch(/limit ::integer offset ::integer\s*$/);
+  });
+
+  it("rotates price targets past a starved alphabetical window", async () => {
+    expect(priceTargetPageState(0, 9, 2)).toBe(0);
+    expect(priceTargetPageState(1, 9, 2)).toBe(2);
+    expect(priceTargetPageState(4, 9, 2)).toBe(8);
+    expect(priceTargetPageState(5, 9, 2)).toBe(0);
+    expect(priceTargetPageState(6, 9, 2)).toBe(2);
+    expect(priceTargetPageState(3, 0, 2)).toBe(0);
+    expect(priceTargetPageState(2, 0, 2)).toBe(0);
+    expect(() => priceTargetPageState(-1, 9, 2)).toThrow(TypeError);
+    expect(() => priceTargetPageState(0, -1, 2)).toThrow(TypeError);
+    expect(() => priceTargetPageState(0, 9, 0)).toThrow(TypeError);
+  });
+  it("rejects invalid completed-run cursor rows", async () => {
+    expect(completedRunsForRotation([])).toBe(0);
+    expect(completedRunsForRotation([{ completed_runs: 7 }])).toBe(7);
+    expect(completedRunsForRotation([{ completed_runs: null }])).toBe(0);
+    expect(() => completedRunsForRotation([{ completed_runs: -3 }])).toThrow(TypeError);
   });
 });

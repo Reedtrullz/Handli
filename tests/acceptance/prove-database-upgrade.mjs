@@ -1,34 +1,82 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
+  cpSync,
+  existsSync,
   mkdtempSync,
+  mkdirSync,
   openSync,
+  realpathSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import postgres from "postgres";
+import { createBackup, verifyRestore } from "../../deploy/backup/toolkit.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
 const migrationRunner = resolve(root, "deploy/migrate.mjs");
 const sourceDatabase = "handleplan_ci_v1_03_source";
+const legacyDatabase = "handleplan_ci_v1_03_legacy040";
+const baselineDatabase = "handleplan_ci_v1_03_baseline";
 const restoreDatabase = "handleplan_ci_v1_03_restore";
 const completionClockDatabase = "handleplan_ci_v1_03_completion_clock";
 const publicationHealthPreconditionDatabase =
   "handleplan_ci_v1_03_publication_health_precondition";
 const pdfEvidencePreconditionDatabase =
   "handleplan_ci_v1_03_pdf_evidence_precondition";
+const bootstrapBeforeArtifactDatabase =
+  "handleplan_ci_v1_03_bootstrap_before_artifact";
+const bootstrapAfterArtifactDatabase =
+  "handleplan_ci_v1_03_bootstrap_after_artifact";
+const bootstrapBeforeCommitDatabase =
+  "handleplan_ci_v1_03_bootstrap_before_commit";
+const bootstrapTamperedArtifactDatabase =
+  "handleplan_ci_v1_03_bootstrap_tampered_artifact";
+const bootstrapTamperedManifestDatabase =
+  "handleplan_ci_v1_03_bootstrap_tampered_manifest";
+const bootstrapNonemptyDatabase =
+  "handleplan_ci_v1_03_bootstrap_nonempty";
+const bootstrapUnknownChecksumDatabase =
+  "handleplan_ci_v1_03_bootstrap_unknown_checksum";
+const bootstrapPartial038Database =
+  "handleplan_ci_v1_03_bootstrap_partial_038";
+const baselineBackupRestoreDatabase =
+  "handleplan_restore_drill_b2b_baseline";
+const legacyBackupRestoreDatabase =
+  "handleplan_restore_drill_b2b_legacy";
+const restoreContainerName = "handleplan-task2b2-m1-restore-postgres";
+const restoreContainerPassword = "ci_restore_admin_url_safe_000000000001";
+const dockerBinary = process.env.DOCKER_BIN
+  ?? ["/opt/homebrew/bin/docker", "/usr/local/bin/docker"].find((candidate) => existsSync(candidate))
+  ?? "docker";
+let restoreContainerStarted = false;
 const proofDatabases = [
   sourceDatabase,
+  legacyDatabase,
+  baselineDatabase,
   restoreDatabase,
   completionClockDatabase,
   publicationHealthPreconditionDatabase,
   pdfEvidencePreconditionDatabase,
+  bootstrapBeforeArtifactDatabase,
+  bootstrapAfterArtifactDatabase,
+  bootstrapBeforeCommitDatabase,
+  bootstrapTamperedArtifactDatabase,
+  bootstrapTamperedManifestDatabase,
+  bootstrapNonemptyDatabase,
+  bootstrapUnknownChecksumDatabase,
+  bootstrapPartial038Database,
+  baselineBackupRestoreDatabase,
+  legacyBackupRestoreDatabase,
 ];
 const postgresImage =
   "postgres:16.10-alpine@sha256:ab8380566c3ea09690a9ecaa85a59d82bfc6eb86744151a2a54335866c83a3e9";
@@ -72,6 +120,26 @@ const expectedMigrations = [
   "037_worker_official_offer_grants.sql",
   "038_tjek_function_grants.sql",
 ];
+const currentMigrations = [
+  ...expectedMigrations,
+  "039_tjek_null_comparison_fix.sql",
+  "040_offer_backed_discovery.sql",
+  "041_public_offer_projection_repair.sql",
+  "042_official_offer_worker_boundary.sql",
+  "043_meny_official_offer_source.sql",
+];
+const legacy040SchemaFixture = resolve(
+  root,
+  "tests/acceptance/fixtures/legacy040/legacy040-production-schema.sql",
+);
+const legacy040LedgerFixture = resolve(
+  root,
+  "tests/acceptance/fixtures/legacy040/legacy040-production-ledger.sql",
+);
+const legacy040FixtureSha256 = new Map([
+  [legacy040SchemaFixture, "beffec702f48a35a6c278b0b102b7c5074a20c7fb44765e60a0bd5fef66fda16"],
+  [legacy040LedgerFixture, "ef2de3c1cbe49dcb140c1bbffeca6f8e32e2c72144a676f21c2ea472443247ac"],
+]);
 
 assert.equal(process.env.CI, "true", "database proof requires CI=true");
 assert.ok(process.env.DATABASE_ADMIN_URL, "DATABASE_ADMIN_URL is required");
@@ -215,18 +283,43 @@ function run(command, args, options = {}) {
   });
 }
 
-async function runMigrations(database, maxMigrationId) {
+async function runMigrations(database, maxMigrationId, options = {}) {
   const env = {
     ...process.env,
     CI: "true",
     DATABASE_MIGRATION_URL: urlForDatabase(database),
-    MIGRATIONS_DIR: process.env.MIGRATIONS_DIR,
+    MIGRATIONS_DIR: options.migrationsDirectory ?? process.env.MIGRATIONS_DIR,
+    ...(options.bootstrapDirectory
+      ? { BOOTSTRAP_DIR: options.bootstrapDirectory }
+      : {}),
+    ...(options.env ?? {}),
   };
   delete env.CI_MAX_MIGRATION_ID;
   if (maxMigrationId !== undefined) {
     env.CI_MAX_MIGRATION_ID = maxMigrationId;
   }
-  await run(process.execPath, [migrationRunner], { env });
+  await run(process.execPath, [options.runner ?? migrationRunner], { env });
+}
+
+function createCopiedRunnerFixture(name, mutate) {
+  const fixtureRoot = mkdtempSync(resolve(root, `tests/acceptance/.runner-${name}-`));
+  const deployRoot = resolve(fixtureRoot, "deploy");
+  const migrationsDirectory = resolve(deployRoot, "migrations");
+  const bootstrapDirectory = resolve(deployRoot, "bootstrap");
+  mkdirSync(deployRoot, { recursive: true });
+  cpSync(migrationRunner, resolve(deployRoot, "migrate.mjs"));
+  cpSync(resolve(root, "deploy/migrations"), migrationsDirectory, { recursive: true });
+  cpSync(resolve(root, "deploy/bootstrap"), bootstrapDirectory, { recursive: true });
+  mutate({
+    migrationsDirectory,
+    bootstrapDirectory,
+  });
+  return {
+    runner: resolve(deployRoot, "migrate.mjs"),
+    migrationsDirectory,
+    bootstrapDirectory,
+    cleanup: () => rmSync(fixtureRoot, { force: true, recursive: true }),
+  };
 }
 
 async function seedLegacyReviewRolePrivileges(sql) {
@@ -360,6 +453,7 @@ function postgresClientArgs(command, database, extraArgs) {
   return [
     "run",
     "--rm",
+    "-i",
     ...(command === "pg_restore" ? ["--interactive"] : []),
     ...(postgresClientNetwork === "host" ? ["--network", "host"] : []),
     "-e",
@@ -393,17 +487,35 @@ async function applyFixture(sql, filename) {
   await sql.begin((transaction) => transaction.unsafe(fixture));
 }
 
-async function readMigrationLedger(sql) {
+async function readMigrationLedger(sql, expected = expectedMigrations) {
   const rows = await sql`
     select id, checksum
     from handleplan_schema_migrations
     order by id
   `;
-  assert.deepEqual(rows.map((row) => row.id), expectedMigrations);
+  assert.deepEqual(rows.map((row) => row.id), expected);
   for (const row of rows) {
     assert.match(row.checksum, /^[0-9a-f]{64}$/);
   }
   return rows.map((row) => ({ id: row.id, checksum: row.checksum }));
+}
+
+async function restoreLegacy040Fixture(database) {
+  for (const fixturePath of [legacy040SchemaFixture, legacy040LedgerFixture]) {
+    assert.equal(
+      createHash("sha256").update(readFileSync(fixturePath)).digest("hex"),
+      legacy040FixtureSha256.get(fixturePath),
+      `legacy040 fixture changed: ${fixturePath}`,
+    );
+    const fixtureFd = openSync(fixturePath, "r");
+    try {
+      await runPostgresClient("psql", database, ["--file=-", "--set", "ON_ERROR_STOP=1"], {
+        stdinFd: fixtureFd,
+      });
+    } finally {
+      closeSync(fixtureFd);
+    }
+  }
 }
 
 async function verifyLegacyUpgrade(sql) {
@@ -534,6 +646,33 @@ async function verifyLegacyUpgrade(sql) {
   assert.equal(row.coverage_reason, "legacy_price_cache_missing_provenance");
   assert.equal(row.official_claim_eligible, false);
   assert.equal(row.official_claim_count, 0);
+}
+
+async function verifyBaselineActivation(sql) {
+  const [baseline] = await sql`
+    select baseline_id, manifest_sha256, artifact_sha256,
+           jsonb_array_length(covered_migrations) as covered_count,
+           resulting_schema_sha256
+    from handleplan_schema_baselines
+  `;
+  assert.equal(baseline?.baseline_id, "handleplan-040-canonical-v1");
+  assert.match(baseline?.manifest_sha256 ?? "", /^[0-9a-f]{64}$/);
+  assert.match(baseline?.artifact_sha256 ?? "", /^[0-9a-f]{64}$/);
+  assert.equal(baseline?.covered_count, 40);
+  assert.match(baseline?.resulting_schema_sha256 ?? "", /^[0-9a-f]{64}$/);
+  const ledger = await readMigrationLedger(sql, [
+    "041_public_offer_projection_repair.sql",
+    "042_official_offer_worker_boundary.sql",
+    "043_meny_official_offer_source.sql",
+  ]);
+  assert.equal(ledger.length, 3);
+  const [projection] = await sql`
+    select pg_catalog.pg_get_functiondef(
+      'public.public_official_offer_rows_v1(bigint[], timestamptz)'::regprocedure
+    ) as definition
+  `;
+  assert.match(projection?.definition ?? "", /CREATE OR REPLACE FUNCTION/iu);
+  return projection.definition;
 }
 
 async function verifyRestoreEvidence(sql) {
@@ -1134,6 +1273,122 @@ async function verifyRuntimeRolePolicy(sql) {
         'official_offer_lifecycle_reconcile_v1(text,text,text,timestamptz,text,integer,boolean)',
         'EXECUTE'
       ) as worker_offer_lifecycle_execute,
+      has_table_privilege(
+        'handleplan_app', 'approved_offers', 'INSERT'
+      ) as worker_approved_offers_insert,
+      has_table_privilege(
+        'handleplan_app', 'approved_offers', 'UPDATE'
+      ) as worker_approved_offers_update,
+      has_table_privilege(
+        'handleplan_app', 'approved_offers', 'DELETE'
+      ) as worker_approved_offers_delete,
+      has_table_privilege(
+        'handleplan_app', 'review_actions', 'INSERT'
+      ) as worker_review_actions_insert,
+      has_table_privilege(
+        'handleplan_app', 'review_actions', 'UPDATE'
+      ) as worker_review_actions_update,
+      has_table_privilege(
+        'handleplan_app', 'review_actions', 'DELETE'
+      ) as worker_review_actions_delete,
+      has_table_privilege(
+        'handleplan_app', 'offer_targets', 'INSERT'
+      ) as worker_offer_targets_insert,
+      has_table_privilege(
+        'handleplan_app', 'offer_targets', 'UPDATE'
+      ) as worker_offer_targets_update,
+      has_table_privilege(
+        'handleplan_app', 'offer_targets', 'DELETE'
+      ) as worker_offer_targets_delete,
+      has_table_privilege(
+        'handleplan_app', 'offer_conditions', 'INSERT'
+      ) as worker_offer_conditions_insert,
+      has_table_privilege(
+        'handleplan_app', 'offer_conditions', 'UPDATE'
+      ) as worker_offer_conditions_update,
+      has_table_privilege(
+        'handleplan_app', 'offer_conditions', 'DELETE'
+      ) as worker_offer_conditions_delete,
+      has_function_privilege(
+        'handleplan_app',
+        'canonical_official_offer_edition_identity(text,text,text,text,text,bigint,jsonb,timestamptz,timestamptz,timestamptz)',
+        'EXECUTE'
+      ) as worker_offer_edition_identity_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'canonical_official_offer_scope_identity(jsonb)',
+        'EXECUTE'
+      ) as worker_offer_scope_identity_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'private_review_candidate_rows_v1(bigint,timestamptz,text,text,integer,integer,integer,integer,text,timestamptz,bigint,integer)',
+        'EXECUTE'
+      ) as worker_private_review_candidate_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'private_review_decide_v1(bigint,integer,text,text,text,text,text,text,text,integer,integer,integer,integer,text,text,timestamptz,timestamptz,text[])',
+        'EXECUTE'
+      ) as worker_private_review_decide_v1_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'private_review_record_evidence_render_v1(bigint,integer,text,text,text,text,text,text,text,timestamptz)',
+        'EXECUTE'
+      ) as worker_private_review_evidence_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'private_review_decide_v2(bigint,integer,text,text,text,text,text,text,text,text,text,integer,integer,integer,integer,text,text,timestamptz,timestamptz,text[])',
+        'EXECUTE'
+      ) as worker_private_review_decide_v2_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'assert_current_official_offer_permission(character varying,bigint,jsonb,text,text)',
+        'EXECUTE'
+      ) as worker_offer_permission_governance_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'record_official_offer_edition_v1(jsonb,jsonb)',
+        'EXECUTE'
+      ) as worker_offer_edition_boundary_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'record_official_offer_capture_v1(jsonb,text,jsonb)',
+        'EXECUTE'
+      ) as worker_offer_capture_boundary_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'record_official_offer_extraction_v1(bigint,jsonb)',
+        'EXECUTE'
+      ) as worker_offer_extraction_boundary_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'official_offer_worker_assert_fence_v1(text,bigint,jsonb,jsonb,text,text,text,text,text)',
+        'EXECUTE'
+      ) as worker_offer_boundary_helper_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'assert_public_official_offer_payload_v1(bigint)',
+        'EXECUTE'
+      ) as worker_public_offer_payload_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'is_canonical_membership_program_id_v1(text)',
+        'EXECUTE'
+      ) as worker_membership_program_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'public_official_offer_rows_v1(bigint[],timestamptz)',
+        'EXECUTE'
+      ) as worker_public_offer_projection_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'public_offer_backed_discovery_rows_v1(timestamptz)',
+        'EXECUTE'
+      ) as worker_offer_discovery_execute,
+      has_function_privilege(
+        'handleplan_app',
+        'official_offer_lifecycle_is_revoked_v1(bigint,timestamptz)',
+        'EXECUTE'
+      ) as worker_offer_revocation_execute,
       has_function_privilege(
         'handleplan_app',
         'reject_append_only_mutation()',
@@ -1459,6 +1714,34 @@ async function verifyRuntimeRolePolicy(sql) {
     public_api_budget_worker_table_access: false,
     public_api_budget_worker_execute: false,
     worker_offer_lifecycle_execute: true,
+    worker_approved_offers_insert: false,
+    worker_approved_offers_update: false,
+    worker_approved_offers_delete: false,
+    worker_review_actions_insert: false,
+    worker_review_actions_update: false,
+    worker_review_actions_delete: false,
+    worker_offer_targets_insert: false,
+    worker_offer_targets_update: false,
+    worker_offer_targets_delete: false,
+    worker_offer_conditions_insert: false,
+    worker_offer_conditions_update: false,
+    worker_offer_conditions_delete: false,
+    worker_offer_edition_identity_execute: false,
+    worker_offer_scope_identity_execute: false,
+    worker_private_review_candidate_execute: false,
+    worker_private_review_decide_v1_execute: false,
+    worker_private_review_evidence_execute: false,
+    worker_private_review_decide_v2_execute: false,
+    worker_offer_permission_governance_execute: false,
+    worker_offer_edition_boundary_execute: true,
+    worker_offer_capture_boundary_execute: true,
+    worker_offer_extraction_boundary_execute: true,
+    worker_offer_boundary_helper_execute: false,
+    worker_public_offer_payload_execute: false,
+    worker_membership_program_execute: false,
+    worker_public_offer_projection_execute: false,
+    worker_offer_discovery_execute: false,
+    worker_offer_revocation_execute: false,
     guard_execute: false,
     owner_member: false,
     web_database_create: false,
@@ -2007,7 +2290,7 @@ async function verifyCompletionClockMigrationUpgrade(sql, database) {
     );
   });
 
-  await runMigrations(database);
+  await runMigrations(database, "038_tjek_function_grants.sql");
 
   const [validClockAfter] = await sql`
     select status, completed_at, terminalized_at
@@ -2227,11 +2510,548 @@ async function dropDatabase(sql, database) {
   await sql.unsafe(`drop database if exists "${database}"`);
 }
 
+async function readBootstrapState(sql) {
+  const [catalog] = await sql`
+    select
+      to_regclass('public.handleplan_schema_migrations') is not null as ledger_exists,
+      to_regclass('public.handleplan_schema_baselines') is not null as baseline_exists,
+      (
+        select count(*)::integer
+        from pg_catalog.pg_namespace
+        where nspname not in ('pg_catalog', 'information_schema', 'public')
+          and nspname !~ '^pg_(toast|temp)'
+      ) as custom_schemas,
+      (
+        select count(*)::integer
+        from pg_catalog.pg_class relation
+        join pg_catalog.pg_namespace namespace on namespace.oid = relation.relnamespace
+        where namespace.nspname not in ('pg_catalog', 'information_schema')
+          and namespace.nspname !~ '^pg_(toast|temp)'
+          and not (
+            namespace.nspname = 'public'
+            and relation.relname in ('handleplan_schema_migrations', 'handleplan_schema_baselines')
+          )
+      ) as custom_relations,
+      (
+        select count(*)::integer
+        from pg_catalog.pg_proc procedure
+        join pg_catalog.pg_namespace namespace on namespace.oid = procedure.pronamespace
+        where namespace.nspname not in ('pg_catalog', 'information_schema')
+          and namespace.nspname !~ '^pg_(toast|temp)'
+      ) as custom_functions,
+      (
+        select count(*)::integer
+        from pg_catalog.pg_type type
+        join pg_catalog.pg_namespace namespace on namespace.oid = type.typnamespace
+        where namespace.nspname not in ('pg_catalog', 'information_schema')
+          and namespace.nspname !~ '^pg_(toast|temp)'
+          and type.typtype <> 'p'
+      ) as custom_types,
+      (
+        select count(*)::integer
+        from pg_catalog.pg_extension extension
+        join pg_catalog.pg_namespace namespace on namespace.oid = extension.extnamespace
+        where not (extension.extname = 'plpgsql' and namespace.nspname = 'pg_catalog')
+      ) as non_default_extensions,
+      (select count(*)::integer from pg_catalog.pg_event_trigger) as event_triggers
+  `;
+  const [ledger, baseline, roles, memberships] = await Promise.all([
+    catalog.ledger_exists
+      ? sql`select id, checksum from public.handleplan_schema_migrations order by id`
+      : Promise.resolve([]),
+    catalog.baseline_exists
+      ? sql`select baseline_id, manifest_sha256, artifact_sha256,
+          covered_migrations, resulting_schema_sha256, provenance
+          from public.handleplan_schema_baselines order by baseline_id`
+      : Promise.resolve([]),
+    sql`
+      select rolname, rolsuper, rolcreaterole, rolcreatedb, rolcanlogin,
+             rolreplication, rolbypassrls
+      from pg_catalog.pg_roles
+      where rolname in (
+        'handleplan', 'handleplan_app', 'handleplan_web',
+        'handleplan_review', 'handleplan_operations'
+      )
+      order by rolname
+    `,
+    sql`
+      select member.rolname as member, parent.rolname as parent
+      from pg_catalog.pg_auth_members membership
+      inner join pg_catalog.pg_roles member on member.oid = membership.member
+      inner join pg_catalog.pg_roles parent on parent.oid = membership.roleid
+      where member.rolname in (
+        'handleplan', 'handleplan_app', 'handleplan_web',
+        'handleplan_review', 'handleplan_operations'
+      )
+         or parent.rolname in (
+        'handleplan', 'handleplan_app', 'handleplan_web',
+        'handleplan_review', 'handleplan_operations'
+      )
+      order by member.rolname, parent.rolname
+    `,
+  ]);
+  return {
+    catalog,
+    ledger,
+    baseline,
+    roles,
+    memberships,
+  };
+}
+
+async function verifyBootstrapFailureCases(admin) {
+  const failureCases = [
+    {
+      database: bootstrapBeforeArtifactDatabase,
+      env: { HANDLEPLAN_BOOTSTRAP_FAIL_PHASE: "before-artifact" },
+      error: /Injected bootstrap failure before artifact/,
+    },
+    {
+      database: bootstrapAfterArtifactDatabase,
+      env: { HANDLEPLAN_BOOTSTRAP_FAIL_PHASE: "after-artifact" },
+      error: /Injected bootstrap failure after artifact/,
+    },
+    {
+      database: bootstrapBeforeCommitDatabase,
+      env: { HANDLEPLAN_BOOTSTRAP_FAIL_PHASE: "before-commit" },
+      error: /Injected bootstrap failure before commit/,
+    },
+  ];
+
+  for (const testCase of failureCases) {
+    await createDatabase(admin, testCase.database);
+    createdDatabases.add(testCase.database);
+    const database = postgres(urlForDatabase(testCase.database), {
+      max: 1,
+      onnotice: () => {},
+    });
+    const before = await readBootstrapState(database);
+    await assert.rejects(
+      runMigrations(testCase.database, undefined, { env: testCase.env }),
+      testCase.error,
+      `${testCase.database} must reject at the injected phase`,
+    );
+    const after = await readBootstrapState(database);
+    assert.deepEqual(
+      after,
+      before,
+      `${testCase.database} rejection must leave catalog, roles, and ledgers unchanged`,
+    );
+    await database.end({ timeout: 5 });
+  }
+
+  const tamperedCases = [
+    {
+      database: bootstrapTamperedArtifactDatabase,
+      name: "bootstrap-tampered-artifact",
+      mutate: ({ bootstrapDirectory }) => {
+        const artifactPath = resolve(bootstrapDirectory, "040_schema.sql");
+        writeFileSync(
+          artifactPath,
+          `${readFileSync(artifactPath, "utf8")}\n-- tampered proof copy\n`,
+        );
+      },
+      error: /Bootstrap manifest is incomplete or does not match its artifact/,
+    },
+    {
+      database: bootstrapTamperedManifestDatabase,
+      name: "bootstrap-tampered-manifest",
+      mutate: ({ bootstrapDirectory }) => {
+        const manifestPath = resolve(bootstrapDirectory, "040_manifest.json");
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+        manifest.artifact.path = "deploy/bootstrap/tampered.sql";
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      },
+      error: /Bootstrap manifest is incomplete or does not match its artifact/,
+    },
+  ];
+  for (const testCase of tamperedCases) {
+    const fixture = createCopiedRunnerFixture(testCase.name, testCase.mutate);
+    try {
+      await createDatabase(admin, testCase.database);
+      createdDatabases.add(testCase.database);
+      const database = postgres(urlForDatabase(testCase.database), {
+        max: 1,
+        onnotice: () => {},
+      });
+      const before = await readBootstrapState(database);
+      await assert.rejects(
+        runMigrations(testCase.database, undefined, {
+          runner: fixture.runner,
+          migrationsDirectory: fixture.migrationsDirectory,
+          bootstrapDirectory: fixture.bootstrapDirectory,
+        }),
+        testCase.error,
+        `${testCase.database} must reject the tampered copied fixture`,
+      );
+      const after = await readBootstrapState(database);
+      assert.deepEqual(
+        after,
+        before,
+        `${testCase.database} tamper rejection must leave the catalog unchanged`,
+      );
+      await database.end({ timeout: 5 });
+    } finally {
+      fixture.cleanup();
+    }
+  }
+
+  await createDatabase(admin, bootstrapNonemptyDatabase);
+  createdDatabases.add(bootstrapNonemptyDatabase);
+  const nonempty = postgres(urlForDatabase(bootstrapNonemptyDatabase), {
+    max: 1,
+    onnotice: () => {},
+  });
+  await nonempty.unsafe(
+    "create table public.ci_bootstrap_nonempty_marker (id integer not null)",
+  );
+  const nonemptyBefore = await readBootstrapState(nonempty);
+  await assert.rejects(
+    runMigrations(bootstrapNonemptyDatabase),
+    /Baseline target must be an empty catalog/,
+    "nonempty bootstrap targets must reject before mutation",
+  );
+  assert.deepEqual(
+    await readBootstrapState(nonempty),
+    nonemptyBefore,
+    "nonempty bootstrap rejection must preserve the marker and all catalog state",
+  );
+  await nonempty.end({ timeout: 5 });
+
+  await createDatabase(admin, bootstrapUnknownChecksumDatabase);
+  createdDatabases.add(bootstrapUnknownChecksumDatabase);
+  const unknownChecksum = postgres(urlForDatabase(bootstrapUnknownChecksumDatabase), {
+    max: 1,
+    onnotice: () => {},
+  });
+  await unknownChecksum.unsafe(`
+    create table public.handleplan_schema_migrations (
+      id varchar(255) primary key,
+      checksum char(64) not null,
+      applied_at timestamptz not null default transaction_timestamp()
+    );
+    insert into public.handleplan_schema_migrations (id, checksum)
+    values ('001_price_cache.sql', '${"f".repeat(64)}');
+  `);
+  const unknownBefore = await readBootstrapState(unknownChecksum);
+  await assert.rejects(
+    runMigrations(bootstrapUnknownChecksumDatabase),
+    /Applied migration checksum changed: 001_price_cache\.sql/,
+    "unknown legacy checksums must reject before mutation",
+  );
+  assert.deepEqual(
+    await readBootstrapState(unknownChecksum),
+    unknownBefore,
+    "unknown-checksum rejection must preserve the existing ledger and catalog",
+  );
+  await unknownChecksum.end({ timeout: 5 });
+
+  await createDatabase(admin, bootstrapPartial038Database);
+  createdDatabases.add(bootstrapPartial038Database);
+  await runMigrations(bootstrapPartial038Database, "038_tjek_function_grants.sql");
+  const partial038 = postgres(urlForDatabase(bootstrapPartial038Database), {
+    max: 1,
+    onnotice: () => {},
+  });
+  const partialBefore = await readBootstrapState(partial038);
+  await assert.rejects(
+    runMigrations(bootstrapPartial038Database),
+    /Incomplete historical 038 ledger refuses before mutation/,
+    "a partial 038 ledger must refuse the uncapped path",
+  );
+  assert.deepEqual(
+    await readBootstrapState(partial038),
+    partialBefore,
+    "partial 038 refusal must preserve catalog, runtime roles, and ledger state",
+  );
+  const [partialLedger] = await partial038`
+    select count(*)::integer as migration_039_rows
+    from handleplan_schema_migrations
+    where id = '039_tjek_null_comparison_fix.sql'
+  `;
+  assert.equal(partialLedger.migration_039_rows, 0);
+  await partial038.end({ timeout: 5 });
+}
+
+function writeExecutable(path, source) {
+  writeFileSync(path, `#!${process.execPath}\n${source}\n`, { mode: 0o700 });
+  chmodSync(path, 0o700);
+  return path;
+}
+
+function localDatabaseUrl(database, port, role, password) {
+  const url = new URL(`postgresql://127.0.0.1:${port}/${database}`);
+  url.username = encodeURIComponent(role);
+  url.password = encodeURIComponent(password);
+  return url.toString();
+}
+
+async function startRestoreContainer() {
+  let existing = false;
+  try {
+    await run("docker", ["inspect", restoreContainerName]);
+    existing = true;
+  } catch {
+    // The run-local container name is available.
+  }
+  if (existing) {
+    throw new Error(`refusing to replace pre-existing container ${restoreContainerName}`);
+  }
+  await run("docker", [
+    "run", "-d", "--name", restoreContainerName,
+    "-e", `POSTGRES_PASSWORD=${restoreContainerPassword}`,
+    "-p", "127.0.0.1:55443:5432",
+    postgresImage,
+  ]);
+  restoreContainerStarted = true;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    try {
+      await run("docker", ["exec", restoreContainerName, "pg_isready", "-U", "postgres"]);
+      await run("docker", [
+        "exec", restoreContainerName, "psql", "-U", "postgres", "-d", "postgres",
+        "-v", "ON_ERROR_STOP=1", "-Atc", "select 1",
+      ]);
+      return;
+    } catch {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+    }
+  }
+  throw new Error("disposable restore PostgreSQL container did not become ready");
+}
+
+function backupPgWrapper(path, database, role, password, command) {
+  return writeExecutable(path, `
+import { spawnSync } from "node:child_process";
+const args = process.argv.slice(2).filter((value) => !value.startsWith("--dbname=service="));
+const connectionArgs = ${JSON.stringify(command === "pg_restore" ? [] : ["-U", role, "-d", database])};
+const child = spawnSync(${JSON.stringify(dockerBinary)}, [
+  "run", "--rm", "-i", "--network", "host",
+  "-e", ${JSON.stringify(`PGPASSWORD=${password}`)},
+  ${JSON.stringify(postgresImage)}, ${JSON.stringify(command)},
+  "--host", ${JSON.stringify(postgresClientHost)},
+  "--port", ${JSON.stringify(postgresPort)},
+  ...connectionArgs, ...args,
+], { stdio: "inherit" });
+process.exit(child.status ?? 1);
+`);
+}
+
+function passThroughAgeWrapper(path) {
+  return writeExecutable(path, `
+import { readFileSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+if (args.includes("--encrypt")) {
+  const outputIndex = args.indexOf("--output");
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  writeFileSync(args[outputIndex + 1], Buffer.concat(chunks), { mode: 0o600 });
+} else {
+  process.stdout.write(readFileSync(args.at(-1)));
+}
+`);
+}
+
+function uploadAdapter(path, storeDirectory) {
+  return writeExecutable(path, `
+import { copyFileSync } from "node:fs";
+import { basename, join } from "node:path";
+const key = process.env.HANDLEPLAN_BACKUP_UPLOAD_OBJECT_KEY;
+copyFileSync(process.env.HANDLEPLAN_BACKUP_UPLOAD_SOURCE_FILE, join(${JSON.stringify(storeDirectory)}, key.replaceAll("/", "__")));
+`);
+}
+
+function downloadAdapter(path, storeDirectory) {
+  return writeExecutable(path, `
+import { copyFileSync } from "node:fs";
+import { join } from "node:path";
+const key = process.env.HANDLEPLAN_RESTORE_DOWNLOAD_OBJECT_KEY;
+copyFileSync(join(${JSON.stringify(storeDirectory)}, key.replaceAll("/", "__")), process.env.HANDLEPLAN_RESTORE_DOWNLOAD_DESTINATION_FILE);
+`);
+}
+
+async function prepareBackupSource(admin, database, backupPassword) {
+  await admin.unsafe(`
+    do $backup_role$
+    begin
+      if not exists (select 1 from pg_catalog.pg_roles where rolname = 'handleplan_backup') then
+        create role handleplan_backup login nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
+      end if;
+    end
+    $backup_role$;
+    alter role handleplan_backup login password '${backupPassword}';
+    grant connect on database "${database}" to handleplan_backup;
+  `);
+  const source = postgres(urlForDatabase(database), { max: 1, onnotice: () => {} });
+  await source.unsafe(`
+    grant usage on schema public to handleplan_backup;
+    grant select on all tables in schema public to handleplan_backup;
+    grant usage, select on all sequences in schema public to handleplan_backup;
+  `);
+  await source.end({ timeout: 5 });
+}
+
+async function runBackupRoundtrip(admin, sourceDatabase, restoreDatabase, label) {
+  if (!restoreContainerStarted) await startRestoreContainer();
+  const backupPassword = "ci_backup_url_safe_000000000000000001";
+  const restoreRole = `handleplan_restore_drill_${label}_owner`;
+  const restoreAdminUrl = localDatabaseUrl("postgres", 55443, "postgres", restoreContainerPassword);
+  const restoreAdmin = postgres(restoreAdminUrl, { max: 1, onnotice: () => {} });
+  await restoreAdmin.unsafe(`
+    do $restore_role$
+    begin
+      if not exists (select 1 from pg_catalog.pg_roles where rolname = '${restoreRole}') then
+        create role ${restoreRole} login nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
+      end if;
+    end
+    $restore_role$;
+    alter role ${restoreRole} login password '${restoreContainerPassword}';
+  `);
+  const [restoreServer] = await restoreAdmin`
+    select encode(sha256(convert_to(system_identifier::text, 'UTF8')), 'hex') as server_id
+    from pg_control_system()
+  `;
+  await restoreAdmin.end({ timeout: 5 });
+  await run("docker", [
+    "exec", restoreContainerName, "psql", "-U", "postgres", "-d", "postgres",
+    "-v", "ON_ERROR_STOP=1", "-c", `create database "${restoreDatabase}" owner "${restoreRole}"`,
+  ]);
+
+  const rootDirectory = resolve(scratchDirectory, `backup-roundtrip-${label}`);
+  const directories = {};
+  for (const name of ["backup-work", "backup-evidence", "captures", "restore-work", "restore-evidence"]) {
+    directories[name] = resolve(rootDirectory, name);
+    mkdirSync(directories[name], { mode: 0o700, recursive: true });
+    chmodSync(directories[name], 0o700);
+  }
+  for (const name of Object.keys(directories)) directories[name] = realpathSync(directories[name]);
+  const storeDirectory = resolve(rootDirectory, "store");
+  mkdirSync(storeDirectory, { mode: 0o700 });
+  chmodSync(storeDirectory, 0o700);
+  const canonicalStoreDirectory = realpathSync(storeDirectory);
+  const backupPgpass = resolve(rootDirectory, "backup.pgpass");
+  const restorePgpass = resolve(rootDirectory, "restore.pgpass");
+  const backupService = resolve(rootDirectory, "backup.pg_service.conf");
+  const restoreService = resolve(rootDirectory, "restore.pg_service.conf");
+  writeFileSync(backupPgpass, `*:*:*:handleplan_backup:${backupPassword}\n`, { mode: 0o600 });
+  writeFileSync(restorePgpass, `*:*:*:${restoreRole}:${restoreContainerPassword}\n`, { mode: 0o600 });
+  writeFileSync(backupService, `[handleplan_backup]\nhost=/var/run/postgresql\ndbname=${sourceDatabase}\nuser=handleplan_backup\n`, { mode: 0o600 });
+  writeFileSync(restoreService, `[${restoreDatabase}]\nhost=/var/run/postgresql\ndbname=${restoreDatabase}\nuser=${restoreRole}\n`, { mode: 0o600 });
+  const recipients = resolve(rootDirectory, "recipients.txt");
+  const identity = resolve(rootDirectory, "identity.txt");
+  writeFileSync(recipients, "local-pass-through\n", { mode: 0o600 });
+  writeFileSync(identity, "local-pass-through\n", { mode: 0o600 });
+  const age = passThroughAgeWrapper(resolve(rootDirectory, "age.mjs"));
+  const upload = uploadAdapter(resolve(rootDirectory, "upload.mjs"), canonicalStoreDirectory);
+  const download = downloadAdapter(resolve(rootDirectory, "download.mjs"), canonicalStoreDirectory);
+  const backupPsql = backupPgWrapper(resolve(rootDirectory, "backup-psql.mjs"), sourceDatabase, "handleplan_backup", backupPassword, "psql");
+  const backupDump = backupPgWrapper(resolve(rootDirectory, "backup-pg_dump.mjs"), sourceDatabase, "handleplan_backup", backupPassword, "pg_dump");
+  const backupRestore = backupPgWrapper(resolve(rootDirectory, "backup-pg_restore.mjs"), sourceDatabase, "handleplan_backup", backupPassword, "pg_restore");
+  const restorePsql = writeExecutable(resolve(rootDirectory, "restore-psql.mjs"), `
+import { spawnSync } from "node:child_process";
+const args = process.argv.slice(2).filter((value) => !value.startsWith("--dbname=service="));
+const child = spawnSync(${JSON.stringify(dockerBinary)}, ["exec", "-i", ${JSON.stringify(restoreContainerName)}, "env", ${JSON.stringify(`PGPASSWORD=${restoreContainerPassword}`)}, "psql", "-U", ${JSON.stringify(restoreRole)}, "-d", ${JSON.stringify(restoreDatabase)}, ...args], { stdio: "inherit" });
+process.exit(child.status ?? 1);
+`);
+  const restorePgRestore = writeExecutable(resolve(rootDirectory, "restore-pg_restore.mjs"), `
+import { spawnSync } from "node:child_process";
+const args = process.argv.slice(2).filter((value) => !value.startsWith("--dbname=service="));
+const child = spawnSync(${JSON.stringify(dockerBinary)}, ["exec", "-i", ${JSON.stringify(restoreContainerName)}, "env", ${JSON.stringify(`PGPASSWORD=${restoreContainerPassword}`)}, "pg_restore", ...args], { stdio: "inherit" });
+process.exit(child.status ?? 1);
+`);
+  const sourceAdminUrl = new URL(adminUrl);
+  sourceAdminUrl.pathname = "/postgres";
+  const sourceAdmin = postgres(sourceAdminUrl.toString(), { max: 1 });
+  const [server] = await sourceAdmin`
+    select encode(sha256(convert_to(system_identifier::text, 'UTF8')), 'hex') as server_id
+    from pg_control_system()
+  `;
+  await sourceAdmin.end({ timeout: 5 });
+  const backupEnvironment = {
+    CI: "true",
+    HANDLEPLAN_BACKUP_AGE_BIN: age,
+    HANDLEPLAN_BACKUP_AGE_RECIPIENTS_FILE: recipients,
+    HANDLEPLAN_BACKUP_COMMAND_TIMEOUT_MS: "120000",
+    HANDLEPLAN_BACKUP_CAPTURE_ROOT: directories.captures,
+    HANDLEPLAN_BACKUP_ENABLED: "true",
+    HANDLEPLAN_BACKUP_EVIDENCE_DIR: directories["backup-evidence"],
+    HANDLEPLAN_BACKUP_EXPECTED_DATABASE: sourceDatabase,
+    HANDLEPLAN_BACKUP_EXPECTED_CAPTURE_OWNER_UID: String(process.getuid()),
+    HANDLEPLAN_BACKUP_EXPECTED_ROLE: "handleplan_backup",
+    HANDLEPLAN_BACKUP_EXPECTED_SERVER_ID_SHA256: server.server_id,
+    HANDLEPLAN_BACKUP_MAX_ARTIFACT_BYTES: "1073741824",
+    HANDLEPLAN_BACKUP_MAX_CAPTURE_ARTIFACT_BYTES: "1073741824",
+    HANDLEPLAN_BACKUP_MAX_CAPTURE_FILES: "1000",
+    HANDLEPLAN_BACKUP_MAX_CAPTURE_LEDGER_BYTES: "1048576",
+    HANDLEPLAN_BACKUP_MAX_CAPTURE_PLAINTEXT_BYTES: "1073741824",
+    HANDLEPLAN_BACKUP_MIGRATIONS_DIR: process.env.MIGRATIONS_DIR,
+    HANDLEPLAN_BACKUP_PGDUMP_BIN: backupDump,
+    HANDLEPLAN_BACKUP_PGPASS_FILE: backupPgpass,
+    HANDLEPLAN_BACKUP_PGRESTORE_BIN: backupRestore,
+    HANDLEPLAN_BACKUP_PGSERVICE: "handleplan_backup",
+    HANDLEPLAN_BACKUP_PGSERVICE_FILE: backupService,
+    HANDLEPLAN_BACKUP_PSQL_BIN: backupPsql,
+    HANDLEPLAN_BACKUP_RETENTION_DAYS: "35",
+    HANDLEPLAN_BACKUP_UPLOAD_ADAPTER: upload,
+    HANDLEPLAN_BACKUP_WORK_DIR: directories["backup-work"],
+  };
+  const backup = await createBackup({ environment: backupEnvironment });
+  const encodedDatabaseKey = backup.manifest.database.objectKey.replaceAll("/", "__");
+  const encryptedFile = resolve(rootDirectory, "selected-database.dump.age");
+  cpSync(resolve(canonicalStoreDirectory, encodedDatabaseKey), encryptedFile);
+  chmodSync(encryptedFile, 0o600);
+  const restoreEnvironment = {
+    HANDLEPLAN_RESTORE_AGE_BIN: age,
+    HANDLEPLAN_RESTORE_AGE_IDENTITY_FILE: identity,
+    HANDLEPLAN_RESTORE_CLUSTER_ACK: "server-identity-reviewed-nonproduction",
+    HANDLEPLAN_RESTORE_COMMAND_TIMEOUT_MS: "120000",
+    HANDLEPLAN_RESTORE_DOWNLOAD_ADAPTER: download,
+    HANDLEPLAN_RESTORE_DRILL_ENABLED: "true",
+    HANDLEPLAN_RESTORE_ENCRYPTED_FILE: encryptedFile,
+    HANDLEPLAN_RESTORE_EVIDENCE_DIR: directories["restore-evidence"],
+    HANDLEPLAN_RESTORE_EXPECTED_BACKUP_ID: backup.backupId,
+    HANDLEPLAN_RESTORE_EXPECTED_CAPTURE_CIPHERTEXT_SHA256: backup.manifest.captures.sha256,
+    HANDLEPLAN_RESTORE_EXPECTED_CAPTURE_OBJECT_KEY: backup.manifest.captures.objectKey,
+    HANDLEPLAN_RESTORE_EXPECTED_CIPHERTEXT_SHA256: backup.manifest.database.sha256,
+    HANDLEPLAN_RESTORE_EXPECTED_DATABASE: restoreDatabase,
+    HANDLEPLAN_RESTORE_EXPECTED_MANIFEST_SHA256: backup.manifestSha256,
+    HANDLEPLAN_RESTORE_EXPECTED_OBJECT_KEY: backup.manifest.database.objectKey,
+    HANDLEPLAN_RESTORE_EXPECTED_ROLE: restoreRole,
+    HANDLEPLAN_RESTORE_EXPECTED_SERVER_ID_SHA256: restoreServer.server_id,
+    HANDLEPLAN_RESTORE_ISOLATION_ACK: "isolated-disposable-nonproduction-database",
+    HANDLEPLAN_RESTORE_MANIFEST_FILE: backup.evidenceManifest,
+    HANDLEPLAN_RESTORE_MAX_ARTIFACT_BYTES: "1073741824",
+    HANDLEPLAN_RESTORE_MAX_CAPTURE_ARTIFACT_BYTES: "1073741824",
+    HANDLEPLAN_RESTORE_MAX_CAPTURE_FILES: "1000",
+    HANDLEPLAN_RESTORE_MAX_CAPTURE_PLAINTEXT_BYTES: "1073741824",
+    HANDLEPLAN_RESTORE_MIGRATIONS_DIR: process.env.MIGRATIONS_DIR,
+    HANDLEPLAN_RESTORE_PGPASS_FILE: restorePgpass,
+    HANDLEPLAN_RESTORE_PGRESTORE_BIN: restorePgRestore,
+    HANDLEPLAN_RESTORE_PGSERVICE: restoreDatabase,
+    HANDLEPLAN_RESTORE_PGSERVICE_FILE: restoreService,
+    HANDLEPLAN_RESTORE_PSQL_BIN: restorePsql,
+    HANDLEPLAN_RESTORE_TEMPLATE_ACK: "created-from-template0-for-this-drill",
+    HANDLEPLAN_RESTORE_WORK_DIR: directories["restore-work"],
+  };
+  const restoreResult = await verifyRestore({ environment: restoreEnvironment });
+  assert.equal(restoreResult.evidence.status, "archive-restored-schema-verified");
+  const restored = postgres(localDatabaseUrl(restoreDatabase, 55443, restoreRole, restoreContainerPassword), { max: 1, onnotice: () => {} });
+  const [ledgerCount] = await restored`select count(*)::integer as count from handleplan_schema_migrations`;
+  assert.equal(ledgerCount.count, label === "baseline" ? 3 : 43);
+  const [baselineState] = await restored`
+    select to_regclass('public.handleplan_schema_baselines') is not null as exists
+  `;
+  assert.equal(baselineState.exists, label === "baseline");
+  await restored.end({ timeout: 5 });
+  return { backup, restoreResult };
+}
+
 const scratchDirectory = mkdtempSync(resolve(tmpdir(), "handleplan-v1-03-"));
 const dumpPath = resolve(scratchDirectory, "database.dump");
 const createdDatabases = new Set();
 let admin;
 let source;
+let legacy;
+let baseline;
 let restored;
 let completionClock;
 let publicationHealthPrecondition;
@@ -2303,6 +3123,28 @@ try {
   await pdfEvidencePrecondition.end({ timeout: 5 });
   pdfEvidencePrecondition = undefined;
 
+  await verifyBootstrapFailureCases(admin);
+
+  await createDatabase(admin, baselineDatabase);
+  createdDatabases.add(baselineDatabase);
+  await runMigrations(baselineDatabase);
+  baseline = postgres(urlForDatabase(baselineDatabase), { max: 1, onnotice: () => {} });
+  const cleanProjectionDefinition = await verifyBaselineActivation(baseline);
+  await verifyRuntimeRolePolicy(baseline);
+  await baseline.end({ timeout: 5 });
+  baseline = undefined;
+  await runMigrations(baselineDatabase);
+  baseline = postgres(urlForDatabase(baselineDatabase), { max: 1, onnotice: () => {} });
+  const replayProjectionDefinition = await verifyBaselineActivation(baseline);
+  await verifyRuntimeRolePolicy(baseline);
+  assert.equal(
+    replayProjectionDefinition,
+    cleanProjectionDefinition,
+    "baseline replay must preserve the projection definition",
+  );
+  await baseline.end({ timeout: 5 });
+  baseline = undefined;
+
   await createDatabase(admin, sourceDatabase);
   createdDatabases.add(sourceDatabase);
   await runMigrations(sourceDatabase, "001_price_cache.sql");
@@ -2326,12 +3168,11 @@ try {
   await source.end({ timeout: 5 });
   source = undefined;
 
-  await runMigrations(sourceDatabase);
-  await runMigrations(sourceDatabase);
+  await runMigrations(sourceDatabase, "038_tjek_function_grants.sql");
+  await runMigrations(sourceDatabase, "038_tjek_function_grants.sql");
 
   source = postgres(urlForDatabase(sourceDatabase), { max: 1, onnotice: () => {} });
   await verifyLegacyUpgrade(source);
-  await verifyRuntimeRolePolicy(source);
   await verifyReviewOfferInsertBoundary(source);
   await verifyTaxonomyPublicationGuards(source);
   const sourceLedger = await readMigrationLedger(source);
@@ -2341,6 +3182,50 @@ try {
   await verifyTerminalRunInsertGuards(source);
   await source.end({ timeout: 5 });
   source = undefined;
+
+  await createDatabase(admin, legacyDatabase);
+  createdDatabases.add(legacyDatabase);
+  await restoreLegacy040Fixture(legacyDatabase);
+  legacy = postgres(urlForDatabase(legacyDatabase), { max: 1, onnotice: () => {} });
+  await applyFixture(legacy, "legacy040/legacy040-canonical-seed.sql");
+  await legacy.end({ timeout: 5 });
+  legacy = undefined;
+  await runMigrations(legacyDatabase);
+  await runMigrations(legacyDatabase);
+
+  legacy = postgres(urlForDatabase(legacyDatabase), { max: 1, onnotice: () => {} });
+  const legacyLedger = await readMigrationLedger(legacy, currentMigrations);
+  assert.deepEqual(
+    legacyLedger.slice(0, expectedMigrations.length),
+    sourceLedger,
+    "authentic legacy040 ledger must remain intact while 041 is applied",
+  );
+  await verifyRuntimeRolePolicy(legacy);
+  await verifyReviewOfferInsertBoundary(legacy);
+  await verifyTaxonomyPublicationGuards(legacy);
+  const [legacyProjection] = await legacy`
+    select pg_catalog.pg_get_functiondef(
+      'public.public_official_offer_rows_v1(bigint[], timestamptz)'::regprocedure
+    ) as definition
+  `;
+  assert.match(legacyProjection?.definition ?? "", /CREATE OR REPLACE FUNCTION/iu);
+  await legacy.end({ timeout: 5 });
+  legacy = undefined;
+
+  await prepareBackupSource(admin, baselineDatabase, "ci_backup_url_safe_000000000000000001");
+  await prepareBackupSource(admin, legacyDatabase, "ci_backup_url_safe_000000000000000001");
+  await runBackupRoundtrip(
+    admin,
+    baselineDatabase,
+    baselineBackupRestoreDatabase,
+    "baseline",
+  );
+  await runBackupRoundtrip(
+    admin,
+    legacyDatabase,
+    legacyBackupRestoreDatabase,
+    "legacy",
+  );
 
   const dumpFd = openSync(dumpPath, "wx", 0o600);
   try {
@@ -2368,7 +3253,7 @@ try {
     closeSync(restoreFd);
   }
 
-  await runMigrations(restoreDatabase);
+  await runMigrations(restoreDatabase, "038_tjek_function_grants.sql");
   restored = postgres(urlForDatabase(restoreDatabase), { max: 1, onnotice: () => {} });
   await verifyLegacyUpgrade(restored);
   const restoredPublicStateFingerprint = await verifyRestoreEvidence(restored);
@@ -2378,28 +3263,15 @@ try {
     sourcePublicStateFingerprint,
     "restore must preserve database-owned public-state clocks exactly",
   );
-  await verifyRuntimeRolePolicy(restored);
   await verifyReviewOfferInsertBoundary(restored);
   await verifyTaxonomyPublicationGuards(restored);
   assert.deepEqual(await readMigrationLedger(restored), sourceLedger);
 
   proofResult = {
     sourceDatabase,
+    legacyDatabase,
     restoreDatabase,
     migrations: sourceLedger.length,
-    legacyRows: 1,
-    restoredPermissionAudits: 1,
-    restoredPublicationCaptures: 1,
-    restoredReviewActions: 1,
-    restoredCatalogObservations: 1,
-    restoredReviewedFamilyDecisions: 1,
-    restoredRuntimeRolePolicy: true,
-    completionClockUpgradeRollback: true,
-    publicationHealthUpgradeReconciliationGuard: true,
-    pdfEvidenceUpgradeReconciliationGuard: true,
-    categoryPathUpgradeValidation: true,
-    immutableReviewCandidates: true,
-    guardedReviewOfferPublication: true,
   };
 } catch (error) {
   proofError = error;
@@ -2421,6 +3293,14 @@ try {
     await attemptCleanup("close source database connection", () =>
       source.end({ timeout: 5 }));
   }
+  if (legacy) {
+    await attemptCleanup("close legacy database connection", () =>
+      legacy.end({ timeout: 5 }));
+  }
+  if (baseline) {
+    await attemptCleanup("close baseline database connection", () =>
+      baseline.end({ timeout: 5 }));
+  }
   if (completionClock) {
     await attemptCleanup("close completion-clock database connection", () =>
       completionClock.end({ timeout: 5 }));
@@ -2439,6 +3319,11 @@ try {
     }
     await attemptCleanup("close admin database connection", () =>
       admin.end({ timeout: 5 }));
+  }
+  if (restoreContainerStarted) {
+    await attemptCleanup("remove disposable restore PostgreSQL container", () =>
+      run("docker", ["rm", "-f", restoreContainerName]));
+    restoreContainerStarted = false;
   }
   await attemptCleanup("remove dump scratch directory", () => {
     rmSync(scratchDirectory, { force: true, recursive: true });

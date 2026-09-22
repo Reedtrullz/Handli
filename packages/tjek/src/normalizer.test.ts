@@ -87,7 +87,7 @@ describe("TjekClient offer normalization", () => {
     expect(result[1]!.price).toBe(14.9);
   });
 
-  it("skips offers with missing name or price", async () => {
+  it("rejects offers with missing name or price", async () => {
     const client = createClientWithFlow([
       incitoWithOffers(["v1", "v2", "v3"]),
       { offer: { price: 10 } },  // missing name
@@ -95,9 +95,7 @@ describe("TjekClient offer normalization", () => {
       offerDetail("Valid Offer", 25),
     ]);
 
-    const result = await client.getOffersFromCatalog("cat-3");
-    expect(result).toHaveLength(1);
-    expect(result[0]!.name).toBe("Valid Offer");
+    await expect(client.getOffersFromCatalog("cat-3")).rejects.toThrow("Invalid Tjek incito offer");
   });
 
   it("handles before_price (discount)", async () => {

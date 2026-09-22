@@ -191,10 +191,9 @@ export function createOpenPricesHandlers(
       console.error("[open-prices] got", prices.length, "prices");
       throwIfCancelled(signal);
 
-      const geographicScopeId = targets[0]?.geographicScopeId;
       const fetchedAt = checkedNow(clock);
       const outcomes: OpenPricesPriceIngestionOutcome[] = prices.map(
-        (price: OpenPricesPrice) => normalizeOpenPricesOutcome(price, fetchedAt, geographicScopeId),
+        (price: OpenPricesPrice) => normalizeOpenPricesOutcome(price, fetchedAt),
       );
 
       for (const outcome of outcomes) {

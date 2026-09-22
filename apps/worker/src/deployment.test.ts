@@ -104,6 +104,7 @@ async function createDeploymentFixture(prefix: string): Promise<DeploymentFixtur
     mkdir(join(appRoot, "state"), { recursive: true }),
     mkdir(join(source, "deploy"), { recursive: true }),
     mkdir(join(source, "deploy", "backup"), { recursive: true }),
+    mkdir(join(source, "deploy", "bootstrap"), { recursive: true }),
     mkdir(join(source, "deploy", "migrations"), { recursive: true }),
   ]);
   await Promise.all([
@@ -128,6 +129,7 @@ async function createDeploymentFixture(prefix: string): Promise<DeploymentFixtur
       "#!/bin/sh\n# fixture pending watchdog\n",
     ),
     writeFile(join(source, "deploy", "backup", "README.md"), "fixture backup controls\n"),
+    writeFile(join(source, "deploy", "bootstrap", "040_fixture.json"), "{}\n"),
     writeFile(join(source, "deploy", "migrations", "001_fixture.sql"), "select 1;\n"),
   ]);
   runGit(["init", "--bare", remote]);

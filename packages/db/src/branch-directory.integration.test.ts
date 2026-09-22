@@ -448,7 +448,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       });
       await addCoverage({ chain: "extra", runId: permissionRunId, state: "complete" });
       await completeRun(permissionRunId);
-      const snapshotAt = await databaseClock();
+      const snapshotAt = await databaseClock({ afterCommittedWrite: true });
       const reader = new PostgresBranchDirectory(web.db);
       const baseline = await reader.loadEligibleBranches({
         eligibleChainIds: ["extra"],

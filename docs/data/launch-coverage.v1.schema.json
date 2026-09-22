@@ -13,14 +13,14 @@
     "publicClaim": { "type": "string", "minLength": 1 },
     "requiredChains": {
       "type": "array",
-      "minItems": 3,
-      "maxItems": 3,
+      "minItems": 7,
+      "maxItems": 7,
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": ["id", "displayName"],
         "properties": {
-          "id": { "enum": ["bunnpris", "rema-1000", "extra"] },
+          "id": { "enum": ["bunnpris", "rema-1000", "extra", "meny", "spar", "joker", "europris"] },
           "displayName": { "type": "string", "minLength": 1 }
         }
       }
@@ -52,7 +52,7 @@
       "additionalProperties": false,
       "required": ["chainId", "url", "accessedAt", "finding"],
       "properties": {
-        "chainId": { "enum": ["bunnpris", "rema-1000", "extra"] },
+      "chainId": { "enum": ["bunnpris", "rema-1000", "extra", "meny", "spar", "joker", "europris"] },
         "url": { "type": "string", "format": "uri" },
         "accessedAt": { "type": "string", "format": "date" },
         "finding": { "type": "string", "minLength": 1 }
@@ -100,7 +100,7 @@
       "required": ["regionId", "chainId", "priceClass", "activeSourceId", "candidateSourceIds", "coverageStatus", "evidenceLevel", "geographicScope", "refreshTargetHours", "knownGaps", "launchEligible"],
       "properties": {
         "regionId": { "type": "string" },
-        "chainId": { "enum": ["bunnpris", "rema-1000", "extra"] },
+        "chainId": { "enum": ["bunnpris", "rema-1000", "extra", "meny", "spar", "joker", "europris"] },
         "priceClass": { "enum": ["ordinary", "official_offer"] },
         "activeSourceId": { "type": ["string", "null"] },
         "candidateSourceIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } },

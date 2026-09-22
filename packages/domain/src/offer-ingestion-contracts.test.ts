@@ -104,6 +104,67 @@ describe("official-offer ingestion contracts", () => {
     }).success).toBe(false);
   });
 
+  it("preserves exact authorization microseconds and rejects invalid temporal boundaries", () => {
+    const fence = {
+      contractVersion: 1,
+      permissionId: 7,
+      sourceId: "tjek",
+      decision: "approved" as const,
+      capabilities: ["capture", "discover", "extract"] as const,
+      rightsClassifications: ["public_display"] as const,
+      reviewedAt: "2026-08-21T16:04:05.780477Z",
+      evaluatedAt: "2026-09-08T13:00:00.000000Z",
+    };
+    expect(officialOfferAuthorizationFenceV1Schema.parse(fence).reviewedAt)
+      .toBe("2026-08-21T16:04:05.780477Z");
+    expect(officialOfferAuthorizationFenceV1Schema.safeParse({
+      ...fence,
+      reviewedAt: "2026-09-08T13:00:00.000001Z",
+    }).success).toBe(false);
+    expect(officialOfferAuthorizationFenceV1Schema.safeParse({
+      ...fence,
+      validUntil: "2026-09-08T13:00:00.000000Z",
+    }).success).toBe(false);
+    expect(officialOfferAuthorizationFenceV1Schema.safeParse({
+      ...fence,
+      validUntil: "2026-09-08T13:00:00.000001Z",
+    }).success).toBe(true);
+    for (const reviewedAt of [
+      "2026-02-29T16:04:05.780477Z",
+      "2026-08-21T16:04:05.7804777Z",
+      "2026-08-21T16:04:05.780477+00:00",
+      "2026-08-21T16:04:05.780477Z trailing",
+    ]) {
+      expect(officialOfferAuthorizationFenceV1Schema.safeParse({ ...fence, reviewedAt }).success)
+        .toBe(false);
+    }
+
+    const edition = {
+      ...syntheticAuthorizedLocalEdition,
+      discoveredAt: "2026-09-08T13:00:00.000Z",
+      authorization: {
+        ...syntheticAuthorizedLocalEdition.authorization,
+        reviewedAt: "2026-08-21T16:04:05.780477Z",
+        validUntil: "2026-09-08T13:00:00.000001Z",
+      },
+    };
+    expect(officialOfferEditionDiscoveryInputV1Schema.safeParse(edition).success).toBe(true);
+    expect(officialOfferEditionDiscoveryInputV1Schema.safeParse({
+      ...edition,
+      authorization: {
+        ...edition.authorization,
+        reviewedAt: "2026-09-08T13:00:00.000001Z",
+      },
+    }).success).toBe(false);
+    expect(officialOfferEditionDiscoveryInputV1Schema.safeParse({
+      ...edition,
+      authorization: {
+        ...edition.authorization,
+        validUntil: "2026-09-08T13:00:00.000000Z",
+      },
+    }).success).toBe(false);
+  });
+
   it("stays explicitly activated and accepts only an authorized, bounded edition", () => {
     expect(officialOfferFoundationActivationSchema.parse(
       OFFICIAL_OFFER_FOUNDATION_ACTIVATION,

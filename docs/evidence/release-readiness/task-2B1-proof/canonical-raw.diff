@@ -1,0 +1,18 @@
+--- /private/tmp/task2b1-proof.UaoLrK/canonical-1.raw.sql	2026-09-08 17:53:10
++++ /private/tmp/task2b1-proof.UaoLrK/canonical-2.raw.sql	2026-09-08 17:53:10
+@@ -2,7 +2,7 @@
+ -- PostgreSQL database dump
+ --
+ 
+-\restrict C7rYz7fMLUKcced2S9kgaZ3rft3TfuMCRJZeWA0kxhKaoIC03zdelJHnbKYS4ov
++\restrict g6AhOrqSxHvpEM0aVz5fhyPv8vAKUIwRwnJKfjIeMstO7kJkI04sYIvDN2Fh7nq
+ 
+ -- Dumped from database version 16.10
+ -- Dumped by pg_dump version 16.10
+@@ -9588,5 +9588,5 @@
+ -- PostgreSQL database dump complete
+ --
+ 
+-\unrestrict C7rYz7fMLUKcced2S9kgaZ3rft3TfuMCRJZeWA0kxhKaoIC03zdelJHnbKYS4ov
++\unrestrict g6AhOrqSxHvpEM0aVz5fhyPv8vAKUIwRwnJKfjIeMstO7kJkI04sYIvDN2Fh7nq
+ 

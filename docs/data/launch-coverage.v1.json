@@ -1,13 +1,38 @@
 {
   "$schema": "./launch-coverage.v1.schema.json",
   "manifestVersion": "1.0.0",
-  "reviewedAt": "2026-07-16",
+  "reviewedAt": "2026-09-09",
   "launchDecision": "candidate_only",
-  "publicClaim": "No region is selected or launch-eligible. Three-chain ordinary-price and official-offer coverage remain unmeasured or rights-unresolved.",
+  "publicClaim": "All seven named chains are represented across Oslo, Bergen, and Trondheim as candidate-only coverage cells. No region is selected: current national observations lack municipality scope proof and Handleplan-specific source agreements remain unresolved.",
   "requiredChains": [
-    { "id": "bunnpris", "displayName": "Bunnpris" },
-    { "id": "rema-1000", "displayName": "REMA 1000" },
-    { "id": "extra", "displayName": "Extra" }
+    {
+      "id": "bunnpris",
+      "displayName": "Bunnpris"
+    },
+    {
+      "id": "rema-1000",
+      "displayName": "REMA 1000"
+    },
+    {
+      "id": "extra",
+      "displayName": "Extra"
+    },
+    {
+      "id": "meny",
+      "displayName": "MENY"
+    },
+    {
+      "id": "spar",
+      "displayName": "SPAR"
+    },
+    {
+      "id": "joker",
+      "displayName": "Joker"
+    },
+    {
+      "id": "europris",
+      "displayName": "Europris"
+    }
   ],
   "candidateRegions": [
     {
@@ -46,10 +71,11 @@
         }
       ],
       "knownGaps": [
-        "No measured product-level ordinary-price coverage for all three chains",
+        "No municipality-scoped product-level ordinary-price coverage for all seven chains",
         "No rights-cleared official-offer source for any chain",
-        "No verified Extra or Bunnpris offer-scope mapping for the municipality",
-        "No freshness, known-not-carried, or branch-directory completeness evidence"
+        "Runtime source approvals are not Handleplan-specific agreement evidence",
+        "National or unknown-scope rows are preserved separately and cannot support regional claims",
+        "No freshness, known-not-carried, or branch-directory completeness proof by municipality"
       ]
     },
     {
@@ -94,10 +120,11 @@
         }
       ],
       "knownGaps": [
-        "No measured product-level ordinary-price coverage for all three chains",
+        "No municipality-scoped product-level ordinary-price coverage for all seven chains",
         "No rights-cleared official-offer source for any chain",
-        "No verified Bunnpris offer-scope mapping for the municipality",
-        "No freshness, known-not-carried, or branch-directory completeness evidence"
+        "Runtime source approvals are not Handleplan-specific agreement evidence",
+        "National or unknown-scope rows are preserved separately and cannot support regional claims",
+        "No freshness, known-not-carried, or branch-directory completeness proof by municipality"
       ]
     },
     {
@@ -142,10 +169,11 @@
         }
       ],
       "knownGaps": [
-        "No measured product-level ordinary-price coverage for all three chains",
+        "No municipality-scoped product-level ordinary-price coverage for all seven chains",
         "No rights-cleared official-offer source for any chain",
-        "No verified Bunnpris offer-scope mapping for the municipality",
-        "No freshness, known-not-carried, or branch-directory completeness evidence"
+        "Runtime source approvals are not Handleplan-specific agreement evidence",
+        "National or unknown-scope rows are preserved separately and cannot support regional claims",
+        "No freshness, known-not-carried, or branch-directory completeness proof by municipality"
       ]
     }
   ],
@@ -155,12 +183,20 @@
       "chainId": "bunnpris",
       "priceClass": "ordinary",
       "activeSourceId": null,
-      "candidateSourceIds": ["kassalapp"],
+      "candidateSourceIds": [
+        "kassalapp",
+        "open-prices"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_presence_only",
-      "geographicScope": "chain-level source not measured against Oslo",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
       "refreshTargetHours": 72,
-      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
       "launchEligible": false
     },
     {
@@ -168,12 +204,19 @@
       "chainId": "bunnpris",
       "priceClass": "official_offer",
       "activeSourceId": null,
-      "candidateSourceIds": ["tjek-api", "bunnpris-public-web"],
+      "candidateSourceIds": [
+        "tjek"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_presence_only",
-      "geographicScope": "unresolved",
-      "refreshTargetHours": 24,
-      "knownGaps": ["Rights-cleared source", "Offer-scope mapping", "Validity and conditions", "Attribution and imagery"],
+      "evidenceLevel": "technical_sample",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
       "launchEligible": false
     },
     {
@@ -181,12 +224,20 @@
       "chainId": "rema-1000",
       "priceClass": "ordinary",
       "activeSourceId": null,
-      "candidateSourceIds": ["kassalapp"],
+      "candidateSourceIds": [
+        "kassalapp",
+        "open-prices"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_presence_only",
-      "geographicScope": "chain-level source not measured against Oslo",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
       "refreshTargetHours": 72,
-      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
       "launchEligible": false
     },
     {
@@ -194,12 +245,19 @@
       "chainId": "rema-1000",
       "priceClass": "official_offer",
       "activeSourceId": null,
-      "candidateSourceIds": ["tjek-api", "rema-public-web"],
+      "candidateSourceIds": [
+        "tjek"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_scope_only",
-      "geographicScope": "public page says Oslo and Gjelleråsen; authorized machine scope unresolved",
-      "refreshTargetHours": 24,
-      "knownGaps": ["Rights-cleared source", "Offer field coverage", "Membership conditions", "Attribution and imagery"],
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
       "launchEligible": false
     },
     {
@@ -207,12 +265,20 @@
       "chainId": "extra",
       "priceClass": "ordinary",
       "activeSourceId": null,
-      "candidateSourceIds": ["kassalapp"],
+      "candidateSourceIds": [
+        "kassalapp",
+        "open-prices"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_presence_only",
-      "geographicScope": "chain-level source not measured against Oslo",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
       "refreshTargetHours": 72,
-      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
       "launchEligible": false
     },
     {
@@ -220,12 +286,179 @@
       "chainId": "extra",
       "priceClass": "official_offer",
       "activeSourceId": null,
-      "candidateSourceIds": ["tjek-api", "coop-extra-public-web"],
+      "candidateSourceIds": [
+        "tjek"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_presence_only",
-      "geographicScope": "unresolved",
-      "refreshTargetHours": 24,
-      "knownGaps": ["Rights-cleared source", "Cooperative scope mapping", "Member-only conditions", "Attribution and imagery"],
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-0301-oslo",
+      "chainId": "meny",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "kassalapp"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
+      "refreshTargetHours": 72,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-0301-oslo",
+      "chainId": "meny",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "tjek"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-0301-oslo",
+      "chainId": "spar",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "kassalapp"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
+      "refreshTargetHours": 72,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-0301-oslo",
+      "chainId": "spar",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "tjek"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-0301-oslo",
+      "chainId": "joker",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "kassalapp"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
+      "refreshTargetHours": 72,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-0301-oslo",
+      "chainId": "joker",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "tjek"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-0301-oslo",
+      "chainId": "europris",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "kassalapp"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
+      "refreshTargetHours": 72,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-0301-oslo",
+      "chainId": "europris",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "tjek"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
       "launchEligible": false
     },
     {
@@ -233,12 +466,20 @@
       "chainId": "bunnpris",
       "priceClass": "ordinary",
       "activeSourceId": null,
-      "candidateSourceIds": ["kassalapp"],
+      "candidateSourceIds": [
+        "kassalapp",
+        "open-prices"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_presence_only",
-      "geographicScope": "chain-level source not measured against Bergen",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
       "refreshTargetHours": 72,
-      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
       "launchEligible": false
     },
     {
@@ -246,12 +487,19 @@
       "chainId": "bunnpris",
       "priceClass": "official_offer",
       "activeSourceId": null,
-      "candidateSourceIds": ["tjek-api", "bunnpris-public-web"],
+      "candidateSourceIds": [
+        "tjek"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_presence_only",
-      "geographicScope": "unresolved",
-      "refreshTargetHours": 24,
-      "knownGaps": ["Rights-cleared source", "Offer-scope mapping", "Validity and conditions", "Attribution and imagery"],
+      "evidenceLevel": "technical_sample",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
       "launchEligible": false
     },
     {
@@ -259,12 +507,20 @@
       "chainId": "rema-1000",
       "priceClass": "ordinary",
       "activeSourceId": null,
-      "candidateSourceIds": ["kassalapp"],
+      "candidateSourceIds": [
+        "kassalapp",
+        "open-prices"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_presence_only",
-      "geographicScope": "chain-level source not measured against Bergen",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
       "refreshTargetHours": 72,
-      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
       "launchEligible": false
     },
     {
@@ -272,12 +528,19 @@
       "chainId": "rema-1000",
       "priceClass": "official_offer",
       "activeSourceId": null,
-      "candidateSourceIds": ["tjek-api", "rema-public-web"],
+      "candidateSourceIds": [
+        "tjek"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_scope_only",
-      "geographicScope": "public page says old Hordaland except Etne; authorized machine scope unresolved",
-      "refreshTargetHours": 24,
-      "knownGaps": ["Rights-cleared source", "Offer field coverage", "Membership conditions", "Attribution and imagery"],
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
       "launchEligible": false
     },
     {
@@ -285,12 +548,20 @@
       "chainId": "extra",
       "priceClass": "ordinary",
       "activeSourceId": null,
-      "candidateSourceIds": ["kassalapp"],
+      "candidateSourceIds": [
+        "kassalapp",
+        "open-prices"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_presence_only",
-      "geographicScope": "chain-level source not measured against Bergen",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
       "refreshTargetHours": 72,
-      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
       "launchEligible": false
     },
     {
@@ -298,12 +569,179 @@
       "chainId": "extra",
       "priceClass": "official_offer",
       "activeSourceId": null,
-      "candidateSourceIds": ["tjek-api", "coop-extra-public-web"],
+      "candidateSourceIds": [
+        "tjek"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_scope_only",
-      "geographicScope": "public publication is labelled Hordaland; store mapping and authorized machine scope unresolved",
-      "refreshTargetHours": 24,
-      "knownGaps": ["Rights-cleared source", "Cooperative scope mapping", "Member-only conditions", "Attribution and imagery"],
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-4601-bergen",
+      "chainId": "meny",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "kassalapp"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
+      "refreshTargetHours": 72,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-4601-bergen",
+      "chainId": "meny",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "tjek"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-4601-bergen",
+      "chainId": "spar",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "kassalapp"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
+      "refreshTargetHours": 72,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-4601-bergen",
+      "chainId": "spar",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "tjek"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-4601-bergen",
+      "chainId": "joker",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "kassalapp"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
+      "refreshTargetHours": 72,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-4601-bergen",
+      "chainId": "joker",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "tjek"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-4601-bergen",
+      "chainId": "europris",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "kassalapp"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
+      "refreshTargetHours": 72,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-4601-bergen",
+      "chainId": "europris",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "tjek"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
       "launchEligible": false
     },
     {
@@ -311,12 +749,20 @@
       "chainId": "bunnpris",
       "priceClass": "ordinary",
       "activeSourceId": null,
-      "candidateSourceIds": ["kassalapp"],
+      "candidateSourceIds": [
+        "kassalapp",
+        "open-prices"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_presence_only",
-      "geographicScope": "chain-level source not measured against Trondheim",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
       "refreshTargetHours": 72,
-      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
       "launchEligible": false
     },
     {
@@ -324,12 +770,19 @@
       "chainId": "bunnpris",
       "priceClass": "official_offer",
       "activeSourceId": null,
-      "candidateSourceIds": ["tjek-api", "bunnpris-public-web"],
+      "candidateSourceIds": [
+        "tjek"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_presence_only",
-      "geographicScope": "unresolved",
-      "refreshTargetHours": 24,
-      "knownGaps": ["Rights-cleared source", "Offer-scope mapping", "Validity and conditions", "Attribution and imagery"],
+      "evidenceLevel": "technical_sample",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
       "launchEligible": false
     },
     {
@@ -337,12 +790,20 @@
       "chainId": "rema-1000",
       "priceClass": "ordinary",
       "activeSourceId": null,
-      "candidateSourceIds": ["kassalapp"],
+      "candidateSourceIds": [
+        "kassalapp",
+        "open-prices"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_presence_only",
-      "geographicScope": "chain-level source not measured against Trondheim",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
       "refreshTargetHours": 72,
-      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
       "launchEligible": false
     },
     {
@@ -350,12 +811,19 @@
       "chainId": "rema-1000",
       "priceClass": "official_offer",
       "activeSourceId": null,
-      "candidateSourceIds": ["tjek-api", "rema-public-web"],
+      "candidateSourceIds": [
+        "tjek"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_scope_only",
-      "geographicScope": "public page says Trøndelag and Tynset; authorized machine scope unresolved",
-      "refreshTargetHours": 24,
-      "knownGaps": ["Rights-cleared source", "Offer field coverage", "Membership conditions", "Attribution and imagery"],
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
       "launchEligible": false
     },
     {
@@ -363,12 +831,20 @@
       "chainId": "extra",
       "priceClass": "ordinary",
       "activeSourceId": null,
-      "candidateSourceIds": ["kassalapp"],
+      "candidateSourceIds": [
+        "kassalapp",
+        "open-prices"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_presence_only",
-      "geographicScope": "chain-level source not measured against Trondheim",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
       "refreshTargetHours": 72,
-      "knownGaps": ["Current credential rights", "Product-level completeness", "Freshness distribution", "Branch applicability"],
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
       "launchEligible": false
     },
     {
@@ -376,29 +852,195 @@
       "chainId": "extra",
       "priceClass": "official_offer",
       "activeSourceId": null,
-      "candidateSourceIds": ["tjek-api", "coop-extra-public-web"],
+      "candidateSourceIds": [
+        "tjek"
+      ],
       "coverageStatus": "unknown",
-      "evidenceLevel": "public_scope_only",
-      "geographicScope": "public publication is labelled Midt; store mapping and authorized machine scope unresolved",
-      "refreshTargetHours": 24,
-      "knownGaps": ["Rights-cleared source", "Cooperative scope mapping", "Member-only conditions", "Attribution and imagery"],
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-5001-trondheim",
+      "chainId": "meny",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "kassalapp"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
+      "refreshTargetHours": 72,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-5001-trondheim",
+      "chainId": "meny",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "tjek"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-5001-trondheim",
+      "chainId": "spar",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "kassalapp"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
+      "refreshTargetHours": 72,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-5001-trondheim",
+      "chainId": "spar",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "tjek"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-5001-trondheim",
+      "chainId": "joker",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "kassalapp"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
+      "refreshTargetHours": 72,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-5001-trondheim",
+      "chainId": "joker",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "tjek"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-5001-trondheim",
+      "chainId": "europris",
+      "priceClass": "ordinary",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "kassalapp"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "measured",
+      "geographicScope": "National/unknown-scope observations only; municipality applicability is unproven.",
+      "refreshTargetHours": 72,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "Freshness and completeness are measured nationally only"
+      ],
+      "launchEligible": false
+    },
+    {
+      "regionId": "no-5001-trondheim",
+      "chainId": "europris",
+      "priceClass": "official_offer",
+      "activeSourceId": null,
+      "candidateSourceIds": [
+        "tjek"
+      ],
+      "coverageStatus": "unknown",
+      "evidenceLevel": "none",
+      "geographicScope": "No rights-cleared municipality-scoped official-offer evidence.",
+      "refreshTargetHours": 48,
+      "knownGaps": [
+        "Handleplan-specific source agreement/reference is unresolved",
+        "Regional applicability is unproven; only national or unknown-scope observations exist",
+        "No municipality/store scope proof",
+        "No rights-cleared current official-offer projection for this chain/region"
+      ],
       "launchEligible": false
     }
   ],
   "selectionGate": {
     "requiredEvidence": [
-      "Every chain has an approved sustainable ordinary-price source",
-      "Every chain shown with official offers has an approved offer source for the region",
-      "Twenty benchmark baskets have measured product-level results",
-      "Freshness, unknown, stale, ineligible, and known-not-carried states are measured",
-      "Branch directory coverage and regional applicability are verified",
-      "Public status copy matches this manifest"
+      "Handleplan-specific source agreement and obligations for each active source",
+      "Measured municipality-scoped ordinary-price coverage at or below 72 hours",
+      "Rights-cleared municipality-scoped official-offer coverage at or below 48 hours",
+      "Independent branch and geographic-scope proof for every selected region and chain"
     ],
     "passed": false,
     "blockers": [
-      "Kassalapp rights and current credential tier unresolved",
-      "No rights-cleared official-offer source",
-      "No region-level benchmark run has been performed"
+      "User agreement location is pending; runtime DB approvals are not Handleplan agreement evidence",
+      "Tjek agreement/reference location is pending and latest approval has no public or private reference",
+      "Only national scope exists in production; municipality applicability is unproven",
+      "No current rights-cleared official-offer coverage exists for all seven chains"
     ]
   }
 }

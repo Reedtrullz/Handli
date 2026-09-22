@@ -1,0 +1,46 @@
+import { describe, expect, it, vi } from "vitest";
+import { createTjekFoundationDependencies } from "./tjek-production";
+const catalog = { id: "edition", dealer_id: "5b11sm", publication_date: "2026-09-08", run_from: "2026-09-07T00:00:00.000Z", run_till: "2026-09-14T00:00:00.000Z", all_stores: true, dealer: { country: { id: "NO" }, markets: [{ country_code: "NO" }] } } as never;
+function factory(existing: unknown[] = []) {
+  const permissions = { officialOffers: true, officialOfferCapabilities: ["capture", "discover", "extract"], officialOfferRightsClassifications: ["public_display"] };
+  const query = vi.fn().mockResolvedValueOnce([{ runtime_state: "approved", permission_current: true, source_permission_current: true, permission_decision: "approved", permissions }])
+    .mockResolvedValueOnce([{
+      id: 7,
+      reviewed_at_exact: "2026-08-21T16:04:05.780477Z",
+      valid_until_exact: null,
+      permissions,
+    }])
+    .mockResolvedValueOnce(existing).mockResolvedValueOnce([{ id: 88 }]);
+  return { value: createTjekFoundationDependencies({ $client: query } as never, "/tmp/tjek-unused-test-blobs"), query };
+}
+describe("Tjek geographic evidence", () => {
+  it("uses explicit all-store Norway evidence and looks up the scope ID", async () => {
+    const t = factory();
+    expect(await t.value.resolveEdition(catalog, new AbortController().signal)).toMatchObject({ geographicScopeId: 88, declaredGeographicScope: { kind: "national", countryCode: "NO" } });
+  });
+
+  it("preserves the exact permission timestamp returned by PostgreSQL", async () => {
+    const t = factory();
+    const edition = await t.value.resolveEdition(catalog, new AbortController().signal);
+    expect(edition.authorization.reviewedAt).toBe("2026-08-21T16:04:05.780477Z");
+  });
+  it("rejects missing provider scope even when a legacy publication exists", async () => {
+    const t = factory([{ geographic_scope_id: 1, declared_geographic_scope: { kind: "national", countryCode: "NO" } }]);
+    await expect(t.value.resolveEdition({ ...(catalog as object), all_stores: false } as never, new AbortController().signal)).rejects.toThrow("TJEK_REVIEWED_SCOPE_UNAVAILABLE");
+  });
+
+  it("rejects a legacy publication whose stored edition identity is incompatible", async () => {
+    const t = factory([{
+      title: "Bunnpris 2026-09-08",
+      content_kind: "structured-feed",
+      chain: "bunnpris",
+      geographic_scope_id: 88,
+      declared_geographic_scope: { kind: "national", countryCode: "NO" },
+      valid_from: new Date("2026-09-07T00:00:00.000Z"),
+      valid_until: new Date("2026-09-14T00:00:00.000Z"),
+      discovered_at: new Date("2026-09-08T00:00:00.000Z"),
+      edition_identity_sha256: "0".repeat(64),
+    }]);
+    await expect(t.value.resolveEdition(catalog, new AbortController().signal)).rejects.toThrow("TJEK_EDITION_CONFLICT");
+  });
+});

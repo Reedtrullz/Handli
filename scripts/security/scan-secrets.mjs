@@ -41,6 +41,8 @@ const approvedFixtureValues = new Set([
   "ci_app_url_safe_0000000000000000001",
   "ci_operations_url_safe_000000000001",
   "ci_review_url_safe_00000000000000001",
+  "ci_restore_admin_url_safe_000000000001",
+  "ci_backup_url_safe_000000000000000001",
   "ci_url_safe_0000000000000001",
   "ci_web_url_safe_0000000000000000001",
   "handleplan-handlemodus-parent-env-poison-v1",

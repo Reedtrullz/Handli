@@ -45,6 +45,7 @@ describe("readWorkerProductionEnv", () => {
       leaseTtlMs: 120_000,
       officialOfferFoundationEnabled: true,
       officialOfferPrivateCaptureRoot: "/var/lib/handleplan/private-captures",
+      menyEnabled: false,
       openPricesEnabled: false,
       requestBudgetLimit: 60,
       requestBudgetMaxWaitMs: 65_000,
