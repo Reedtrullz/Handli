@@ -127,6 +127,7 @@ const currentMigrations = [
   "041_public_offer_projection_repair.sql",
   "042_official_offer_worker_boundary.sql",
   "043_meny_official_offer_source.sql",
+  "044_store_scoped_job_kind.sql",
 ];
 const legacy040SchemaFixture = resolve(
   root,
@@ -664,8 +665,9 @@ async function verifyBaselineActivation(sql) {
     "041_public_offer_projection_repair.sql",
     "042_official_offer_worker_boundary.sql",
     "043_meny_official_offer_source.sql",
+    "044_store_scoped_job_kind.sql",
   ]);
-  assert.equal(ledger.length, 3);
+  assert.equal(ledger.length, 4);
   const [projection] = await sql`
     select pg_catalog.pg_get_functiondef(
       'public.public_official_offer_rows_v1(bigint[], timestamptz)'::regprocedure
