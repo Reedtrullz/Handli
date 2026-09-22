@@ -161,6 +161,13 @@ jobs:
               sh -c 'dropdb --host 127.0.0.1 --port 5432 --username handleplan --if-exists --force "$1"' \
               sh "$previous_database" || true
           }
+          previous_create_database() {
+            docker run --rm --network host \
+              --env PGPASSWORD="$POSTGRES_PASSWORD" \
+              postgres:16.10-alpine@sha256:ab8380566c3ea09690a9ecaa85a59d82bfc6eb86744151a2a54335866c83a3e9 \
+              sh -c 'createdb --host 127.0.0.1 --port 5432 --username handleplan "$1"' \
+              sh "$previous_database"
+          }
           trap cleanup_previous_smoke EXIT HUP INT TERM
           git archive --format=tar --output="$previous_archive" "$previous_revision"
           test "$(wc -c < "$previous_archive" | tr -d '[:space:]')" -gt 0
@@ -175,6 +182,7 @@ jobs:
           # so the smoke database reaches HEAD the way a legacy install does:
           # the post-040 suffix applied on a complete ledger.
           previous_cleanup_database
+          previous_create_database
           restore_legacy_fixture legacy040-production-schema.sql
           restore_legacy_fixture legacy040-production-ledger.sql
           restore_legacy_fixture legacy040-canonical-seed.sql
