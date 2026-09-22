@@ -19,7 +19,8 @@ integration("Tjek production foundation under worker role", () => {
       await admin.sql`insert into source_permissions (source_id, decision, reviewed_at, permissions)
         values ('tjek', 'approved', ${reviewedAt},
           '{"officialOffers":true,"officialOfferCapabilities":["capture","discover","extract"],"officialOfferRightsClassifications":["public_display"]}'::jsonb)`;
-      await admin.sql`update data_sources source set permission_reviewed_at = permission.reviewed_at,
+      await admin.sql`update data_sources source set runtime_state = 'approved',
+        permission_reviewed_at = permission.reviewed_at,
         permission_expires_at = permission.valid_until from source_permissions permission
         where source.id = 'tjek' and permission.id =
           (select id from source_permissions where source_id = 'tjek' order by created_at desc, id desc limit 1)`;
