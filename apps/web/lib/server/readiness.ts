@@ -4,6 +4,17 @@ import type { HandleplanDatabase } from "@handleplan/db/client";
 
 export const REQUIRED_DATABASE_MIGRATION = "031_supported_chain_expansion.sql" as const;
 
+/**
+ * Fresh installs bootstrap from the canonical 040 artifact: migrations 001-040
+ * are covered by the reviewed baseline provenance row and never enter the
+ * execution ledger. Readiness must therefore accept either shape: the legacy
+ * sequential ledger row (existing installs, upgrade proofs) or baseline
+ * table existence (fresh installs). The migration runner creates that table
+ * and its provenance row in one transaction, so existence proves the row,
+ * and catalog lookup avoids requiring any grant on the table itself.
+ */
+const BASELINE_TABLE = "public.handleplan_schema_baselines" as const;
+
 export interface DatabaseReadinessResult {
   requiredMigration: typeof REQUIRED_DATABASE_MIGRATION;
 }
@@ -105,6 +116,8 @@ export function createPostgresMigrationCheck(
           select 1
           from handleplan_schema_migrations
           where id = ${requiredMigration}
+        ) or (
+          pg_catalog.to_regclass(${BASELINE_TABLE}) is not null
         ) as ready
       `,
       signal,
