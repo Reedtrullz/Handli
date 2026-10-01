@@ -29,3 +29,13 @@ REMA 1000 and Extra showed no products or prices in Oppdag because the worker on
 - Not deployed yet; no live Oppdag evidence yet.
 - Extra will stay near-empty until upstream adds rows/prices; the job reports honest degraded/failed counters for empty pages instead of fabricating coverage.
 - observedAt=created_at is a proxy (upstream exposes no per-price check time).
+
+
+## 2026-10-01 update: PR #81 merged and deployed; governance incident found and fixed
+
+- PR #81 (9471ea0) merged 15:26Z; deploy run 36886997059 success 15:50Z; worker restarted 15:49:47Z on commit 9471ea0; migration 046 applied (catalog-run price guard; observedAt now retrievedAt; all five chains walked; empty pages continue).
+- Immediately after deploy, discovery returned zero products for every chain (including previously-working meny=8, spar=8). Root cause: integration tests run earlier that day against the production database through the SSH tunnel appended ingestion-integration-approved permission rows 9-11 and reset data_sources.runtime_state to conditional with null permission_reviewed_at. The public-catalog reader requires the source row approved and aligned with the latest permission row, so discovery fail-closed.
+- Restored production governance: appended an owner re-approval row (no expiry, all four scopes, notes documenting supersession of rows 9-11) and aligned the source row to it. Discovery verified: bunnpris=2, meny=8, spar=8, others 0 (baseline).
+- Prevention: PR #82 restores the pre-test source-row state in afterAll and fails closed when the target database contains catalog_observations.
+- Next scheduled walk 18:15 UTC (first post-fix run). Live verification pending: worker_job_results status, ingestion_runs completed, price_observations per chain (bunnpris, rema-1000, extra, europris, joker nonzero), discovery counts per chain.
+
