@@ -39,3 +39,27 @@ REMA 1000 and Extra showed no products or prices in Oppdag because the worker on
 - Prevention: PR #82 restores the pre-test source-row state in afterAll and fails closed when the target database contains catalog_observations.
 - Next scheduled walk 18:15 UTC (first post-fix run). Live verification pending: worker_job_results status, ingestion_runs completed, price_observations per chain (bunnpris, rema-1000, extra, europris, joker nonzero), discovery counts per chain.
 
+
+
+## 2026-10-01 update: PR #82 fix for PERSISTENCE_FAILURE (root cause: upstream pagination duplicate)
+
+### Root cause (reproduced end-to-end)
+
+- The 18:15 UTC walk 1687 repeated the earlier symptom: partial, failed=1, fetched=1175 (47x25), catalog persisted, prices never persisted.
+- Full local replay against an isolated Postgres (all migrations, real PostgresIngestionRepository, 4801 cached live outcomes) reproduced the failure at batch 775: IngestionOutcomeConflictError, "Conflicting replay for ingestion outcome 2/product/183891". The day's duplicate sourceRecordId (different retrievedAt stamp after upstream pagination drift) hits the audit ledger's per-run identity rule exactly at the observed failure index (walk 609 audited 1175 = 47x25 rows before dying).
+- Live data contained 4 duplicate identity pairs that walk (product 183891, 183892, 229115, 226784).
+
+### Fix (PR #82, merge commit 0cbe2fc557f2f54183cec95aabdab5dc89de9275)
+
+- apps/worker/src/kassalapp-handlers.ts: dedupeOutcomesByIdentity keeps the first sighting per (recordKind, sourceRecordId); walk path persists deduped catalog/price outcomes. catalog-refresh untouched.
+- Regression test: duplicated REMA_1000 row across two pages persists once.
+
+### Validation before deploy
+
+- Worker: 219 tests passed incl. regression test; typecheck clean; db package: 350 tests passed.
+- CI run 36922275065 (PR): first attempt hung 60+ min on the playwright-install runner step and was cancelled; rerun succeeded. CI run 36925851646 (main, 0cbe2fc): success.
+- PR #82 merged into main at 2026-10-01T21:01:45Z; protected deploy run 36926909874 for 0cbe2fc in progress at time of writing.
+
+### Non-claims
+
+- Live post-deploy walk verification (00:15 UTC Oct 2 walk or manual trigger) still pending; discovery counts unchanged until the fixed worker completes a full walk.
