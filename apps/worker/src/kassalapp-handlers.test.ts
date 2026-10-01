@@ -301,6 +301,28 @@ describe("store-catalog-price-refresh", () => {
     } });
   });
 
+  it("persists only the first sighting when upstream pagination repeats a record across pages", async () => {
+    const gateway = createGateway();
+    vi.mocked(gateway.getStoreScopedProducts).mockImplementation(async (chainCode, page) => {
+      if (chainCode !== "REMA_1000" || page > 2) return { catalogOutcomes: [], priceOutcomes: [] };
+      return {
+        catalogOutcomes: [{
+          state: "accepted",
+          record: productRecord({ sourceRecordId: "store-row-dup" }),
+        }],
+        priceOutcomes: [],
+      };
+    });
+    const repository = createRepository();
+    const handlers = createKassalappHandlers(createDependencies({ gateway, repository }));
+
+    await handlers["store-catalog-price-refresh"](contextFor("store-catalog-price-refresh"));
+
+    const catalogCall = vi.mocked(repository.persistCatalogOutcomes).mock.calls[0]?.[1] ?? [];
+    expect(catalogCall).toHaveLength(1);
+    expect(catalogCall[0]?.sourceRecordId).toBe("store-row-dup");
+  });
+
   it("begins no ingestion attempt when every walked page is empty", async () => {
     const repository = createRepository();
     const handlers = createKassalappHandlers(createDependencies({ repository }));

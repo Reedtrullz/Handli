@@ -259,6 +259,18 @@ function throwIfCancelled(signal: AbortSignal): void {
   if (signal.aborted) throw new WorkerCancelledError();
 }
 
+function dedupeOutcomesByIdentity<T extends { readonly recordKind: string; readonly sourceRecordId: string }>(
+  outcomes: readonly T[],
+): T[] {
+  const seen = new Set<string>();
+  return outcomes.filter((outcome) => {
+    const identity = outcome.recordKind + "\u0000" + outcome.sourceRecordId;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
 function failedWithoutEvidence(): { counters: { failed: 1 } } {
   return { counters: { failed: 1 } };
 }
@@ -1039,6 +1051,12 @@ export function createKassalappHandlers<RunHandle>(
     }
 
     if (!sawAnyEvidence) return undefined;
+    // Upstream pagination can drift between page fetches, repeating a record
+    // across pages with a newer retrieval stamp. The audit ledger rejects the
+    // same identity twice per run, which would fail the whole walk, so only
+    // the first sighting of each identity is persisted.
+    const dedupedCatalogOutcomes = dedupeOutcomesByIdentity(catalogOutcomes);
+    const dedupedPriceOutcomes = dedupeOutcomesByIdentity(priceOutcomes);
     return {
       failed,
       persist: async (handle, persistSignal) => {
@@ -1046,14 +1064,14 @@ export function createKassalappHandlers<RunHandle>(
         // that only exist once the catalog batch creates them.
         await persistInBatches(
           handle,
-          catalogOutcomes,
+          dedupedCatalogOutcomes,
           persistSignal,
           recheckAccess,
           (run, batch, batchSignal) => repository.persistCatalogOutcomes(run, batch, batchSignal),
         );
         await persistInBatches(
           handle,
-          priceOutcomes,
+          dedupedPriceOutcomes,
           persistSignal,
           recheckAccess,
           (run, batch, batchSignal) => repository.persistPriceOutcomes(run, batch, batchSignal),
