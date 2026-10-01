@@ -243,25 +243,27 @@ describe("store-catalog-price-refresh", () => {
 
     expect(result).toEqual({ counters: completeCounters });
     expect(vi.mocked(gateway.getStoreScopedProducts).mock.calls.filter(([, page]) => page === 3))
-      .toHaveLength(3);
+      .toHaveLength(5);
     expect(repository.beginRun).toHaveBeenCalledWith(expect.objectContaining({
       runType: "catalog",
     }), SIGNAL);
     const catalogCall = vi.mocked(repository.persistCatalogOutcomes).mock.calls[0]?.[1] ?? [];
     const priceCall = vi.mocked(repository.persistPriceOutcomes).mock.calls[0]?.[1] ?? [];
-    expect(catalogCall).toHaveLength(3);
-    expect(priceCall).toHaveLength(3);
+    expect(catalogCall).toHaveLength(5);
+    expect(priceCall).toHaveLength(5);
     expect(catalogCall.map((outcome) => outcome.sourceRecordId)).toEqual([
       "store-row-REMA_1000",
       "store-row-COOP_EXTRA",
       "store-row-EUROPRIS_NO",
+      "store-row-BUNNPRIS",
+      "store-row-JOKER_NO",
     ]);
-    expect(priceCall.map((outcome) => outcome.subjectEan)).toEqual([EAN, EAN, EAN]);
+    expect(priceCall.map((outcome) => outcome.subjectEan)).toEqual([EAN, EAN, EAN, EAN, EAN]);
     expect(vi.mocked(repository.persistCatalogOutcomes).mock.invocationCallOrder[0])
       .toBeLessThan(vi.mocked(repository.persistPriceOutcomes).mock.invocationCallOrder[0]!);
   });
 
-  it("counts empty pages as failures but still persists evidence from other chains", async () => {
+  it("treats empty pages as benign but still persists evidence from other chains", async () => {
     const gateway = createGateway();
     vi.mocked(gateway.getStoreScopedProducts).mockImplementation(async (chainCode) => {
       if (chainCode !== "REMA_1000") return { catalogOutcomes: [], priceOutcomes: [] };
@@ -286,8 +288,8 @@ describe("store-catalog-price-refresh", () => {
     const result = await handlers["store-catalog-price-refresh"](contextFor("store-catalog-price-refresh"));
 
     expect(repository.finalizeRun).toHaveBeenCalledWith(RUN_HANDLE, expect.objectContaining({
-      failed: 24,
-      status: "degraded",
+      failed: 0,
+      status: "completed",
     }), SIGNAL);
     expect(result).toEqual({ counters: {
       accepted: 1,

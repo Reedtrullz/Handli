@@ -781,7 +781,11 @@ export function normalizeStoreScopedProductPage(
       continue;
     }
     const amountOre = Math.round(parsedAmount.data * 100);
-    const observedAt = canonicalSourceTimestamp(row.created_at);
+    // Store-scoped listing rows have no per-store 'last_checked'; upstream
+    // 'created_at' is the product's 2023-era creation date, which would pin
+    // every observation outside the 48h discovery freshness window. The fetch
+    // time is the only honest observation timestamp this payload carries.
+    const observedAt = canonicalSourceTimestamp(retrievedAt);
     if (timestampIsFuture(observedAt, nowMs)) {
       priceOutcomes.push({
         chainCode: context.chainCode,
