@@ -1,7 +1,7 @@
 {
   "contractVersion": 1,
   "generatedFrom": "installed frozen pnpm dependency manifests",
-  "inventorySha256": "08b6adec392a76d22a4d0a86bc8f0664156b97b6ce14570fd56a652f24f0172d",
+  "inventorySha256": "4b61bea7062f7fef860d122d18c48519bd5e12e93842c7f6ea3e21a9883513dc",
   "licenseCounts": {
     "0BSD": 1,
     "Apache-2.0": 29,
@@ -17,7 +17,7 @@
     "Python-2.0": 1,
     "Unlicense": 1
   },
-  "lockfileSha256": "8905cbc8a0e4b70e1f93d174b9389f4890b96f9c0ef0285c9d81d80a3e13c38d",
+  "lockfileSha256": "f416a882cfd2ad1fd254041ec315fafb547a140647e371206ad4ffc8e812fe0f",
   "packageCount": 451,
   "packages": [
     {
@@ -303,7 +303,7 @@
     {
       "license": "MIT",
       "name": "@next/env",
-      "version": "16.3.5"
+      "version": "16.3.6"
     },
     {
       "license": "MIT",
@@ -658,12 +658,12 @@
     {
       "license": "MIT",
       "name": "brace-expansion",
-      "version": "1.1.18"
+      "version": "1.1.21"
     },
     {
       "license": "MIT",
       "name": "brace-expansion",
-      "version": "5.0.9"
+      "version": "5.0.12"
     },
     {
       "license": "MIT",
@@ -1608,7 +1608,7 @@
     {
       "license": "MIT",
       "name": "next",
-      "version": "16.3.5"
+      "version": "16.3.6"
     },
     {
       "license": "MIT",
@@ -2158,7 +2158,7 @@
     {
       "license": "MIT",
       "name": "undici",
-      "version": "7.29.0"
+      "version": "7.30.0"
     },
     {
       "license": "MIT",
@@ -2330,7 +2330,8 @@
       "versions": [
         "16.2.10",
         "16.3.0",
-        "16.3.5"
+        "16.3.5",
+        "16.3.6"
       ],
       "approvedLicenseExpressions": [
         "MIT"

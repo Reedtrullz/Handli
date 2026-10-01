@@ -43,7 +43,7 @@ const CHAIN_BY_CODE: Readonly<Record<string, KassalappChainId>> = {
   REMA_1000: "rema-1000",
 };
 
-const STORE_WALK_CHAIN_CODES = ["REMA_1000", "COOP_EXTRA", "EUROPRIS_NO"] as const;
+const STORE_WALK_CHAIN_CODES = ["REMA_1000", "COOP_EXTRA", "EUROPRIS_NO", "BUNNPRIS", "JOKER_NO"] as const;
 const STORE_CATALOG_PAGES_PER_CHAIN = 12;
 
 export type KassalappSourceAccessState =
@@ -1017,11 +1017,13 @@ export function createKassalappHandlers<RunHandle>(
           failed += 1;
           continue;
         }
+        // Trailing pages past a chain's upstream catalog end are expected,
+        // not source failures; counting them forced every run to 'degraded',
+        // which discovery's completed-run gate then hides entirely.
         if (
           normalized.catalogOutcomes.length === 0
           && normalized.priceOutcomes.length === 0
         ) {
-          failed += 1;
           continue;
         }
         sawAnyEvidence = sawAnyEvidence

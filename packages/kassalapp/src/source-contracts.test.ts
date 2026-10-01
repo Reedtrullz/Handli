@@ -744,7 +744,7 @@ it("keeps accepted, unknown-price, and unknown-chain price states explicit", () 
             chainId: "rema-1000",
             ean: "7038010000010",
             observationKind: "current",
-            observedAt: "2026-07-15T08:30:00.000Z",
+            observedAt: "2026-07-16T12:00:00.000Z",
           }),
           state: "accepted",
         }),

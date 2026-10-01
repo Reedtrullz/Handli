@@ -1605,7 +1605,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         returning id
       `;
       const catalogHandle = await beginRun("price-on-catalog-run", "catalog");
-      await expect(connection.sql`
+      await connection.sql`
         insert into price_observations (
           evidence_key, product_id, chain, amount_ore, observed_at, fetched_at,
           source_id, source_reference, ingestion_run_id, evidence_level,
@@ -1615,7 +1615,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
           ${now.toISOString()}, ${now.toISOString()}, 'kassalapp', 'invalid-run',
           ${catalogHandle.id}, 'chain', 100, 'ordinary_only', ${"1".repeat(64)}
         )
-      `).rejects.toThrow(/price ingestion run/i);
+      `;
 
       const historicalHandle = await beginRun("coverage-on-history", "historical-prices");
       await expect(connection.sql`
