@@ -31,6 +31,8 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
+          --memory=512m
+          --memory-swap=512m
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0, Node 24 action runtime
         with:
@@ -41,6 +43,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0, Node 24 action runtime
         with:
           node-version: 22.22.3
+      - name: Require 30GiB free workspace space
+        run: node -e 'const s=require("node:fs").statfsSync(process.env.GITHUB_WORKSPACE);const g=s.bavail*s.bsize/2**30;console.log("free GiB",g.toFixed(1));if(g<30)process.exit(1)'
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
       - name: Reject high and critical dependency advisories
@@ -63,6 +67,8 @@ jobs:
         run: corepack pnpm validate:v1-data
       - name: Test V1 basket acceptance foundation
         run: corepack pnpm acceptance:v1-baskets:test
+      - name: Test planner workload oracle and fixtures
+        run: node --test tests/acceptance/planner-workload-oracle.test.mjs tests/acceptance/planner-workload-fixtures.test.mjs
       - name: Apply production migrations twice
         env:
           APP_DATABASE_PASSWORD: ci_app_url_safe_0000000000000000001
