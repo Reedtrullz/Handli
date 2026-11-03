@@ -110,7 +110,9 @@ jobs:
         # Integration files share one ephemeral database and deliberately append
         # immutable audit rows, so file-level parallelism would invalidate their
         # isolation contract even when every individual test is sequential.
-        run: corepack pnpm --filter @handleplan/db exec vitest run --no-file-parallelism
+        run: |
+          corepack pnpm --filter @handleplan/db exec vitest run --no-file-parallelism
+          corepack pnpm --filter web exec vitest run lib/server/discovery-cursor.integration.test.ts --no-file-parallelism
       - name: Boot the exact previous application image against the expanded schema
         if: ${{ github.event_name == 'push' }}
         env:
