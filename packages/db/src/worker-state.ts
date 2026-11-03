@@ -316,7 +316,7 @@ export class PostgresWorkerJobStateRepository {
     const rows = await awaitAbortable(this.db.$client<{ store_traversal: unknown }[]>`
       select store_traversal from worker_job_results
       where source_id = 'kassalapp' and job_kind = 'store-catalog-price-refresh'
-        and status in ('succeeded', 'partial') and store_traversal is not null
+        and status = 'succeeded' and store_traversal is not null
       order by scheduled_at desc, id desc limit 1
     `, signal);
     if (signal?.aborted) throw cancelledError();

@@ -102,6 +102,51 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       await connection?.close();
     });
 
+    it("resumes only successful traversal checkpoints while retaining partial diagnostics", async () => {
+      const lease = await leaseAdapter.acquire({
+        leaseKey: ingestionWorkerLeaseKey({ sourceId: "kassalapp" }),
+        ownerId: `traversal-replay-${nonce}`,
+        ttlMs: 30_000,
+      });
+      if (lease === undefined) throw new Error("Traversal replay fixture lease unavailable");
+      const traversal = ["REMA_1000", "COOP_EXTRA", "EUROPRIS_NO", "BUNNPRIS", "JOKER_NO"].map((chainCode) => ({
+        chainCode, nextPage: 13, stopReason: "budget" as const, coverage: "unknown" as const,
+      }));
+      const input = {
+        completedAt: new Date("2026-11-03T12:00:02.000Z"),
+        counts: { accepted: 1, failed: 0, fetched: 1, persisted: 1, quarantined: 0, unknown: 0 },
+        jobId: `traversal-replay-${nonce}-success`,
+        jobKind: "store-catalog-price-refresh" as const,
+        runId: `traversal-replay-${nonce}`,
+        scheduledAt: new Date("2026-11-03T12:00:00.000Z"),
+        sourceId: "kassalapp",
+        startedAt: new Date("2026-11-03T12:00:01.000Z"),
+        status: "succeeded" as const,
+        storeTraversal: traversal,
+      };
+      try {
+        const previous = await repository.getStoreCatalogTraversal();
+        const partial = { ...input, jobId: `${input.jobId}-partial`, status: "partial" as const,
+          counts: { ...input.counts, failed: 1 },
+          storeTraversal: traversal.map((entry) => ({ ...entry, nextPage: 14, stopReason: "unknown" as const })),
+          scheduledAt: new Date("2026-11-03T12:30:00.000Z"),
+          startedAt: new Date("2026-11-03T12:30:01.000Z"),
+          completedAt: new Date("2026-11-03T12:30:02.000Z") };
+        await repository.record(partial, lease.fenceToken);
+        expect(await repository.getStoreCatalogTraversal()).toEqual(previous);
+        await repository.record(input, lease.fenceToken);
+        expect(await repository.getStoreCatalogTraversal()).toEqual(traversal);
+        const rows = await connection.sql`select status, store_traversal from worker_job_results where job_id = ${partial.jobId}`;
+        expect(rows).toEqual([{ status: "partial", store_traversal: partial.storeTraversal }]);
+        await lease.release();
+        await expect(repository.record({ ...partial, jobId: `${partial.jobId}-stale` }, lease.fenceToken))
+          .rejects.toMatchObject({ code: "STALE_FENCE" });
+        expect(await repository.getStoreCatalogTraversal()).toEqual(traversal);
+      } finally {
+        await lease.release();
+      }
+    });
+
     it("appends one fenced result, converges exact replay, and rejects conflicts", async () => {
       const lease = (await leaseAdapter.acquire({
         leaseKey: ingestionWorkerLeaseKey({ sourceId }),

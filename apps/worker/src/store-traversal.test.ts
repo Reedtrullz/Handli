@@ -75,7 +75,9 @@ function fixture() {
       canonicalWorkerJobResult(record);
       if (control.failCommit) throw new Error("fixture result commit failure");
       events.push("checkpoint");
-      if (record.storeTraversal !== undefined) committed = JSON.parse(JSON.stringify(record.storeTraversal));
+      if (record.status === "succeeded" && record.storeTraversal !== undefined) {
+        committed = JSON.parse(JSON.stringify(record.storeTraversal));
+      }
       return { created: true };
     },
   });
@@ -181,6 +183,26 @@ describe("issue20 real handler and runtime traversal", () => {
     ]));
     expect(value.calls.filter(([chain]) => chain === "REMA_1000").map(([, page]) => page)).toEqual([1, 2, 3, 4, 5]);
     capture(reason, value);
+  });
+
+  it.each([1, 13])("replays a degraded window from its last successful position at page %s", async (startPage) => {
+    const value = fixture();
+    if (startPage === 13) await value.run();
+    const lastSuccessful = value.committed();
+    const offset = value.calls.length;
+    value.control.malformedPage = startPage === 1 ? 5 : 14;
+    expect((await value.run()).status).toBe("partial");
+    expect(value.finalizations[value.finalizations.length - 1]?.status).toBe("degraded");
+    expect(value.committed()).toEqual(lastSuccessful);
+    const recoveryOffset = value.calls.length;
+    value.control.malformedPage = 0;
+    const recovered = await value.run();
+    expect(value.calls[offset]).toEqual(["REMA_1000", startPage]);
+    expect(value.calls[recoveryOffset]).toEqual(["REMA_1000", startPage]);
+    expect(recovered.status).toBe("succeeded");
+    expect(value.finalizations[value.finalizations.length - 1]?.status).toBe("completed");
+    expect(recovered.storeTraversal?.every((entry) => entry.coverage === "unknown")).toBe(true);
+    capture(`degraded-replay-${startPage}`, value);
   });
 
   it.each(["revocation", "cancellation"])("stops before the next request on %s and safely resumes", async (reason) => {
