@@ -44,7 +44,7 @@ describe.skipIf(process.env.RUN_DB_INTEGRATION !== "1")("native store traversal 
       const run = async (commit = true, signal = new AbortController().signal, timeoutMs = 30_000) => {
         at = await fixture.clock();
         const start = calls.length;
-        const gateway = new KassalappClient({ apiKey: "authored-fixture-only", baseUrl: "https://traversal.invalid/api/v1",
+        const gateway = new KassalappClient({ apiKey: "placeholder", baseUrl: "https://traversal.invalid/api/v1",
           now: () => at, authorizeRequestAttempt: createKassalappRequestAttemptAuthorizer(policy),
           requestCoordinator: { acquire: async () => {} },
           fetch: async (input, init) => {
