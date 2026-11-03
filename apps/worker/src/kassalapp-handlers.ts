@@ -1062,7 +1062,6 @@ export function createKassalappHandlers<RunHandle>(
       }
       // Offset pagination is not a snapshot: even an empty tail proves no full coverage.
       storeTraversal.push({ chainCode, nextPage, stopReason, coverage: "unknown" });
-      if (stopReason === "budget" || stopReason === "page-limit") failed += 1;
     }
 
     if (!sawAnyEvidence && previous.length === 0) return undefined;

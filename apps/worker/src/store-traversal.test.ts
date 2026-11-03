@@ -19,6 +19,7 @@ function fixture() {
   const events: string[] = [];
   const persisted: unknown[] = [];
   const results: WorkerRunResult[] = [];
+  const finalizations: Parameters<KassalappIngestionRepository["finalizeRun"]>[1][] = [];
   let committed: unknown;
   let sequence = 0;
   const control = { lastPage: 14, failPage: 0, malformedPage: 0, quotaPage: 0, repeatRows: false, failWrite: "", failCommit: false,
@@ -62,6 +63,7 @@ function fixture() {
     },
     persistPhysicalStoreOutcomes: async () => { throw new Error("Unexpected store write"); },
     finalizeRun: async (handle, input) => {
+      finalizations.push(input);
       events.push("finalize");
       return { counts: { ...handle.counts, failed: input.failed } };
     },
@@ -77,7 +79,7 @@ function fixture() {
       return { created: true };
     },
   });
-  return { calls, events, persisted, results, control, setCheckpoint: (value: unknown) => { committed = value; },
+  return { calls, events, persisted, results, finalizations, control, setCheckpoint: (value: unknown) => { committed = value; },
     committed: () => committed,
     async run(commit = true, signal = new AbortController().signal) {
       const handlers = createKassalappHandlers({ clock: () => NOW, gateway, repository,
@@ -101,11 +103,37 @@ function capture(name: string, value: ReturnType<typeof fixture>) {
   const destination = process.env.HANDLI_TRAVERSAL_EVIDENCE;
   if (destination) writeFileSync(join(destination, `manual-${name}.json`), JSON.stringify({
     calls: value.calls, events: value.events, returned: value.results,
-    persisted: value.persisted, committed: value.committed() ?? null,
+    persisted: value.persisted, finalizations: value.finalizations, committed: value.committed() ?? null,
   }, null, 2) + "\n");
 }
 
 describe("issue20 real handler and runtime traversal", () => {
+  it("completes successful twelve-page slices while persisting unknown coverage and resuming at thirteen", async () => {
+    const value = fixture();
+    const first = await value.run();
+    const firstCheckpoint = value.committed();
+    await value.run();
+    capture("successful-slices", value);
+
+    expect(value.finalizations).toEqual([
+      { completedAt: NOW, failed: 0, status: "completed" },
+      { completedAt: NOW, failed: 0, status: "completed" },
+    ]);
+    expect(first.status).toBe("succeeded");
+    expect(first.counters.failed).toBe(0);
+    expect(firstCheckpoint).toEqual(expect.arrayContaining([
+      { chainCode: "REMA_1000", nextPage: 13, stopReason: "budget", coverage: "unknown" },
+    ]));
+    expect(first.storeTraversal).toEqual(firstCheckpoint);
+    expect(value.calls.filter(([chain]) => chain === "REMA_1000").map(([, page]) => page))
+      .toEqual(Array.from({ length: 15 }, (_, index) => index + 1));
+    // The shared EAN/price identity is deduplicated once per ingestion run.
+    expect(first.counters.persisted).toBe(13);
+    expect(value.persisted).toHaveLength(16);
+    expect(value.events).toEqual(["catalog", "prices", "finalize", "checkpoint",
+      "catalog", "prices", "finalize", "checkpoint"]);
+  });
+
   it("replays an uncommitted window, then reaches thirteen after a result commit", async () => {
     const value = fixture();
     await value.run(false);
@@ -114,7 +142,8 @@ describe("issue20 real handler and runtime traversal", () => {
     await value.run();
     expect(value.calls.filter(([chain]) => chain === "REMA_1000").map(([, page]) => page))
       .toEqual([...Array.from({ length: 12 }, (_, index) => index + 1), ...Array.from({ length: 15 }, (_, index) => index + 1)]);
-    expect(value.results.map((result) => result.status)).toEqual(["partial", "partial", "succeeded"]);
+    // Planned slice boundaries are successful execution, with coverage still unknown.
+    expect(value.results.map((result) => result.status)).toEqual(["succeeded", "succeeded", "succeeded"]);
     expect(value.committed()).toEqual(expect.arrayContaining([
       { chainCode: "REMA_1000", nextPage: 1, stopReason: "exhausted", coverage: "unknown" },
     ]));
@@ -146,6 +175,7 @@ describe("issue20 real handler and runtime traversal", () => {
     else value.control.quotaPage = 5;
     const result = await value.run();
     expect(result.status).toBe("partial");
+    expect(value.finalizations).toEqual([{ completedAt: NOW, failed: 1, status: "degraded" }]);
     expect(result.storeTraversal).toEqual(expect.arrayContaining([
       { chainCode: "REMA_1000", nextPage: 5, stopReason: "unknown", coverage: "unknown" },
     ]));
@@ -218,7 +248,7 @@ describe("issue20 real handler and runtime traversal", () => {
     expect(value.persisted).toHaveLength(2);
     value.control.lastPage = 16;
     const second = await value.run();
-    expect(second.status).toBe("partial");
+    expect(second.status).toBe("succeeded");
     expect(second.storeTraversal?.[0]).toEqual({ chainCode: "REMA_1000", nextPage: 13,
       stopReason: "budget", coverage: "unknown" });
     capture("drift", value);
@@ -229,6 +259,7 @@ describe("issue20 real handler and runtime traversal", () => {
     value.control.lastPage = 10000; value.setCheckpoint(checkpoint(10000));
     const result = await value.run();
     expect(value.calls).toEqual(CHAINS.map((chain) => [chain, 10000]));
+    expect(value.finalizations).toEqual([{ completedAt: NOW, failed: 0, status: "completed" }]);
     expect(result.storeTraversal?.[0]).toEqual({ chainCode: "REMA_1000", nextPage: 1,
       stopReason: "page-limit", coverage: "unknown" });
     capture("maximum", value);
