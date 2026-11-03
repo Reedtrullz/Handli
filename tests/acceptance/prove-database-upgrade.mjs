@@ -3044,7 +3044,10 @@ process.exit(child.status ?? 1);
   assert.equal(restoreResult.evidence.status, "archive-restored-schema-verified");
   const restored = postgres(localDatabaseUrl(restoreDatabase, 55443, restoreRole, restoreContainerPassword), { max: 1, onnotice: () => {} });
   const [ledgerCount] = await restored`select count(*)::integer as count from handleplan_schema_migrations`;
-  assert.equal(ledgerCount.count, label === "baseline" ? 6 : 46);
+  assert.equal(
+    ledgerCount.count,
+    label === "baseline" ? currentMigrations.length - 40 : currentMigrations.length,
+  );
   const [baselineState] = await restored`
     select to_regclass('public.handleplan_schema_baselines') is not null as exists
   `;
