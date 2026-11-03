@@ -19,6 +19,24 @@ const SIGNAL = new AbortController().signal;
 const EANS = ["7038010000010", "7040000000009"];
 
 describe("production worker adapters", () => {
+  it("loads and forwards store progress through the existing fenced result adapter", async () => {
+    const storeTraversal = (["REMA_1000", "COOP_EXTRA", "EUROPRIS_NO", "BUNNPRIS", "JOKER_NO"] as const).map((chainCode) => ({
+      chainCode, nextPage: 13, stopReason: "budget" as const, coverage: "unknown" as const,
+    }));
+    const record = vi.fn(async () => ({ created: true }));
+    const state = new PostgresWorkerRuntimeStateStore({ getLastScheduledAt: async () => undefined,
+      getStoreCatalogTraversal: async () => storeTraversal, record });
+    await expect(state.getStoreCatalogTraversal(SIGNAL)).resolves.toEqual(storeTraversal);
+    const request = { contractVersion: 1 as const, jobId: "store-progress", kind: "store-catalog-price-refresh" as const,
+      requestedAt: "2026-07-16T12:00:00.000Z", sourceId: "kassalapp", timeoutMs: 1000 };
+    await state.recordResult(request, { ...request, runId: "store-run", status: "partial",
+      startedAt: request.requestedAt, completedAt: request.requestedAt,
+      counters: { accepted: 1, fetched: 1, persisted: 1, failed: 1, unknown: 0, quarantined: 0 },
+      storeTraversal,
+    }, { fenceToken: "fence-1", signal: SIGNAL });
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ storeTraversal }), "fence-1", SIGNAL);
+  });
+
   it("does not assign national geography to store receipt targets", async () => {
     const reader = {
       getCatalogDiscoveryPage: vi.fn(),

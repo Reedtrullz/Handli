@@ -41,6 +41,7 @@ export interface WorkerJobStateCounters {
 }
 
 export interface WorkerJobResultRecord {
+  storeTraversal?: StoreCatalogTraversal;
   completedAt: Date;
   counts: WorkerJobStateCounters;
   jobId: string;
@@ -50,6 +51,40 @@ export interface WorkerJobResultRecord {
   sourceId: string;
   startedAt: Date;
   status: WorkerJobStateStatus;
+}
+
+export type StoreCatalogTraversal = readonly Readonly<{
+  chainCode: string;
+  nextPage: number;
+  stopReason: "budget" | "exhausted" | "unknown" | "page-limit";
+  coverage: "unknown";
+}>[];
+
+export function canonicalStoreCatalogTraversal(input: unknown): StoreCatalogTraversal {
+  const chains = ["REMA_1000", "COOP_EXTRA", "EUROPRIS_NO", "BUNNPRIS", "JOKER_NO"];
+  if (!Array.isArray(input) || input.length !== chains.length) {
+    throw new TypeError("Store traversal must contain the five configured chains");
+  }
+  const entries = input.map((entry: unknown) => {
+    if (typeof entry !== "object" || entry === null
+      || Object.keys(entry).sort().join(",") !== "chainCode,coverage,nextPage,stopReason"
+      || !("chainCode" in entry) || typeof entry.chainCode !== "string" || !chains.includes(entry.chainCode)
+      || !("nextPage" in entry) || typeof entry.nextPage !== "number"
+      || !Number.isSafeInteger(entry.nextPage) || entry.nextPage < 1 || entry.nextPage > 10_000
+      || !("coverage" in entry) || entry.coverage !== "unknown"
+      || !("stopReason" in entry)
+      || (entry.stopReason !== "budget" && entry.stopReason !== "exhausted"
+        && entry.stopReason !== "unknown" && entry.stopReason !== "page-limit")
+      || ((entry.stopReason === "exhausted" || entry.stopReason === "page-limit") && entry.nextPage !== 1)) {
+      throw new TypeError("Invalid store traversal checkpoint");
+    }
+    return Object.freeze({ chainCode: entry.chainCode, nextPage: entry.nextPage,
+      stopReason: entry.stopReason, coverage: entry.coverage });
+  });
+  if (new Set(entries.map((entry) => entry.chainCode)).size !== chains.length) {
+    throw new TypeError("Duplicate traversal chain");
+  }
+  return Object.freeze(entries.sort((left, right) => chains.indexOf(left.chainCode) - chains.indexOf(right.chainCode)));
 }
 
 export type WorkerJobStateErrorCode = "CANCELLED";
@@ -154,6 +189,12 @@ export function canonicalWorkerJobResult(input: WorkerJobResultRecord): WorkerJo
     throw new TypeError("completedAt must not precede the schedule or run start");
   }
   const counts = canonicalCounters(input.counts);
+  const storeTraversal = input.storeTraversal === undefined
+    ? undefined : canonicalStoreCatalogTraversal(input.storeTraversal);
+  if (storeTraversal !== undefined && (input.jobKind !== "store-catalog-price-refresh"
+    || input.sourceId !== "kassalapp" || (input.status !== "succeeded" && input.status !== "partial"))) {
+    throw new TypeError("Traversal progress requires a completed Kassalapp store walk");
+  }
   if (input.status === "succeeded" && counts.failed !== 0) {
     throw new TypeError("Succeeded results cannot contain failures");
   }
@@ -174,6 +215,7 @@ export function canonicalWorkerJobResult(input: WorkerJobResultRecord): WorkerJo
     sourceId: input.sourceId,
     startedAt,
     status: input.status,
+    ...(storeTraversal === undefined ? {} : { storeTraversal }),
   });
 }
 
@@ -196,6 +238,7 @@ export function hashWorkerJobResult(input: WorkerJobResultRecord): string {
     sourceId: value.sourceId,
     startedAt: value.startedAt.toISOString(),
     status: value.status,
+    ...(value.storeTraversal === undefined ? {} : { storeTraversal: value.storeTraversal }),
   })).digest("hex");
 }
 
@@ -269,6 +312,17 @@ export class PostgresWorkerJobStateRepository {
     return canonicalDatabaseTimestamp(rows[0]?.scheduled_at);
   }
 
+  async getStoreCatalogTraversal(signal?: AbortSignal): Promise<StoreCatalogTraversal | undefined> {
+    const rows = await awaitAbortable(this.db.$client<{ store_traversal: unknown }[]>`
+      select store_traversal from worker_job_results
+      where source_id = 'kassalapp' and job_kind = 'store-catalog-price-refresh'
+        and status in ('succeeded', 'partial') and store_traversal is not null
+      order by scheduled_at desc, id desc limit 1
+    `, signal);
+    if (signal?.aborted) throw cancelledError();
+    return rows[0] === undefined ? undefined : canonicalStoreCatalogTraversal(rows[0].store_traversal);
+  }
+
   async record(
     input: WorkerJobResultRecord,
     fenceToken: string,
@@ -300,6 +354,7 @@ export class PostgresWorkerJobStateRepository {
           sourceId: value.sourceId,
           startedAt: value.startedAt,
           status: value.status,
+          storeTraversal: value.storeTraversal === undefined ? null : [...value.storeTraversal],
         })
         .onConflictDoNothing({ target: workerJobResults.jobId })
         .returning({ id: workerJobResults.id });

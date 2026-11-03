@@ -19,6 +19,7 @@ export interface WorkerLeaseProvider {
 }
 
 export interface WorkerRuntimeStateStore {
+  getStoreCatalogTraversal?(signal: AbortSignal): Promise<unknown>;
   getLastScheduledAt(
     schedule: WorkerScheduleDefinition,
     signal: AbortSignal,

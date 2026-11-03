@@ -181,6 +181,7 @@ function createDependencies(
     repository: createRepository(),
     sourceAccessPolicy: createPolicy("approved"),
     targetProvider: createTargets(),
+    getStoreCatalogTraversal: async (): Promise<unknown> => undefined,
     ...overrides,
   } satisfies KassalappHandlerDependencies<typeof RUN_HANDLE>;
 }
@@ -215,10 +216,43 @@ function storeListingRow(overrides: Record<string, unknown> = {}): Record<string
 }
 
 describe("store-catalog-price-refresh", () => {
+  it("issue20 resumes past page twelve across recreated handlers only from committed progress", async () => {
+    const gateway = createGateway();
+    vi.mocked(gateway.getStoreScopedProducts).mockImplementation(async (chainCode, page) => ({
+      catalogOutcomes: page <= 14 ? [{ state: "accepted", record: productRecord({
+        sourceRecordId: `${chainCode}:${page}`, ean: testGtin(page),
+      }) }] : [],
+      priceOutcomes: [],
+    }));
+    let committed: unknown = undefined;
+    const dependencies = {
+      ...createDependencies({ gateway }),
+      getStoreCatalogTraversal: async () => committed,
+    };
+    const first = await createKassalappHandlers(dependencies)["store-catalog-price-refresh"](
+      contextFor("store-catalog-price-refresh"),
+    );
+    expect(vi.mocked(gateway.getStoreScopedProducts).mock.calls).toHaveLength(60);
+    committed = first.storeTraversal;
+    const second = await createKassalappHandlers(dependencies)["store-catalog-price-refresh"]({
+      ...contextFor("store-catalog-price-refresh"), jobId: "store-walk:second",
+    });
+    expect(vi.mocked(gateway.getStoreScopedProducts).mock.calls.filter(([chain]) => chain === "REMA_1000")
+      .map(([, page]) => page)).toEqual(Array.from({ length: 15 }, (_, index) => index + 1));
+    expect(first).toEqual(expect.objectContaining({ storeTraversal: expect.arrayContaining([
+      { chainCode: "REMA_1000", nextPage: 13, stopReason: "budget", coverage: "unknown" },
+    ]) }));
+    expect(second).toEqual(expect.objectContaining({ storeTraversal: expect.arrayContaining([
+      { chainCode: "REMA_1000", nextPage: 1, stopReason: "exhausted", coverage: "unknown" },
+    ]) }));
+    console.log("ISSUE20_RESUME_RAW", JSON.stringify({ first, second, committed,
+      calls: vi.mocked(gateway.getStoreScopedProducts).mock.calls.map(([chain,page]) => [chain,page]) }));
+  });
+
   it("walks each chain once, persists catalog before price outcomes, and uses the catalog run type", async () => {
     const gateway = createGateway();
     vi.mocked(gateway.getStoreScopedProducts).mockImplementation(async (chainCode, page) => {
-      if (page !== 3) return { catalogOutcomes: [], priceOutcomes: [] };
+      if (page !== 1) return { catalogOutcomes: [], priceOutcomes: [] };
       return {
         catalogOutcomes: [{
           state: "accepted",
@@ -241,8 +275,8 @@ describe("store-catalog-price-refresh", () => {
 
     const result = await handlers["store-catalog-price-refresh"](contextFor("store-catalog-price-refresh"));
 
-    expect(result).toEqual({ counters: completeCounters });
-    expect(vi.mocked(gateway.getStoreScopedProducts).mock.calls.filter(([, page]) => page === 3))
+    expect(result).toEqual({ counters: completeCounters, storeTraversal: expect.any(Array) });
+    expect(vi.mocked(gateway.getStoreScopedProducts).mock.calls.filter(([, page]) => page === 1))
       .toHaveLength(5);
     expect(repository.beginRun).toHaveBeenCalledWith(expect.objectContaining({
       runType: "catalog",
@@ -265,8 +299,8 @@ describe("store-catalog-price-refresh", () => {
 
   it("treats empty pages as benign but still persists evidence from other chains", async () => {
     const gateway = createGateway();
-    vi.mocked(gateway.getStoreScopedProducts).mockImplementation(async (chainCode) => {
-      if (chainCode !== "REMA_1000") return { catalogOutcomes: [], priceOutcomes: [] };
+    vi.mocked(gateway.getStoreScopedProducts).mockImplementation(async (chainCode, page) => {
+      if (chainCode !== "REMA_1000" || page > 1) return { catalogOutcomes: [], priceOutcomes: [] };
       return {
         catalogOutcomes: [{
           state: "accepted",
@@ -291,7 +325,7 @@ describe("store-catalog-price-refresh", () => {
       failed: 0,
       status: "completed",
     }), SIGNAL);
-    expect(result).toEqual({ counters: {
+    expect(result).toEqual({ storeTraversal: expect.any(Array), counters: {
       accepted: 1,
       failed: 0,
       fetched: 1,

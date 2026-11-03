@@ -3,6 +3,7 @@ import {
   type WorkerJobRequest,
   type WorkerRunCounters,
   type WorkerRunResult,
+  type StoreCatalogTraversal,
   WORKER_CONTRACT_VERSION,
   ZERO_WORKER_RUN_COUNTERS,
   workerJobRequestSchema,
@@ -36,6 +37,7 @@ export interface WorkerJobContext {
 export interface WorkerHandlerResult {
   counters?: Partial<WorkerRunCounters>;
   status?: "succeeded" | "partial";
+  storeTraversal?: StoreCatalogTraversal;
 }
 
 export type WorkerJobHandler = (context: WorkerJobContext) => Promise<WorkerHandlerResult>;
@@ -122,6 +124,7 @@ export class WorkerRunner {
     const finish = (
       status: WorkerRunResult["status"],
       countersInput?: Partial<WorkerRunCounters>,
+      storeTraversal?: StoreCatalogTraversal,
     ): WorkerRunResult => {
       let counters: WorkerRunCounters;
       try {
@@ -143,6 +146,8 @@ export class WorkerRunner {
         startedAt,
         completedAt: canonicalNow(this.options.now),
         counters,
+        ...((status === "succeeded" || status === "partial") && storeTraversal !== undefined
+          ? { storeTraversal } : {}),
       });
     };
 
@@ -206,7 +211,7 @@ export class WorkerRunner {
           : undefined;
       if (forcedStatus !== undefined) return finish(forcedStatus, counters);
       if (settlement.kind === "fulfilled") {
-        return finish(settlement.result.status ?? "succeeded", settlement.result.counters);
+        return finish(settlement.result.status ?? "succeeded", settlement.result.counters, settlement.result.storeTraversal);
       }
       if (settlement.error instanceof WorkerCancelledError) {
         return finish("cancelled", settlement.error.counters);

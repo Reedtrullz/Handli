@@ -7,6 +7,7 @@ import {
   WorkerJobStateConflictError,
   canonicalWorkerJobResult,
   hashWorkerJobResult,
+  canonicalStoreCatalogTraversal,
 } from "./worker-state";
 
 const result = {
@@ -33,6 +34,7 @@ function fakeDatabase(options: {
   inserted?: boolean;
   latest?: string;
   previousHealth?: Record<string, unknown>;
+  rows?: unknown[];
 } = {}) {
   const insertedValues: unknown[] = [];
   const transaction = {
@@ -66,7 +68,7 @@ function fakeDatabase(options: {
     })),
   };
   const query = Object.assign(
-    Promise.resolve(options.latest === undefined ? [] : [{ scheduled_at: options.latest }]),
+    Promise.resolve(options.rows ?? (options.latest === undefined ? [] : [{ scheduled_at: options.latest }])),
     { cancel: vi.fn() },
   );
   const client = vi.fn(() => query);
@@ -78,6 +80,46 @@ function fakeDatabase(options: {
 }
 
 describe("worker job state", () => {
+  const traversal = ["REMA_1000", "COOP_EXTRA", "EUROPRIS_NO", "BUNNPRIS", "JOKER_NO"].map((chainCode) => ({
+    chainCode, nextPage: 13, stopReason: "budget" as const, coverage: "unknown" as const,
+  }));
+
+  it("stores resumable progress in the same fenced, hash-bound result and reads it back", async () => {
+    const input = { ...result, jobKind: "store-catalog-price-refresh" as const,
+      storeTraversal: traversal, status: "partial" as const, counts: { ...result.counts, failed: 1 } };
+    const { db, insertedValues } = fakeDatabase({ rows: [{ store_traversal: traversal }] });
+    const verifyFence = vi.fn(async (..._args: Parameters<IngestionFenceVerifier>) => undefined);
+    const repository = new PostgresWorkerJobStateRepository(db, { verifyFence });
+    await repository.record(input, "fence-1");
+    expect(insertedValues[0]).toEqual(expect.objectContaining({ storeTraversal: traversal,
+      resultHash: hashWorkerJobResult(input) }));
+    expect(verifyFence.mock.calls.map(([, , phase]) => phase)).toEqual(["initial", "before-commit"]);
+    expect(await repository.getStoreCatalogTraversal()).toEqual(traversal);
+    expect(hashWorkerJobResult({ ...input, storeTraversal: traversal.map((entry) => ({ ...entry, nextPage: 14 })) }))
+      .not.toBe(hashWorkerJobResult(input));
+    expect(hashWorkerJobResult({ ...input, storeTraversal: [...traversal].reverse() })).toBe(hashWorkerJobResult(input));
+  });
+
+  it.each([
+    [], [{ chainCode: "REMA_1000", nextPage: 13 }],
+    traversal.map((entry) => ({ ...entry, nextPage: 10001 })),
+    traversal.map((entry) => ({ ...entry, coverage: "complete" })),
+    traversal.map((entry) => ({ ...entry, chainCode: "REMA_1000" })),
+    traversal.map((entry) => ({ ...entry, nextPage: 13, stopReason: "exhausted" })),
+  ].map((input) => ({ input })))("rejects malformed traversal progress %#", ({ input }) => {
+    expect(() => canonicalStoreCatalogTraversal(input)).toThrow(TypeError);
+  });
+
+  it("rejects checkpoints on cancelled results and stale leases", async () => {
+    const { db } = fakeDatabase();
+    const input = { ...result, jobKind: "store-catalog-price-refresh" as const, storeTraversal: traversal };
+    const verifyFence = vi.fn(async (..._args: Parameters<IngestionFenceVerifier>) => { throw new Error("stale fence"); });
+    const repository = new PostgresWorkerJobStateRepository(db, { verifyFence });
+    await expect(repository.record({ ...input, status: "cancelled" }, "fence-1")).rejects.toThrow(TypeError);
+    expect(verifyFence).not.toHaveBeenCalled();
+    await expect(repository.record(input, "fence-1")).rejects.toThrow("stale fence");
+  });
+
   it("canonicalizes exact counters and hashes independently of object key order", () => {
     const canonical = canonicalWorkerJobResult(result);
     expect(canonical).toEqual(result);

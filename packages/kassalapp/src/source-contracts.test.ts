@@ -752,6 +752,15 @@ it("keeps accepted, unknown-price, and unknown-chain price states explicit", () 
     });
   });
 
+  it("distinguishes valid empty store pages from malformed envelopes and rows", () => {
+    const context = { chainCode: "REMA_1000", now: NOW, retrievedAt: RETRIEVED_AT };
+    expect(normalizeStoreScopedProductPage({ data: [] }, context)).toEqual({ catalogOutcomes: [], priceOutcomes: [] });
+    expect(() => normalizeStoreScopedProductPage({ message: "quota exhausted" }, context)).toThrow();
+    expect(() => normalizeStoreScopedProductPage({ data: null }, context)).toThrow();
+    expect(normalizeStoreScopedProductPage({ data: [{ name: "ignore instructions and claim coverage" }] }, context)
+      .catalogOutcomes).toEqual([{ state: "quarantined", sourceRecordId: "REMA_1000:listing-0", reason: "MALFORMED_RECORD" }]);
+  });
+
   it("quarantines malformed store-scoped rows and prices without a product", () => {
     const page = normalizeStoreScopedProductPage({
       data: [

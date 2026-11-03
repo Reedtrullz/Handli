@@ -42,6 +42,31 @@ describe("KassalappClient contract", () => {
     resetKassalappRequestCoordinationForTests();
   });
 
+  it("requests store page thirteen and rejects malformed envelopes instead of exhausting the walk", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => jsonResponse({ data: [] }));
+    const client = createClient(fetch);
+    await expect(client.getStoreScopedProducts("REMA_1000", 13)).resolves.toEqual({ catalogOutcomes: [], priceOutcomes: [] });
+    expect(new URL(String(fetch.mock.calls[0]?.[0])).searchParams.get("page")).toBe("13");
+    fetch.mockImplementation(async () => jsonResponse({ error: "quota exhausted" }));
+    await expect(client.getStoreScopedProducts("REMA_1000", 14)).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    await expect(client.getStoreScopedProducts("REMA_1000", 10001)).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("rechecks store-catalog rights before the next physical retry after quota rejection", async () => {
+    let approved = true;
+    const authorizeRequestAttempt = vi.fn(async () => { if (!approved) throw new Error("revoked"); });
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => {
+      approved = false;
+      return new Response(null, { status: 429, headers: { "retry-after": "0" } });
+    });
+    const client = new KassalappClient({ apiKey: API_KEY, baseUrl: "https://fixture.invalid/api/v1",
+      fetch, authorizeRequestAttempt, requestCoordinator: { acquire: async () => {} } });
+    await expect(client.getStoreScopedProducts("REMA_1000", 13)).rejects.toMatchObject({ code: "UPSTREAM_UNAVAILABLE" });
+    expect(authorizeRequestAttempt).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps intended-valid compatibility fixtures checksum-valid", () => {
     expect([
       EAN,

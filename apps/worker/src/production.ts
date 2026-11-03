@@ -70,8 +70,8 @@ export const KASSALAPP_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition[]
   }),
   Object.freeze({
     // Store-scoped catalog+price walks keep REMA 1000, Coop Extra, and
-    // Europris inside the discovery freshness gates. Twelve pages per chain
-    // per run cover the upstream catalog on a rolling window.
+    // Europris inside the discovery freshness gates. Walk at most twelve
+    // pages per chain, resuming committed progress without claiming coverage.
     anchorAt: "2026-09-21T00:15:00.000Z",
     intervalMs: 6 * 60 * 60 * 1_000,
     kind: "store-catalog-price-refresh",
@@ -401,6 +401,7 @@ export class PostgresWorkerLeaseProvider implements WorkerLeaseProvider {
 }
 
 interface WorkerJobStateRepository {
+  getStoreCatalogTraversal?(signal?: AbortSignal): Promise<unknown>;
   getLastScheduledAt(
     input: Readonly<{ jobKind: WorkerJobRequest["kind"]; sourceId: string }>,
     signal?: AbortSignal,
@@ -416,6 +417,13 @@ export class PostgresWorkerRuntimeStateStore implements WorkerRuntimeStateStore 
   constructor(
     private readonly repository: WorkerJobStateRepository | PostgresWorkerJobStateRepository,
   ) {}
+
+  async getStoreCatalogTraversal(signal: AbortSignal): Promise<unknown> {
+    if (this.repository.getStoreCatalogTraversal === undefined) {
+      throw new TypeError("Store traversal persistence is unavailable");
+    }
+    return await this.repository.getStoreCatalogTraversal(signal);
+  }
 
   async getLastScheduledAt(
     schedule: WorkerScheduleDefinition,
@@ -449,6 +457,7 @@ export class PostgresWorkerRuntimeStateStore implements WorkerRuntimeStateStore 
       sourceId: result.sourceId,
       startedAt: new Date(result.startedAt),
       status: result.status,
+      ...(result.storeTraversal === undefined ? {} : { storeTraversal: result.storeTraversal }),
     }, fence.fenceToken, fence.signal);
   }
 }
@@ -500,6 +509,12 @@ export function createProductionWorkerRuntime<RunHandle = unknown>(
     repository: dependencies.ingestionRepository,
     sourceAccessPolicy: dependencies.sourceAccessPolicy,
     targetProvider: dependencies.targetProvider,
+    getStoreCatalogTraversal: async (signal) => {
+      if (dependencies.stateStore.getStoreCatalogTraversal === undefined) {
+        throw new TypeError("Store traversal persistence is unavailable");
+      }
+      return await dependencies.stateStore.getStoreCatalogTraversal(signal);
+    },
   });
 
   const openPricesHandlers = dependencies.openPrices !== undefined

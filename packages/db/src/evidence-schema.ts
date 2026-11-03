@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import type { StoreCatalogTraversal } from "./worker-state";
 import {
   bigint,
   bigserial,
@@ -1311,11 +1312,18 @@ export const workerJobResults = pgTable(
     startedAt: time("started_at").notNull(),
     completedAt: time("completed_at").notNull(),
     counts: jsonb("counts").$type<Record<string, number>>().notNull(),
+    storeTraversal: jsonb("store_traversal").$type<StoreCatalogTraversal>(),
     resultHash: char("result_hash", { length: 64 }).notNull(),
     createdAt: time("created_at").notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex("worker_job_results_job_id_unique").on(table.jobId),
+    check("worker_job_results_store_traversal", sql`${table.storeTraversal} is null or (
+      ${table.sourceId} = 'kassalapp' and ${table.jobKind} = 'store-catalog-price-refresh'
+      and ${table.status} in ('succeeded', 'partial')
+      and jsonb_typeof(${table.storeTraversal}) = 'array'
+      and jsonb_array_length(${table.storeTraversal}) = 5
+    )`),
     index("worker_job_results_source_kind_schedule_idx").on(
       table.sourceId,
       table.jobKind,

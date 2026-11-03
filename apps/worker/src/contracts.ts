@@ -38,6 +38,19 @@ const identifierSchema = z.string().trim().min(1).max(200);
 const canonicalTimestampSchema = z.iso.datetime({ offset: false, precision: 3 });
 const counterSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 
+export const storeCatalogTraversalSchema = z.array(z.object({
+  chainCode: z.enum(["REMA_1000", "COOP_EXTRA", "EUROPRIS_NO", "BUNNPRIS", "JOKER_NO"]),
+  nextPage: z.number().int().min(1).max(10_000),
+  stopReason: z.enum(["budget", "exhausted", "unknown", "page-limit"]),
+  coverage: z.literal("unknown"),
+}).strict()).length(5).superRefine((entries, issue) => {
+  if (new Set(entries.map((entry) => entry.chainCode)).size !== 5
+    || entries.some((entry) => (entry.stopReason === "exhausted" || entry.stopReason === "page-limit") && entry.nextPage !== 1)) {
+    issue.addIssue({ code: "custom", message: "Invalid store traversal checkpoint" });
+  }
+});
+export type StoreCatalogTraversal = z.infer<typeof storeCatalogTraversalSchema>;
+
 export const workerJobRequestSchema = z.object({
   contractVersion: z.literal(WORKER_CONTRACT_VERSION),
   jobId: identifierSchema,
@@ -79,7 +92,12 @@ export const workerRunResultSchema = z.object({
   startedAt: canonicalTimestampSchema,
   completedAt: canonicalTimestampSchema,
   counters: workerRunCountersSchema,
-}).strict().superRefine(({ counters, startedAt, completedAt, status }, issue) => {
+  storeTraversal: storeCatalogTraversalSchema.optional(),
+}).strict().superRefine(({ counters, startedAt, completedAt, status, kind, sourceId, storeTraversal }, issue) => {
+  if (storeTraversal !== undefined && (kind !== "store-catalog-price-refresh" || sourceId !== "kassalapp"
+    || (status !== "succeeded" && status !== "partial"))) {
+    issue.addIssue({ code: "custom", message: "Traversal progress requires a completed Kassalapp store walk", path: ["storeTraversal"] });
+  }
   if (Date.parse(completedAt) < Date.parse(startedAt)) {
     issue.addIssue({
       code: "custom",

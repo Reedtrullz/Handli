@@ -17,7 +17,9 @@ import { KassalappGatewayError } from "@handleplan/kassalapp";
 import type {
   KassalappWorkerJobKind,
   WorkerRunCounters,
+  StoreCatalogTraversal,
 } from "./contracts";
+import { storeCatalogTraversalSchema } from "./contracts";
 import {
   WorkerCancelledError,
   type WorkerJobHandler,
@@ -202,6 +204,7 @@ export interface KassalappIngestionRepository<RunHandle = unknown> {
 }
 
 export interface KassalappHandlerDependencies<RunHandle = unknown> {
+  readonly getStoreCatalogTraversal?: (signal: AbortSignal) => Promise<unknown>;
   readonly clock: () => Date;
   readonly gateway: KassalappIngestionGateway;
   readonly repository: KassalappIngestionRepository<RunHandle>;
@@ -225,6 +228,7 @@ class SourceAccessChangedError extends Error {
 
 interface PreparedIngestion<RunHandle> {
   readonly failed: number;
+  readonly storeTraversal?: StoreCatalogTraversal;
   persist(handle: RunHandle, signal: AbortSignal): Promise<void>;
 }
 
@@ -808,7 +812,8 @@ function createExecutor<RunHandle>(
           failed: prepared.failed,
           status: prepared.failed === 0 ? "completed" : "degraded",
         }, signal);
-        return { counters: finalized.counts };
+        return { counters: finalized.counts,
+          ...(prepared.storeTraversal === undefined ? {} : { storeTraversal: prepared.storeTraversal }) };
       } catch {
         if (signal.aborted) throw new WorkerCancelledError();
         throw new KassalappHandlerError("FINALIZATION_FAILURE");
@@ -993,22 +998,14 @@ export function createKassalappHandlers<RunHandle>(
     };
   });
 
-  // Deterministic blind rotation: page offset from the scheduled jobId digits.
-  // Different schedule slots walk different upstream windows without persisted
-  // cursor state, and repeated walks self-heal upstream inserts/deletes.
-  function rotationPageFromJobId(jobId: string, pageCount: number): number {
-    const digits = jobId.replace(/\D/g, "");
-    const base = digits.length === 0
-      ? 0
-      : Number(digits.slice(-6)) % pageCount;
-    return base + 1;
-  }
-
   const storeCatalogPriceRefresh = createExecutor(dependencies, "store-catalog-price-refresh", async (
     signal,
     recheckAccess,
-    jobId,
   ) => {
+    if (dependencies.getStoreCatalogTraversal === undefined) return undefined;
+    const saved = await dependencies.getStoreCatalogTraversal(signal);
+    const previous = saved === undefined ? [] : storeCatalogTraversalSchema.parse(saved);
+    const storeTraversal: StoreCatalogTraversal = [];
     const recordedAt = checkedNow(dependencies.clock);
     const catalogOutcomes: KassalappCatalogIngestionOutcome[] = [];
     const priceOutcomes: KassalappPriceIngestionOutcome[] = [];
@@ -1016,10 +1013,12 @@ export function createKassalappHandlers<RunHandle>(
     let sawAnyEvidence = false;
 
     for (const chainCode of STORE_WALK_CHAIN_CODES) {
-      const startPage = rotationPageFromJobId(jobId, STORE_CATALOG_PAGES_PER_CHAIN);
+      let nextPage = previous.find((entry) => entry.chainCode === chainCode)?.nextPage ?? 1;
+      let stopReason: StoreCatalogTraversal[number]["stopReason"] = "budget";
       for (let offset = 0; offset < STORE_CATALOG_PAGES_PER_CHAIN; offset += 1) {
         throwIfCancelled(signal);
-        const page = ((startPage - 1 + offset) % STORE_CATALOG_PAGES_PER_CHAIN) + 1;
+        await recheckAccess(signal);
+        const page = nextPage;
         let normalized: StoreScopedProductPageOutcome;
         try {
           normalized = await gateway.getStoreScopedProducts(chainCode, page, signal);
@@ -1027,16 +1026,17 @@ export function createKassalappHandlers<RunHandle>(
           if (signal.aborted) throw error;
           if (error instanceof KassalappGatewayError && error.code === "CANCELLED") throw error;
           failed += 1;
-          continue;
+          stopReason = "unknown";
+          break;
         }
-        // Trailing pages past a chain's upstream catalog end are expected,
-        // not source failures; counting them forced every run to 'degraded',
-        // which discovery's completed-run gate then hides entirely.
+        // A normalized empty page is an exhaustion observation, not proof of coverage.
         if (
           normalized.catalogOutcomes.length === 0
           && normalized.priceOutcomes.length === 0
         ) {
-          continue;
+          nextPage = 1;
+          stopReason = "exhausted";
+          break;
         }
         sawAnyEvidence = sawAnyEvidence
           || normalized.catalogOutcomes.length > 0
@@ -1047,10 +1047,25 @@ export function createKassalappHandlers<RunHandle>(
             : outcome.ean ?? outcome.sourceRecordId, recordedAt)));
         priceOutcomes.push(...normalized.priceOutcomes.map((outcome) =>
           mapPriceOutcome(outcome, new Map(), recordedAt)));
+        if (normalized.catalogOutcomes.some((outcome) => outcome.state !== "accepted")
+          || normalized.priceOutcomes.some((outcome) => outcome.state !== "accepted")) {
+          stopReason = "unknown";
+          failed += 1;
+          break;
+        }
+        if (page === 10_000) {
+          nextPage = 1;
+          stopReason = "page-limit";
+          break;
+        }
+        nextPage = page + 1;
       }
+      // Offset pagination is not a snapshot: even an empty tail proves no full coverage.
+      storeTraversal.push({ chainCode, nextPage, stopReason, coverage: "unknown" });
+      if (stopReason === "budget" || stopReason === "page-limit") failed += 1;
     }
 
-    if (!sawAnyEvidence) return undefined;
+    if (!sawAnyEvidence && previous.length === 0) return undefined;
     // Upstream pagination can drift between page fetches, repeating a record
     // across pages with a newer retrieval stamp. The audit ledger rejects the
     // same identity twice per run, which would fail the whole walk, so only
@@ -1059,6 +1074,7 @@ export function createKassalappHandlers<RunHandle>(
     const dedupedPriceOutcomes = dedupeOutcomesByIdentity(priceOutcomes);
     return {
       failed,
+      storeTraversal,
       persist: async (handle, persistSignal) => {
         // Catalog rows must persist first: price outcomes reference products
         // that only exist once the catalog batch creates them.
