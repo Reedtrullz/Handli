@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 50
     services:
       postgres:
@@ -548,7 +548,7 @@ jobs:
   verify-promotion:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.promotion_manifest != '' }}
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: release-promotion
     permissions:
