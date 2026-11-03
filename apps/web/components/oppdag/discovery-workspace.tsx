@@ -452,6 +452,7 @@ function DiscoveryWorkspaceClient({
 
   function retryCurrentView(): void {
     setStatus("loading");
+    setPageCursors([undefined]);
     setSearchRevision((current) => current + 1);
   }
 

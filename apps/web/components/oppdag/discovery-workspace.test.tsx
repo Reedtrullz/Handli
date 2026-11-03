@@ -621,6 +621,21 @@ describe("Oppdag discovery workspace", () => {
     await waitFor(() => expect(search).toHaveBeenCalledTimes(2));
   });
 
+  it("restarts from the first page when a continuation is unavailable", async () => {
+    const user = userEvent.setup();
+    const cursor = `discovery-cursor:v1:${"a".repeat(40)}`;
+    const search = vi.fn<DiscoverySearch>(async (request) => {
+      if (request.cursor !== undefined) throw new Error("DISCOVERY_SEARCH_FAILED");
+      const first = responseForRequest(request);
+      return { ...first, page: { ...first.page, hasMore: true, nextCursor: cursor } };
+    });
+    render(<DiscoveryWorkspace searchDiscovery={search} storage={memoryStorage()} />);
+    await user.click(await screen.findByRole("button", { name: "Neste" }));
+    await user.click(await screen.findByRole("button", { name: "Prøv igjen" }));
+    await screen.findByRole("heading", { name: "TINE Lettmelk 1 % 1 l" });
+    expect(search).toHaveBeenLastCalledWith(discoveryRequest(), expect.any(AbortSignal));
+  });
+
   it("refetches discovery in the explicitly selected allowlisted market", async () => {
     const user = userEvent.setup();
     const search = successfulSearch();

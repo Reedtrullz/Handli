@@ -7,6 +7,7 @@ import type {
   MoneyOre,
   PriceEvidence,
   PriceObservation,
+  PublicDiscoveryRequestV1,
 } from "@handleplan/domain";
 import { describe, expect, it, vi } from "vitest";
 
@@ -76,6 +77,32 @@ function summary(gtin: string, index: number): ExactProductPlanApiProductSummary
 }
 
 const products = GTINS.map(summary);
+
+const discoveryRequest: PublicDiscoveryRequestV1 = {
+  chain: "all", contractVersion: 1, marketContext: MARKET_CONTEXT, pageSize: 1, resultType: "all",
+};
+
+function paginationFixture() {
+  let now = NOW;
+  const catalog = catalogReader();
+  catalog.readDiscoveryPage.mockImplementation(async (options) => ({
+    entries: products.filter((product) => options.cursor === undefined
+      || product.gtin > options.cursor.gtin).map((product) => ({
+      catalogPosition: { gtin: product.gtin, rank: 0, sortName: product.displayName.toLowerCase() },
+      categoryPath: [category], product,
+    })),
+    hasMore: false, scannedCount: products.length,
+  }));
+  const readExact = vi.fn<PriceService["readExact"]>(async () => {
+    const result = priceResultFor(products);
+    result.evidence.needs = result.evidence.needs.map((need) => ({
+      ...need, comparisonScope: { ...need.comparisonScope, evaluatedAt: now.toISOString() },
+    }));
+    return result;
+  });
+  const service = new DiscoveryService({ catalog, now: () => now, priceService: { readExact } });
+  return { catalog, readExact, service, setNow: (value: Date) => { now = value; } };
+}
 
 function priceResultFor(catalog: readonly ExactProductPlanApiProductSummary[]): ExactPriceServiceResult {
   const observations: PriceObservation<string>[] = [];
@@ -161,6 +188,44 @@ function catalogReader(rows = products): PublicCatalogDiscoveryIndexReader & {
 }
 
 describe("DiscoveryService persisted composition", () => {
+  it("uses current eligibility on an issued continuation without duplicates or skips", async () => {
+    const fixture = paginationFixture();
+    const first = await fixture.service.discover(discoveryRequest);
+    expect(first.page.nextCursor).toBeTypeOf("string");
+    const current = new Date(NOW.getTime() + 1_000);
+    fixture.setNow(current);
+    const second = await fixture.service.discover({ ...discoveryRequest, cursor: first.page.nextCursor });
+    expect(second.generatedAt).toBe(current.toISOString());
+    expect([...first.products, ...second.products].map(({ catalog }) => catalog.gtin)).toEqual(GTINS);
+    expect(fixture.catalog.readDiscoveryPage.mock.calls.at(-1)?.[1]).toEqual(current);
+    expect(fixture.catalog.categoryFacets.mock.calls.at(-1)?.[1]).toEqual(current);
+    expect(fixture.readExact.mock.calls.at(-1)?.[1]).toEqual(current);
+  });
+
+  it.each([[-1, "future"], [300_000, "expired"], [86_400_000, "replayed"]])(
+    "rejects an issued cursor at a %s ms clock offset (%s) before any eligibility read", async (offset) => {
+      const fixture = paginationFixture();
+      const first = await fixture.service.discover(discoveryRequest);
+      fixture.setNow(new Date(NOW.getTime() + offset));
+      fixture.catalog.readDiscoveryPage.mockClear();
+      await expect(fixture.service.discover({ ...discoveryRequest, cursor: first.page.nextCursor }))
+        .rejects.toBeInstanceOf(DiscoveryUnavailableError);
+      expect(fixture.catalog.readDiscoveryPage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects alteration of the issued cursor position before reading", async () => {
+    const fixture = paginationFixture();
+    const first = await fixture.service.discover(discoveryRequest);
+    const prefix = "discovery-cursor:v1:";
+    const payload = JSON.parse(Buffer.from(first.page.nextCursor?.slice(prefix.length) ?? "", "base64url").toString());
+    const cursor = prefix + Buffer.from(JSON.stringify({ ...payload, gtin: GTINS[1] })).toString("base64url");
+    fixture.catalog.readDiscoveryPage.mockClear();
+    await expect(fixture.service.discover({ ...discoveryRequest, cursor }))
+      .rejects.toBeInstanceOf(DiscoveryUnavailableError);
+    expect(fixture.catalog.readDiscoveryPage).not.toHaveBeenCalled();
+  });
+
   it("builds one bounded exact persisted snapshot for browse results", async () => {
     const catalog = catalogReader();
     const readExact = vi.fn<PriceService["readExact"]>().mockResolvedValue(priceResultFor(products));
