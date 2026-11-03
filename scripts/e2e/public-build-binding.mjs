@@ -265,6 +265,11 @@ function collectEmittedEntries(repositoryRoot) {
     const relativePath = normalizedRelativePath(repositoryRoot, absolutePath);
     const stat = lstatSync(absolutePath);
     if (stat.isDirectory()) {
+      // Next 16.4+ writes request-time route-cache under the standalone server
+      // tree. That is runtime state, not part of the sealed build artifact.
+      if (path.basename(absolutePath) === "route-cache") {
+        return;
+      }
       entries.push({ kind: "directory", relativePath });
       for (const name of readdirSync(absolutePath).sort()) {
         visit(path.join(absolutePath, name), artifactRoot);
