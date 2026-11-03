@@ -267,7 +267,7 @@ function collectEmittedEntries(repositoryRoot) {
     if (stat.isDirectory()) {
       // Next 16.4+ writes request-time route-cache under the standalone server
       // tree. That is runtime state, not part of the sealed build artifact.
-      if (path.basename(absolutePath) === "route-cache") {
+      if (relativePath === "apps/web/.next/standalone/apps/web/.next/server/route-cache") {
         return;
       }
       entries.push({ kind: "directory", relativePath });
