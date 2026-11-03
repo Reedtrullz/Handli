@@ -128,9 +128,16 @@ describe.skipIf(process.env.RUN_DB_INTEGRATION !== "1")("native cursor service, 
       expect(expiredOfferPage.generatedAt).toBe(at.toISOString());
       console.info(JSON.stringify({ cursorQa: "offer-expiry", issuedAt, evaluatedAt: at, offerEndsAt: fixture.offerEndsAt,
         beforeOfferCount: second.products[0]!.officialOffers.length, after: expiredOfferPage }));
-      await fixture.admin.sql`insert into source_permissions (source_id, decision, reviewed_at, valid_until, permissions, notes)
-        values (${fixture.sourceIds.catalog}, 'revoked', ${at.toISOString()}, null, '{"catalog":true}'::jsonb, 'cursor QA revocation')`;
+      const [revocation] = await fixture.admin.sql<Array<{ visible_at_ms: number }>>`
+        insert into source_permissions (source_id, decision, reviewed_at, valid_until, permissions, notes)
+        values (${fixture.sourceIds.catalog}, 'revoked', ${at.toISOString()}, null, '{"catalog":true}'::jsonb, 'cursor QA revocation')
+        returning ceil(extract(epoch from created_at) * 1000)::double precision as visible_at_ms`;
+      if (!revocation) throw new Error("Revocation persistence timestamp missing");
+      // The injected JS clock must follow the persisted row's microsecond timestamp.
+      await fixture.admin.sql`select pg_sleep(0.002)`;
       at = await fixture.clock();
+      expect(at.getTime()).toBeGreaterThanOrEqual(revocation.visible_at_ms);
+      console.info(JSON.stringify({ cursorQa: "revocation-persistence-clock", visibleAtMs: revocation.visible_at_ms, evaluatedAt: at }));
       const revoked = await service.discover(continuation);
       expect(revoked.products).toEqual([]);
       console.info(JSON.stringify({ cursorQa: "permission-revocation", evaluatedAt: at, response: revoked }));
