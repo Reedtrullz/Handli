@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import {
   PublicCatalogIndexReaderError,
   type PublicCatalogCategoryFacetDirectory,
@@ -13,7 +11,6 @@ import {
   isValidGtin,
   PUBLIC_DISCOVERY_CATALOG_SCAN_MAX,
   PUBLIC_DISCOVERY_PAGE_SIZE_MAX,
-  publicDiscoveryCursorSchema,
   publicDiscoveryRequestV1Schema,
   publicDiscoveryResponseSchemaFor,
   type ExactProductPlanApiEvidenceSource,
@@ -31,10 +28,10 @@ import {
   type ExactPriceServiceResult,
   type PriceService,
 } from "./price-service";
+import { discoveryCursor } from "./discovery-cursor";
 
 const CATEGORY_FACET_LIMIT = 100;
 const MAX_PUBLIC_RESPONSE_BYTES = 128 * 1024;
-const DISCOVERY_CURSOR_PREFIX = "discovery-cursor:v1:";
 
 export interface DiscoveryServiceContract {
   discover(
@@ -85,101 +82,6 @@ function selectionFor(request: PublicDiscoveryRequestV1): PublicDiscoverySelecti
     ...(request.query === undefined ? {} : { query: request.query }),
     resultType: request.resultType,
   };
-}
-
-function cursorScopeSha256(request: PublicDiscoveryRequestV1): string {
-  return createHash("sha256").update(JSON.stringify({
-    marketContext: request.marketContext,
-    selection: selectionFor(request),
-  })).digest("hex");
-}
-
-interface DecodedDiscoveryCursor {
-  at: Date;
-  position: PublicCatalogDiscoveryPosition;
-}
-
-function hasOnlyKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(value).sort(compareText);
-  const sorted = [...expected].sort(compareText);
-  return actual.length === sorted.length
-    && actual.every((key, index) => key === sorted[index]);
-}
-
-function decodeCursor(
-  cursor: string,
-  request: PublicDiscoveryRequestV1,
-): DecodedDiscoveryCursor | undefined {
-  if (!publicDiscoveryCursorSchema.safeParse(cursor).success) return undefined;
-  const encoded = cursor.slice(DISCOVERY_CURSOR_PREFIX.length);
-  let decoded: string;
-  try {
-    const bytes = Buffer.from(encoded, "base64url");
-    if (bytes.toString("base64url") !== encoded || bytes.byteLength > 1_000) return undefined;
-    decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return undefined;
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(decoded) as unknown;
-  } catch {
-    return undefined;
-  }
-  if (
-    typeof value !== "object"
-    || value === null
-    || Array.isArray(value)
-    || !hasOnlyKeys(value as Record<string, unknown>, [
-      "at",
-      "gtin",
-      "rank",
-      "scopeSha256",
-      "sortName",
-      "version",
-    ])
-  ) return undefined;
-  const payload = value as Record<string, unknown>;
-  if (
-    payload.version !== 1
-    || typeof payload.at !== "string"
-    || typeof payload.scopeSha256 !== "string"
-    || payload.scopeSha256 !== cursorScopeSha256(request)
-    || typeof payload.gtin !== "string"
-    || !isValidGtin(payload.gtin)
-    || !Number.isSafeInteger(payload.rank)
-    || (payload.rank as number) < 0
-    || (payload.rank as number) > 4
-    || typeof payload.sortName !== "string"
-    || payload.sortName.length < 1
-    || payload.sortName.length > 500
-  ) return undefined;
-  const at = new Date(payload.at);
-  if (!isFiniteDate(at) || at.toISOString() !== payload.at) return undefined;
-  return {
-    at,
-    position: {
-      gtin: payload.gtin,
-      rank: payload.rank as number,
-      sortName: payload.sortName,
-    },
-  };
-}
-
-function encodeCursor(
-  at: Date,
-  position: PublicCatalogDiscoveryPosition,
-  request: PublicDiscoveryRequestV1,
-): string {
-  const encoded = Buffer.from(JSON.stringify({
-    at: at.toISOString(),
-    gtin: position.gtin,
-    rank: position.rank,
-    scopeSha256: cursorScopeSha256(request),
-    sortName: position.sortName,
-    version: 1,
-  }), "utf8").toString("base64url");
-  return publicDiscoveryCursorSchema.parse(`${DISCOVERY_CURSOR_PREFIX}${encoded}`);
 }
 
 function exactRequestFor(
@@ -390,6 +292,7 @@ function responseFor(
   generatedAt: Date,
   categories: PublicCatalogCategoryFacetDirectory,
   request: PublicDiscoveryRequestV1,
+  encodeCursor: (position: PublicCatalogDiscoveryPosition) => string,
   preferredGtin?: string,
 ): PublicDiscoveryResponse {
   const catalogEntries = catalogPage.entries;
@@ -397,7 +300,7 @@ function responseFor(
     const page = catalogPage.hasMore && catalogPage.nextPosition !== undefined
       ? {
           hasMore: true,
-          nextCursor: encodeCursor(generatedAt, catalogPage.nextPosition, request),
+          nextCursor: encodeCursor(catalogPage.nextPosition),
           pageSize: request.pageSize,
           scannedCatalogProducts: catalogPage.scannedCount,
         }
@@ -467,7 +370,7 @@ function responseFor(
       }
     : {
         hasMore: true,
-        nextCursor: encodeCursor(generatedAt, nextPosition, request),
+        nextCursor: encodeCursor(nextPosition),
         pageSize: request.pageSize,
         scannedCatalogProducts: catalogPage.scannedCount,
       };
@@ -548,24 +451,19 @@ export class DiscoveryService implements DiscoveryServiceContract {
     const parsedRequest = publicDiscoveryRequestV1Schema.safeParse(rawRequest);
     if (!parsedRequest.success) throw new DiscoveryUnavailableError();
     const request = parsedRequest.data;
-    const decodedCursor = request.cursor === undefined
-      ? undefined
-      : decodeCursor(request.cursor, request);
-    if (request.cursor !== undefined && decodedCursor === undefined) {
-      throw new DiscoveryUnavailableError();
-    }
-    const generatedAt = decodedCursor?.at
-      ?? (this.dependencies.now ?? (() => new Date()))();
+    const generatedAt = (this.dependencies.now ?? (() => new Date()))();
     if (!(generatedAt instanceof Date) || !isFiniteDate(generatedAt)) {
       throw new DiscoveryUnavailableError();
     }
+    const cursor = discoveryCursor(request, generatedAt);
+    if (cursor === undefined) throw new DiscoveryUnavailableError();
 
     try {
       const [catalogPage, categories] = await Promise.all([
         this.dependencies.catalog.readDiscoveryPage({
           ...(request.categoryId === undefined ? {} : { categoryId: request.categoryId }),
           ...(request.chain === "all" ? {} : { chain: request.chain }),
-          ...(decodedCursor === undefined ? {} : { cursor: decodedCursor.position }),
+          ...(cursor.position === undefined ? {} : { cursor: cursor.position }),
           limit: PUBLIC_DISCOVERY_CATALOG_SCAN_MAX,
           ...(request.query === undefined ? {} : { query: request.query }),
         }, generatedAt, signal),
@@ -583,7 +481,7 @@ export class DiscoveryService implements DiscoveryServiceContract {
         throw new DiscoveryUnavailableError();
       }
       if (catalogPage.entries.length === 0) {
-        return responseFor(catalogPage, undefined, generatedAt, categories, request);
+        return responseFor(catalogPage, undefined, generatedAt, categories, request, cursor.encode);
       }
       const catalogProducts = catalogPage.entries.map(({ product }) => product);
       const priceRequest = exactRequestFor(catalogProducts, request.marketContext);
@@ -599,6 +497,7 @@ export class DiscoveryService implements DiscoveryServiceContract {
         generatedAt,
         categories,
         request,
+        cursor.encode,
         request.query !== undefined && isValidGtin(request.query.trim())
           ? request.query.trim()
           : undefined,
