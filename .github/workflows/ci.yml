@@ -113,6 +113,7 @@ jobs:
         run: |
           corepack pnpm --filter @handleplan/db exec vitest run --no-file-parallelism
           corepack pnpm --filter web exec vitest run lib/server/discovery-cursor.integration.test.ts --no-file-parallelism
+          corepack pnpm --filter @handleplan/worker exec vitest run src/store-traversal.integration.test.ts --no-file-parallelism
       - name: Boot the exact previous application image against the expanded schema
         if: ${{ github.event_name == 'push' }}
         env:
