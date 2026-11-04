@@ -8,6 +8,7 @@ import {
   type ExactProductPlanApiRequest,
 } from "@handleplan/domain";
 
+import { browserBasketSchema } from "../../lib/browser-basket";
 import { reviewedStrictResultTripFixture, sharedStrictResultTripFixture } from "../../test-support/strict-result-trip-fixture";
 import {
   assertHandlemodusTestApplicationOriginUnavailable,
@@ -484,9 +485,16 @@ test("saves and reopens two measured needs sharing one physical package", async 
     catalogObservedAt: new Date(now - 10 * 60_000).toISOString(),
   });
   expect(fixture.plan.assignments.map(row => row.fulfilment.packageCount)).toEqual([1, 0]);
-  const repeatedBasket = {...basket, needs: fixture.exactRequest.needs.map(need => ({
-    ...basket.needs[0]!, id: need.id, quantity: need.quantity, quantityUnit: need.quantityUnit,
-  }))};
+  const repeatedBasket = browserBasketSchema.parse({
+    ...basket,
+    matchingRules: fixture.exactRequest.needs.map(need => ({
+      ...basket.matchingRules[0], id: `${need.id}-rule`,
+    })),
+    needs: fixture.exactRequest.needs.map(need => ({
+      ...basket.needs[0], id: need.id, matchRuleId: `${need.id}-rule`,
+      quantity: need.quantity, quantityUnit: need.quantityUnit,
+    })),
+  });
   await page.addInitScript(({key, value}) => localStorage.setItem(key, JSON.stringify(value)), {key: BASKET_STORAGE_KEY, value: repeatedBasket});
   await installHandlemodusTestFixtures(request, [{path: "/api/plans", body: JSON.stringify(fixture.exactResponse)}]);
   await page.goto("/planlegg/resultat");
