@@ -459,6 +459,15 @@ function reviewedInputV2(): CreateTripSnapshotV2Input {
 }
 
 describe("TripSnapshotV2", () => {
+  it("reads serialized legacy V1 and standalone V2 fixtures without changing their complete contents", () => {
+    for (const snapshot of [createTripSnapshot(input()), createTripSnapshotV2(inputV2())]) {
+      const saved = JSON.stringify(snapshot);
+      const reopened = tripSnapshotSchema.parse(JSON.parse(saved));
+      expect(reopened).toEqual(snapshot);
+      expect(reopened.contractVersion).toBe(snapshot.contractVersion);
+      expect(reopened.plan.assignments.every(row => row.fulfilment.contractVersion === 2)).toBe(true);
+    }
+  });
   it("freezes exact purchase terms and full public offer evidence beside the immutable plan", () => {
     const snapshot = createTripSnapshotV2(inputV2());
 

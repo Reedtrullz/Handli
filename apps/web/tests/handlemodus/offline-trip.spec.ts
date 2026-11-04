@@ -8,7 +8,7 @@ import {
   type ExactProductPlanApiRequest,
 } from "@handleplan/domain";
 
-import { reviewedStrictResultTripFixture } from "../../test-support/strict-result-trip-fixture";
+import { reviewedStrictResultTripFixture, sharedStrictResultTripFixture } from "../../test-support/strict-result-trip-fixture";
 import {
   assertHandlemodusTestApplicationOriginUnavailable,
   installHandlemodusTestFixtures,
@@ -474,6 +474,37 @@ test("starts a strict trip and reloads the checklist with its application origin
 
   await page.getByRole("button", { name: "Fullfør og slett turen" }).click();
   await expect(page.getByRole("heading", { name: "Ingen aktiv handletur" })).toBeVisible();
+});
+
+test("saves and reopens two measured needs sharing one physical package", async ({page, request}) => {
+  const now = Date.now();
+  const fixture = sharedStrictResultTripFixture({
+    generatedAt: new Date(now - 60_000).toISOString(),
+    ordinaryObservedAt: new Date(now - 5 * 60_000).toISOString(),
+    catalogObservedAt: new Date(now - 10 * 60_000).toISOString(),
+  });
+  expect(fixture.plan.assignments.map(row => row.fulfilment.packageCount)).toEqual([1, 0]);
+  const repeatedBasket = {...basket, needs: fixture.exactRequest.needs.map(need => ({
+    ...basket.needs[0]!, id: need.id, quantity: need.quantity, quantityUnit: need.quantityUnit,
+  }))};
+  await page.addInitScript(({key, value}) => localStorage.setItem(key, JSON.stringify(value)), {key: BASKET_STORAGE_KEY, value: repeatedBasket});
+  await installHandlemodusTestFixtures(request, [{path: "/api/plans", body: JSON.stringify(fixture.exactResponse)}]);
+  await page.goto("/planlegg/resultat");
+  await expect(page.getByText(/Fordelt 250 ml fra felles kjøp på 1 pakker/)).toBeVisible();
+  await expect(page.getByText(/Fordelt 750 ml fra felles kjøp på 1 pakker/)).toBeVisible();
+  await expect(page.getByRole("region", {name: "Butikk 1: Extra"}).getByText("24,90 kr")).toBeVisible();
+  expect(JSON.parse((await readHandlemodusTestRequestBodies(request, "/api/plans"))[0]!)).toEqual(fixture.exactRequest);
+  await page.getByRole("button", {name: "Start Handlemodus"}).click();
+  await page.getByRole("link", {name: "Åpne Handlemodus"}).click();
+  await expect(page).toHaveURL(/\/planlegg\/handle$/);
+  await expect(page.getByText(/Forventet 8,30 kr · ordinært 8,30 kr/)).toBeVisible();
+  await expect(page.getByText(/Forventet 16,60 kr · ordinært 16,60 kr/)).toBeVisible();
+  await expect(page.getByText(/Behov 500 ml · fordelt fra felles kjøp 750 ml.*250 ml til overs/)).toBeVisible();
+  await page.getByRole("checkbox").nth(1).check();
+  await expect(page.getByRole("heading", {name: "1 av 2 varer"})).toBeVisible();
+  await page.reload({waitUntil: "domcontentloaded"});
+  await expect(page.getByRole("checkbox").nth(1)).toBeChecked();
+  await expect(page.getByText(/Forventet 16,60 kr · ordinært 16,60 kr/)).toBeVisible();
 });
 
 test("takes a mixed exact and reviewed-family plan into Handlemodus during an application-origin outage", async ({ page, request }) => {

@@ -2,7 +2,7 @@
 
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import type {
   ExactProductPlanApiProductSummary,
   MoneyOre,
@@ -12,6 +12,21 @@ import type {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { StoreAssignment } from "./store-assignment";
+import { sharedStrictResultTripFixture } from "../../test-support/strict-result-trip-fixture";
+
+it("renders both shares of one physical package including zero additional package ownership", () => {
+  const fixture = sharedStrictResultTripFixture({offer: true});
+  expect(fixture.plan.assignments.map(row => row.fulfilment.packageCount)).toEqual([1, 0]);
+  render(<StoreAssignment chain="extra" order={1} assignments={fixture.plan.assignments}
+    officialOffers={fixture.exactResponse.evidence.needs[0]!.officialOffers} products={fixture.exactResponse.products} />);
+  const rows = screen.getAllByRole("listitem");
+  expect(rows).toHaveLength(2);
+  expect(within(rows[0]!).getByText(/Fordelt 250 ml fra felles kjøp på 1 pakker · 0 ml til overs/)).toBeVisible();
+  expect(within(rows[1]!).getByText(/Fordelt 750 ml fra felles kjøp på 1 pakker · 250 ml til overs/)).toBeVisible();
+  expect(within(rows[0]!).getByText("6,64 kr")).toBeVisible();
+  expect(within(rows[1]!).getByText("13,26 kr")).toBeVisible();
+  expect(screen.getByText("19,90 kr")).toBeVisible();
+});
 
 const product: ExactProductPlanApiProductSummary = {
   brand: "TINE",

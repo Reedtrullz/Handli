@@ -151,14 +151,16 @@ export type ServerPlanningInputV2 = z.infer<typeof serverPlanningInputV2Schema>;
 export type PlanningNeedV2 = z.infer<typeof planningNeedV2Schema>;
 export type PlanningProductV2 = z.infer<typeof planningProductV2Schema>;
 
-export const checkoutCostV2Schema = z
+const checkoutAmountsSchema = z
   .object({
     ordinaryTotalOre: moneyOreSchema,
     savingOre: moneyOreSchema,
     totalOre: moneyOreSchema,
     appliedOfferId: identifierSchema.optional(),
   })
-  .strict()
+  .strict();
+
+export const checkoutCostV2Schema = checkoutAmountsSchema
   .superRefine((checkout, context) => {
     if (checkout.ordinaryTotalOre - checkout.savingOre !== checkout.totalOre) {
       context.addIssue({
@@ -185,6 +187,58 @@ export const appliedOfficialOfferReferenceSchema = z
   })
   .strict();
 
+export const checkoutGroupSchema = z.object({
+  needIds: z.array(identifierSchema).min(2).max(50),
+  fulfilment: fulfilmentV2Schema,
+  checkout: checkoutCostV2Schema,
+}).strict();
+
+export const groupedFulfilmentV3Schema = z.object({
+  contractVersion: z.literal(3),
+  needId: identifierSchema,
+  canonicalProductId: identifierSchema,
+  requested: packageMeasureSchema,
+  packageMeasure: packageMeasureSchema,
+  packageCount: nonNegativeSafeIntegerSchema,
+  purchased: packageMeasureSchema,
+  surplus: packageMeasureSchema.extend({amount: nonNegativeSafeIntegerSchema}),
+  complete: z.literal(true),
+  group: checkoutGroupSchema,
+}).strict();
+
+export type CheckoutGroup = z.infer<typeof checkoutGroupSchema>;
+
+/** Integer allocation of a shared purchase; offsets follow sorted need IDs. */
+export function allocateCheckoutGroup(group: CheckoutGroup, needId: string, requested: PlanningNeedV2["requested"], offset: number) {
+  const total = BigInt(group.fulfilment.requested.amount);
+  const start = BigInt(offset), end = start + BigInt(requested.amount);
+  const size = requested.unit === "package" ? 1n : BigInt(group.fulfilment.packageMeasure.amount);
+  const ordinaryStart = BigInt(group.checkout.ordinaryTotalOre) * start / total;
+  const ordinaryEnd = BigInt(group.checkout.ordinaryTotalOre) * end / total;
+  const ordinary = ordinaryEnd - ordinaryStart;
+  const ordinaryTotal = BigInt(group.checkout.ordinaryTotalOre);
+  const saving = ordinaryTotal === 0n ? 0n
+    : BigInt(group.checkout.savingOre) * ordinaryEnd / ordinaryTotal
+      - BigInt(group.checkout.savingOre) * ordinaryStart / ordinaryTotal;
+  const surplus = end === total ? group.fulfilment.surplus.amount : 0;
+  return {
+    fulfilment: {
+      contractVersion: 3 as const, needId,
+      canonicalProductId: group.fulfilment.canonicalProductId,
+      requested, packageMeasure: group.fulfilment.packageMeasure,
+      packageCount: Number((end + size - 1n) / size - (start + size - 1n) / size),
+      purchased: {amount: requested.amount + surplus, unit: requested.unit},
+      surplus: {amount: surplus, unit: requested.unit}, complete: true as const, group,
+    },
+    checkout: {
+      ordinaryTotalOre: moneyOreSchema.parse(Number(ordinary)),
+      savingOre: moneyOreSchema.parse(Number(saving)),
+      totalOre: moneyOreSchema.parse(Number(ordinary - saving)),
+      ...(group.checkout.appliedOfferId === undefined ? {} : {appliedOfferId: group.checkout.appliedOfferId}),
+    },
+  };
+}
+
 export const planAssignmentV2Schema = z
   .object({
     needId: identifierSchema,
@@ -194,12 +248,15 @@ export const planAssignmentV2Schema = z
     costOre: moneyOreSchema,
     observedAt: z.iso.datetime({ offset: false, precision: 3 }),
     source: sourceIdSchema,
-    fulfilment: fulfilmentV2Schema,
-    checkout: checkoutCostV2Schema,
+    fulfilment: z.union([fulfilmentV2Schema, groupedFulfilmentV3Schema]),
+    checkout: checkoutAmountsSchema,
     officialOffer: appliedOfficialOfferReferenceSchema.optional(),
   })
   .strict()
   .superRefine((assignment, context) => {
+    if (assignment.fulfilment.contractVersion === 2 && !checkoutCostV2Schema.safeParse(assignment.checkout).success) {
+      context.addIssue({code: "custom", message: "Standalone checkout must retain v2 arithmetic", path: ["checkout"]});
+    }
     if (assignment.costOre !== assignment.checkout.totalOre) {
       context.addIssue({
         code: "custom",
@@ -242,6 +299,41 @@ export const planResultV2Schema = z
   })
   .strict()
   .superRefine((plan, context) => {
+    for (const assignment of plan.assignments) {
+      const fulfilment = assignment.fulfilment;
+      if (fulfilment.contractVersion !== 3) continue;
+      const group = fulfilment.group;
+      const members = plan.assignments.filter(member => group.needIds.includes(member.needId))
+        .sort((a, b) => a.needId < b.needId ? -1 : a.needId > b.needId ? 1 : 0);
+      const amount = members.reduce((sum, member) => sum + BigInt(member.fulfilment.requested.amount), 0n);
+      if (!group.needIds.includes(assignment.needId) || members.length !== group.needIds.length || !hasUniqueStrings(group.needIds)
+        || members.some((member, i) => member.needId !== group.needIds[i])
+        || group.fulfilment.needId !== group.needIds[0]
+        || amount !== BigInt(group.fulfilment.requested.amount)) {
+        context.addIssue({code: "custom", message: "Checkout group must exactly cover its sorted needs and requested quantity", path: ["assignments"]});
+        continue;
+      }
+      let offset = 0;
+      for (const member of members) {
+        const current = member.fulfilment;
+        const expected = allocateCheckoutGroup(group, member.needId, current.requested, offset);
+        offset += current.requested.amount;
+        if (current.contractVersion !== 3 || JSON.stringify(current.group) !== JSON.stringify(group)
+          || member.canonicalProductId !== group.fulfilment.canonicalProductId
+          || member.ean !== assignment.ean || member.chain !== assignment.chain
+          || member.source !== assignment.source || member.observedAt !== assignment.observedAt
+          || JSON.stringify(member.officialOffer) !== JSON.stringify(assignment.officialOffer)
+          || plan.substitutions.includes(member.needId)
+          || current.requested.unit !== group.fulfilment.requested.unit
+          || JSON.stringify(current.packageMeasure) !== JSON.stringify(group.fulfilment.packageMeasure)
+          || current.packageCount !== expected.fulfilment.packageCount
+          || JSON.stringify(current.purchased) !== JSON.stringify(expected.fulfilment.purchased)
+          || JSON.stringify(current.surplus) !== JSON.stringify(expected.fulfilment.surplus)
+          || JSON.stringify(member.checkout) !== JSON.stringify(expected.checkout)) {
+          context.addIssue({code: "custom", message: "Grouped assignment must reproduce its shared purchase allocation and evidence", path: ["assignments"]});
+        }
+      }
+    }
     if (!hasUniqueStrings(plan.chains)) {
       context.addIssue({
         code: "custom",
@@ -310,3 +402,9 @@ export const planResultV2Schema = z
 export type CheckoutCostV2 = z.infer<typeof checkoutCostV2Schema>;
 export type PlanAssignmentV2 = z.infer<typeof planAssignmentV2Schema>;
 export type PlanResultV2 = z.infer<typeof planResultV2Schema>;
+
+export function assignmentCheckout(assignment: PlanAssignmentV2) {
+  return assignment.fulfilment.contractVersion === 3
+    ? {checkout: assignment.fulfilment.group.checkout, fulfilment: assignment.fulfilment.group.fulfilment}
+    : {checkout: assignment.checkout, fulfilment: assignment.fulfilment};
+}

@@ -266,6 +266,19 @@ function responseParses(request: ExactProductPlanApiRequest, response: unknown):
 }
 
 describe("V1 exact-product plan API contracts", () => {
+  it("rejects duplicate ordinary IDs and duplicate, forged or wrong-need assignment references", () => {
+    const evidence = validResponse.evidence;
+    const need = evidence.needs[0]!;
+    const reference = evidence.assignmentEvidence[0]!;
+    expect(responseParses(validRequest, validResponse)).toBe(true);
+    for (const changed of [
+      {...evidence, needs: [{...need, ordinaryPrices: [...need.ordinaryPrices, ...need.ordinaryPrices]}]},
+      {...evidence, assignmentEvidence: [reference, reference]},
+      {...evidence, assignmentEvidence: [{...reference, evidenceId: "price:forged"}]},
+      {...evidence, assignmentEvidence: [{...reference, needId: "need:wrong"}]},
+      {...evidence, assignmentEvidence: []},
+    ]) expect(responseParses(validRequest, {...validResponse, evidence: changed})).toBe(false);
+  });
   it("requires a bounded canonical membership selection and binds the response echo", () => {
     expect(requestParses({
       ...validRequest,
@@ -668,6 +681,10 @@ describe("V1 exact-product plan API contracts", () => {
       plans: [offerPlan],
     });
     expect(responseParses(validRequest, offerResponse)).toBe(true);
+    expect(responseParses(validRequest, {
+      ...offerResponse,
+      evidence: {...offerResponse.evidence, needs: offerResponse.evidence.needs.map(entry => ({...entry, officialOffers: [offer, offer]}))},
+    })).toBe(false);
 
     expect(responseParses(validRequest, {
       ...offerResponse,

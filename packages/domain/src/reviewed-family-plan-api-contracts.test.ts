@@ -478,6 +478,18 @@ describe("reviewed-family candidate inspection contract v2", () => {
 });
 
 describe("reviewed-family planning contract v2", () => {
+  it("rejects duplicate and forged evidence at the reviewed response boundary", () => {
+    const evidence = planResponse.evidence;
+    const reference = evidence.assignmentEvidence[0]!;
+    expect(reviewedFamilyPlanApiResponseV2SchemaFor(parsedPlanRequest).safeParse(planResponse).success).toBe(true);
+    for (const changed of [
+      {...evidence, ordinaryPrices: [...evidence.ordinaryPrices, evidence.ordinaryPrices[0]!] },
+      {...evidence, assignmentEvidence: [...evidence.assignmentEvidence, reference]},
+      {...evidence, assignmentEvidence: evidence.assignmentEvidence.slice(1)},
+      {...evidence, assignmentEvidence: [{...reference, evidenceId: "price:forged"}, ...evidence.assignmentEvidence.slice(1)]},
+      {...evidence, assignmentEvidence: [{...reference, needId: "need:wrong"}, ...evidence.assignmentEvidence.slice(1)]},
+    ]) expect(reviewedFamilyPlanApiResponseV2SchemaFor(parsedPlanRequest).safeParse({...planResponse, evidence: changed}).success).toBe(false);
+  });
   it("requires a bounded canonical membership selection and binds the response echo", () => {
     expect(reviewedFamilyPlanApiRequestV2Schema.safeParse({
       ...rawPlanRequest,

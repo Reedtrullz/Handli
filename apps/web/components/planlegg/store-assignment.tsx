@@ -55,6 +55,9 @@ function formatMeasure(measure: { amount: number; unit: "g" | "ml" | "piece" | "
 
 function fulfilmentCopy(assignment: PlanAssignmentV2): string {
   const { fulfilment } = assignment;
+  if (fulfilment.contractVersion === 3) {
+    return `Fordelt ${formatMeasure(fulfilment.purchased)} fra felles kjøp på ${fulfilment.group.fulfilment.packageCount} pakker · ${formatMeasure(fulfilment.surplus)} til overs`;
+  }
   if (fulfilment.surplus.amount > 0) {
     return `Kjøper ${formatMeasure(fulfilment.purchased)} · ${formatMeasure(fulfilment.surplus)} til overs`;
   }
