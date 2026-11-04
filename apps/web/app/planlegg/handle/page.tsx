@@ -30,6 +30,7 @@ function itemDetail(active: ActiveTripV1, needId: string): string {
   const assignment = active.snapshot.plan.assignments.find((candidate) =>
     candidate.needId === needId);
   if (assignment === undefined) return "";
+  if (assignment.fulfilment.contractVersion === 3) return "Del av felles kjøp";
   const packages = assignment.fulfilment.packageCount;
   return `${packages} ${packages === 1 ? "pakke" : "pakker"}`;
 }
@@ -90,6 +91,7 @@ function PurchaseDetail({ active, needId }: { active: ActiveTripV1; needId: stri
   }
   const purchase = active.snapshot.checklistItems.find((item) => item.needId === needId)?.purchase;
   if (purchase === undefined) return null;
+  const fulfilment = active.snapshot.plan.assignments.find(item => item.needId === needId)?.fulfilment;
 
   const offer = purchase.appliedOffer;
   const pricing = offerPricing(purchase);
@@ -99,8 +101,10 @@ function PurchaseDetail({ active, needId }: { active: ActiveTripV1; needId: stri
   return (
     <span className={styles.purchaseDetails}>
       <small>
-        Behov {formatMeasure(purchase.requested)} · kjøp {formatMeasure(purchase.purchased)}
-        {" "}({purchase.packageCount} {purchase.packageCount === 1 ? "pakke" : "pakker"} à {formatMeasure(purchase.packageMeasure)})
+        Behov {formatMeasure(purchase.requested)} · {fulfilment?.contractVersion === 3 ? "fordelt fra felles kjøp" : "kjøp"} {formatMeasure(purchase.purchased)}
+        {fulfilment?.contractVersion === 3
+          ? ` (${fulfilment.group.fulfilment.packageCount} pakker i felles kjøp)`
+          : ` (${purchase.packageCount} ${purchase.packageCount === 1 ? "pakke" : "pakker"} à ${formatMeasure(purchase.packageMeasure)})`}
         {" "}· {formatMeasure(purchase.surplus)} til overs
       </small>
       <small>

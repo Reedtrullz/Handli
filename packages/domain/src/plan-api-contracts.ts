@@ -38,7 +38,7 @@ import {
   type PlanDeltaExplanationSetV1,
 } from "./plan-delta-explanations";
 import { canonicalProjectedPlanResultsV2 } from "./frontier-v2";
-import { planResultV2Schema, type PlanResultV2 } from "./planner-v2-contracts";
+import { assignmentCheckout, planResultV2Schema, type PlanResultV2 } from "./planner-v2-contracts";
 import type { TravelRouteEvidence } from "./travel-contracts";
 
 const maxStoresSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
@@ -929,6 +929,7 @@ export function exactProductPlanApiResponseSchemaFor(
         });
         continue;
       }
+      const purchase = assignmentCheckout(assignment);
       const requestNeed = requestedNeedById.get(reference.needId);
       if (requestNeed === undefined || assignment.ean !== requestNeed.match.product.value) {
         context.addIssue({
@@ -946,8 +947,8 @@ export function exactProductPlanApiResponseSchemaFor(
           ordinary.productMatch.kind !== "exact" ||
           ordinary.productMatch.canonicalProductId !== assignment.canonicalProductId ||
           ordinary.observedAt !== assignment.observedAt ||
-          BigInt(ordinary.amountOre) * BigInt(assignment.fulfilment.packageCount)
-            !== BigInt(assignment.checkout.ordinaryTotalOre) ||
+          BigInt(ordinary.amountOre) * BigInt(purchase.fulfilment.packageCount)
+            !== BigInt(purchase.checkout.ordinaryTotalOre) ||
           assignment.checkout.appliedOfferId !== undefined
         ) {
           context.addIssue({
@@ -967,7 +968,7 @@ export function exactProductPlanApiResponseSchemaFor(
           : calculateCheckoutCost({
               canonicalProductId: assignment.canonicalProductId,
               chainId: assignment.chain,
-              packageCount: assignment.fulfilment.packageCount,
+              packageCount: purchase.fulfilment.packageCount,
               ordinaryUnitPriceOre: ordinary?.amountOre ?? 0,
               offer,
               offerContext: {
@@ -987,8 +988,8 @@ export function exactProductPlanApiResponseSchemaFor(
           ordinary.productMatch.kind !== "exact" ||
           ordinary.productMatch.canonicalProductId !== assignment.canonicalProductId ||
           ordinary.observedAt !== assignment.observedAt ||
-          BigInt(ordinary.amountOre) * BigInt(assignment.fulfilment.packageCount)
-            !== BigInt(assignment.checkout.ordinaryTotalOre) ||
+          BigInt(ordinary.amountOre) * BigInt(purchase.fulfilment.packageCount)
+            !== BigInt(purchase.checkout.ordinaryTotalOre) ||
           offer === undefined ||
           offer.chainId !== reference.chainId ||
           offer.productMatch.kind !== "exact" ||
@@ -1001,9 +1002,9 @@ export function exactProductPlanApiResponseSchemaFor(
           recalculated === undefined ||
           "state" in recalculated ||
           recalculated.appliedOfferId !== offer.id ||
-          recalculated.ordinaryTotalOre !== assignment.checkout.ordinaryTotalOre ||
-          recalculated.savingOre !== assignment.checkout.savingOre ||
-          recalculated.totalOre !== assignment.checkout.totalOre
+          recalculated.ordinaryTotalOre !== purchase.checkout.ordinaryTotalOre ||
+          recalculated.savingOre !== purchase.checkout.savingOre ||
+          recalculated.totalOre !== purchase.checkout.totalOre
         ) {
           context.addIssue({
             code: "custom",

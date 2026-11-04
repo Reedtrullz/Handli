@@ -1,6 +1,8 @@
 import type { PlanningEvidenceSnapshot } from "@handleplan/db/planning-evidence-reader";
 import {
   exactProductPlanApiResponseSchemaFor,
+  moneyOreSchema,
+  tripSnapshotV2Schema,
   reviewedFamilyPlanApiResponseV2SchemaFor,
   type ExactProductPlanApiProductSummary,
   type ExactProductPlanApiRequest,
@@ -23,6 +25,8 @@ import {
   UnknownExactProductError,
 } from "./plan-service";
 import { PriceService, type ProductPriceServiceResult } from "./price-service";
+import { createPlansHandler } from "../../app/api/plans/route";
+import { createStrictResultTripSnapshot } from "../strict-result-trip";
 
 const NOW = new Date("2026-07-15T12:00:00.000Z");
 const GTIN = "7038010000010";
@@ -131,6 +135,7 @@ function exactPriceService(
     { canonicalProductId: "product:milk", gtin: GTIN },
   ],
   options: {
+    officialOffers?: ProductPriceServiceResult["productEvidence"][number]["officialOffers"];
     geographicDirectory?: GeographicDirectoryEvidence;
     geographicScope?: GeographicScope;
   } = {},
@@ -176,7 +181,13 @@ function exactPriceService(
             read: async () => options.geographicDirectory!,
           },
         }),
-    officialOfferReader: { getMany: async () => ({ offers: [], sources: [] }) },
+    officialOfferReader: { getMany: async () => ({
+      offers: options.officialOffers ?? [],
+      sources: options.officialOffers === undefined ? [] : [{
+        contractVersion: 1, displayName: "Official offer fixture", id: "offer-source",
+        sourceClass: "offer", state: "approved",
+      }],
+    }) },
     reader: { getMany: async () => snapshot },
   });
 }
@@ -423,6 +434,61 @@ function mixedPriceResultWithMemberOffer(): ProductPriceServiceResult {
 }
 
 describe("PlanService", () => {
+  it("delivers a grouped multibuy through the real route and reparsed immutable trip", async () => {
+    const request: ExactProductPlanApiRequest = {...exactRequest, needs: [
+      {...exactRequest.needs[0]!, id: "need:a"},
+      {...exactRequest.needs[0]!, id: "need:b"},
+    ]};
+    const offer = {...memberMilkOffer, conditions: [{kind: "public" as const}], sourceId: "offer-source",
+      pricing: {kind: "multibuy" as const, quantity: 2, totalOre: moneyOreSchema.parse(3500)}};
+    const service = new PlanService({
+      catalog: catalogReader([canonicalSummary]), now: () => NOW,
+      priceService: exactPriceService([price(), {...price(), chain: "bunnpris", amountOre: moneyOreSchema.parse(2000)}], undefined, {officialOffers: [offer]}),
+    });
+    const response = await createPlansHandler(() => service)(new Request("https://handleplan.no/api/plans", {
+      method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(request),
+    }));
+    expect(response.status).toBe(200);
+    const exactResponse = exactProductPlanApiResponseSchemaFor(request).parse(await response.json());
+    expect(exactResponse.plans).toHaveLength(1);
+    const plan = exactResponse.plans[0]!;
+    expect(plan.chains).toEqual(["extra"]);
+    expect(plan.totalOre).toBe(3500);
+    expect(plan.assignments.map(row => row.fulfilment.contractVersion)).toEqual([3, 3]);
+    const trip = createStrictResultTripSnapshot({exactRequest: request, exactResponse, plan, now: NOW, tripId: "trip:real-grouped-route"});
+    const reparsed = tripSnapshotV2Schema.parse(JSON.parse(JSON.stringify(trip)));
+    expect(reparsed).toEqual(trip);
+    expect(reparsed.checklistItems.map(row => row.purchase)).toMatchObject([
+      {requested: {amount: 1, unit: "package"}, purchased: {amount: 1, unit: "package"}, packageCount: 1, ordinaryTotalOre: 2190, savedOre: 440, checkoutTotalOre: 1750},
+      {requested: {amount: 1, unit: "package"}, purchased: {amount: 1, unit: "package"}, packageCount: 1, ordinaryTotalOre: 2190, savedOre: 440, checkoutTotalOre: 1750},
+    ]);
+  });
+
+  it("keeps reviewed-family selections separate beside grouped exact needs through route and trip", async () => {
+    const request: ReviewedFamilyPlanApiRequestV2 = {...mixedRequest, needs: [
+      mixedRequest.needs[0]!, {...mixedRequest.needs[0]!, id: "need:coffee:second"},
+      mixedRequest.needs[1]!, {...mixedRequest.needs[1]!, id: "need:milk:second"},
+    ]};
+    const service = new PlanService({catalog: catalogReader([mixedExactSummary]),
+      familyCandidateService: {inspectAt: async () => inspection}, now: () => NOW,
+      priceService: {readExact: vi.fn(), readProducts: async () => mixedPriceResult()},
+    });
+    const response = await createPlansHandler(() => service)(new Request("https://handleplan.no/api/plans", {
+      method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(request),
+    }));
+    expect(response.status).toBe(200);
+    const reviewedResponse = reviewedFamilyPlanApiResponseV2SchemaFor(request).parse(await response.json());
+    expect(reviewedResponse.plans).toHaveLength(1);
+    const plan = reviewedResponse.plans[0]!;
+    expect(plan.totalOre).toBe(15000);
+    expect(plan.assignments.map(row => row.fulfilment.contractVersion)).toEqual([3, 3, 2, 2]);
+    expect(plan.substitutions).toEqual(["need:milk", "need:milk:second"]);
+    const trip = createStrictResultTripSnapshot({kind: "reviewed-family", reviewedRequest: request, reviewedResponse, plan, now: NOW, tripId: "trip:mixed-grouped-route"});
+    expect(tripSnapshotV2Schema.parse(JSON.parse(JSON.stringify(trip)))).toEqual(trip);
+    expect(trip.reviewedFamilyEvidence?.needMatches.map(row => row.needId)).toEqual(["need:coffee", "need:coffee:second", "need:milk", "need:milk:second"]);
+    expect(trip.checklistItems.map(row => [row.purchase.packageCount, row.purchase.checkoutTotalOre])).toEqual([[1, 5000], [1, 5000], [1, 2500], [1, 2500]]);
+  });
+
   it("exposes only the persisted-evidence exact planning operation", () => {
     const service = new PlanService({
       catalog: catalogReader([canonicalSummary]),

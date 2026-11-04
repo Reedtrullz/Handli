@@ -1,4 +1,5 @@
 import {
+  assignmentCheckout,
   canonicalTimestampSchema,
   createTripSnapshotV2,
   EXACT_PRODUCT_OFFER_MAX_AGE_MS,
@@ -132,6 +133,16 @@ function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function canonicalEvidenceRows<T extends { id: string }>(rows: readonly T[]): T[] {
+  const byId = new Map<string, T>();
+  for (const row of rows) {
+    const existing = byId.get(row.id);
+    if (existing !== undefined && !sameJson(existing, row)) invalid();
+    byId.set(row.id, row);
+  }
+  return [...byId.values()];
+}
+
 function exactTripMaterial(
   input: Extract<StrictResultTripInput, { kind?: "exact-product" }>,
   plan: PlanResultV2,
@@ -162,8 +173,9 @@ function exactTripMaterial(
     marketContext: response.data.marketContext,
     material: {
       assignmentEvidence: response.data.evidence.assignmentEvidence,
-      officialOffers: response.data.evidence.needs.flatMap(({ officialOffers }) => officialOffers),
-      ordinaryPrices: response.data.evidence.needs.flatMap(({ ordinaryPrices }) => ordinaryPrices),
+      // Validated per-need envelopes may reference the same canonical row.
+      officialOffers: canonicalEvidenceRows(response.data.evidence.needs.flatMap(({ officialOffers }) => officialOffers)),
+      ordinaryPrices: canonicalEvidenceRows(response.data.evidence.needs.flatMap(({ ordinaryPrices }) => ordinaryPrices)),
       products: response.data.products,
     },
   };
@@ -353,6 +365,7 @@ export function createStrictResultTripSnapshot(
   }
 
   for (const assignment of plan.assignments) {
+    const purchase = assignmentCheckout(assignment);
     const references = material.assignmentEvidence.filter((reference) =>
       reference.planId === plan.id
       && reference.needId === assignment.needId
@@ -370,8 +383,8 @@ export function createStrictResultTripSnapshot(
       || ordinary.observedAt !== assignment.observedAt
       || ordinary.productMatch.kind !== "exact"
       || ordinary.productMatch.canonicalProductId !== assignment.canonicalProductId
-      || BigInt(ordinary.amountOre) * BigInt(assignment.fulfilment.packageCount)
-        !== BigInt(assignment.checkout.ordinaryTotalOre)
+      || BigInt(ordinary.amountOre) * BigInt(purchase.fulfilment.packageCount)
+        !== BigInt(purchase.checkout.ordinaryTotalOre)
     ) invalid();
 
     const ordinaryObservedAtMs = timestamp(ordinary.observedAt);

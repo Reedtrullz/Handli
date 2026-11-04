@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveExactProductPlanDeltaExplanationsV1,
   deriveReviewedFamilyPlanDeltaExplanationsV1,
+  exactProductPlanApiResponseSchemaFor,
   moneyOreSchema,
   travelPlanApiResponseSchemaFor,
   tripSnapshotV2Schema,
@@ -9,6 +10,7 @@ import {
 
 import {
   reviewedStrictResultTripFixture,
+  sharedStrictResultTripFixture,
   strictResultTripFixture,
 } from "../test-support/strict-result-trip-fixture";
 import {
@@ -135,6 +137,68 @@ function reviewedTravelBinding(
 }
 
 describe("strict result trip derivation", () => {
+  it("projects identical shared rows once without relaxing strict evidence guards", () => {
+    const fixture = sharedStrictResultTripFixture({offer: true});
+    const snapshot = create(fixture);
+    expect(new Set(snapshot.checklistItems.map(item => item.purchase.ordinaryPrice.id)).size).toBe(1);
+    expect(new Set(snapshot.checklistItems.map(item => item.purchase.appliedOffer?.id)).size).toBe(1);
+    expect(tripSnapshotV2Schema.parse(JSON.parse(JSON.stringify(snapshot)))).toEqual(snapshot);
+    expect(snapshot.plan).toEqual(fixture.plan);
+    expect(snapshot.checklistItems.map(item => item.purchase)).toMatchObject([
+      {packageCount: 1, requested: {amount: 250, unit: "ml"}, purchased: {amount: 250, unit: "ml"}, surplus: {amount: 0, unit: "ml"}, ordinaryTotalOre: 830, savedOre: 166, checkoutTotalOre: 664},
+      {packageCount: 0, requested: {amount: 500, unit: "ml"}, purchased: {amount: 750, unit: "ml"}, surplus: {amount: 250, unit: "ml"}, ordinaryTotalOre: 1660, savedOre: 334, checkoutTotalOre: 1326},
+    ]);
+  });
+
+  it("rejects duplicate, missing, forged and wrong-need assignment evidence", () => {
+    const fixture = sharedStrictResultTripFixture({offer: true});
+    const evidence = fixture.exactResponse.evidence;
+    const first = evidence.needs[0]!;
+    const reference = evidence.assignmentEvidence[0]!;
+    const invalid = [
+      {...evidence, needs: [{...first, ordinaryPrices: [...first.ordinaryPrices, ...first.ordinaryPrices]}, evidence.needs[1]!] },
+      {...evidence, needs: [{...first, officialOffers: [...first.officialOffers, ...first.officialOffers]}, evidence.needs[1]!] },
+      {...evidence, assignmentEvidence: [...evidence.assignmentEvidence, reference]},
+      {...evidence, assignmentEvidence: evidence.assignmentEvidence.slice(1)},
+      {...evidence, assignmentEvidence: [{...reference, evidenceId: "price:forged"}, evidence.assignmentEvidence[1]!] },
+      {...evidence, assignmentEvidence: [{...reference, needId: "need:wrong"}, evidence.assignmentEvidence[1]!] },
+      {...evidence, needs: [{...first, ordinaryPrices: []}, evidence.needs[1]!] },
+    ];
+    for (const changed of invalid) {
+      const exactResponse = {...fixture.exactResponse, evidence: changed};
+      expect(exactProductPlanApiResponseSchemaFor(fixture.exactRequest).safeParse(exactResponse).success).toBe(false);
+      expect(() => create({...fixture, exactResponse})).toThrow(expectCode("INVALID_EVIDENCE"));
+    }
+  });
+
+  it("rejects same-ID contradictory ordinary and offer rows across need envelopes", () => {
+    const fixture = sharedStrictResultTripFixture({offer: true});
+    const evidence = fixture.exactResponse.evidence;
+    const second = evidence.needs[1]!;
+    const price = second.ordinaryPrices[0]!;
+    const offer = second.officialOffers[0]!;
+    const changedRows = [
+      {...second, ordinaryPrices: [{...price, amountOre: moneyOreSchema.parse(2491)}]},
+      {...second, ordinaryPrices: [{...price, sourceId: "catalog-source"}]},
+      {...second, ordinaryPrices: [{...price, observedAt: "2026-07-16T10:59:00.000Z"}]},
+      {...second, ordinaryPrices: [{...price, productMatch: {kind: "exact" as const, canonicalProductId: "product:other"}}]},
+      {...second, officialOffers: [{...offer, sourceRecordId: "record:contradictory"}]},
+      {...second, officialOffers: [{...offer, sourceId: "catalog-source"}]},
+      {...second, officialOffers: [{...offer, capturedAt: "2026-07-16T10:59:00.000Z"}]},
+      {...second, officialOffers: [{...offer, productMatch: {kind: "exact" as const, canonicalProductId: "product:other"}}]},
+      {...second, officialOffers: [{...offer, pricing: {kind: "unit" as const, unitPriceOre: moneyOreSchema.parse(1989)}}]},
+    ];
+    for (const row of changedRows) {
+      const exactResponse = {...fixture.exactResponse, evidence: {...evidence, needs: [evidence.needs[0]!, row]}};
+      expect(exactProductPlanApiResponseSchemaFor(fixture.exactRequest).safeParse(exactResponse).success).toBe(false);
+      expect(() => create({...fixture, exactResponse})).toThrow(expectCode("INVALID_EVIDENCE"));
+    }
+    const conflictingProvenance = {...fixture.exactResponse, evidence: {...evidence, needs: [
+      evidence.needs[0]!, {...second, ordinaryPrices: [{...price, sourceRecordId: "record:contradictory"}]},
+    ]}};
+    expect(() => create({...fixture, exactResponse: conflictingProvenance})).toThrow(expectCode("INVALID_EVIDENCE"));
+  });
+
   it("uses only selected canonical data and the earliest ordinary/catalog validity", () => {
     const snapshot = create();
 

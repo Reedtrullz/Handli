@@ -33,7 +33,7 @@ import {
   exactProductPlanApiAssignmentEvidenceSchema,
   exactProductPlanApiProductSummarySchema,
 } from "./plan-api-contracts";
-import { planResultV2Schema } from "./planner-v2-contracts";
+import { assignmentCheckout, planResultV2Schema } from "./planner-v2-contracts";
 import {
   reviewedFamilyNeedMatchV2Schema,
   reviewedFamilyPlanApiRequestV2Schema,
@@ -120,7 +120,7 @@ export const tripPurchaseTermsV2Schema = z
   .object({
     requested: packageMeasureSchema,
     packageMeasure: packageMeasureSchema,
-    packageCount: positiveSafeIntegerSchema,
+    packageCount: nonNegativeSafeIntegerSchema,
     purchased: packageMeasureSchema,
     surplus: nonNegativeMeasureSchema,
     ordinaryTotalOre: moneyOreSchema,
@@ -757,6 +757,7 @@ export const tripSnapshotV2Schema = tripSnapshotV2ObjectSchema
       if (assignment === undefined || product === undefined) continue;
 
       const purchase = item.purchase;
+      const terms = assignmentCheckout(assignment);
       if (
         !sameMeasure(purchase.requested, assignment.fulfilment.requested)
         || !sameMeasure(purchase.packageMeasure, assignment.fulfilment.packageMeasure)
@@ -811,7 +812,7 @@ export const tripSnapshotV2Schema = tripSnapshotV2ObjectSchema
         maxAgeMs: CURRENT_PRICE_MAX_AGE_MS,
         now: new Date(snapshot.evaluatedAt),
       });
-      const ordinaryTotal = BigInt(ordinary.amountOre) * BigInt(purchase.packageCount);
+      const ordinaryTotal = BigInt(ordinary.amountOre) * BigInt(terms.fulfilment.packageCount);
       if (
         !ordinaryEligibility.eligible
         || ordinary.priceKind !== "ordinary"
@@ -820,7 +821,7 @@ export const tripSnapshotV2Schema = tripSnapshotV2ObjectSchema
         || ordinary.observedAt !== assignment.observedAt
         || ordinary.productMatch.kind !== "exact"
         || ordinary.productMatch.canonicalProductId !== assignment.canonicalProductId
-        || ordinaryTotal !== BigInt(assignment.checkout.ordinaryTotalOre)
+        || ordinaryTotal !== BigInt(terms.checkout.ordinaryTotalOre)
       ) {
         addPurchaseIssue(
           context,
@@ -881,14 +882,14 @@ export const tripSnapshotV2Schema = tripSnapshotV2ObjectSchema
               now: new Date(snapshot.evaluatedAt),
             },
             ordinaryUnitPriceOre: ordinary.amountOre,
-            packageCount: assignment.fulfilment.packageCount,
+            packageCount: terms.fulfilment.packageCount,
           });
       if (
         "state" in checkout
         || checkout.appliedOfferId !== expectedOfferId
-        || checkout.ordinaryTotalOre !== assignment.checkout.ordinaryTotalOre
-        || checkout.totalOre !== assignment.checkout.totalOre
-        || checkout.savingOre !== assignment.checkout.savingOre
+        || checkout.ordinaryTotalOre !== terms.checkout.ordinaryTotalOre
+        || checkout.totalOre !== terms.checkout.totalOre
+        || checkout.savingOre !== terms.checkout.savingOre
         || offer.id !== offerReference.id
         || offer.sourceId !== offerReference.sourceId
         || offer.sourceRecordId !== offerReference.sourceRecordId

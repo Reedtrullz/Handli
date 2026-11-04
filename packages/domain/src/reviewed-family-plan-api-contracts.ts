@@ -46,7 +46,7 @@ import {
   exactProductPlanApiProductSummarySchema,
 } from "./plan-api-contracts";
 import { canonicalProjectedPlanResultsV2 } from "./frontier-v2";
-import { planResultV2Schema, type PlanResultV2 } from "./planner-v2-contracts";
+import { assignmentCheckout, planResultV2Schema, type PlanResultV2 } from "./planner-v2-contracts";
 import type { TravelRouteEvidence } from "./travel-contracts";
 
 export const REVIEWED_FAMILY_PLAN_API_CONTRACT_VERSION = 2 as const;
@@ -1392,6 +1392,7 @@ export function reviewedFamilyPlanApiResponseV2SchemaFor(
     for (const [key, reference] of evidenceByAssignmentKey) {
       const assignment = assignmentByKey.get(key);
       const ordinary = ordinaryById.get(reference.evidenceId);
+      const purchase = assignment === undefined ? undefined : assignmentCheckout(assignment);
       if (
         assignment === undefined
         || ordinary === undefined
@@ -1400,8 +1401,9 @@ export function reviewedFamilyPlanApiResponseV2SchemaFor(
         || ordinary.productMatch.kind !== "exact"
         || ordinary.productMatch.canonicalProductId !== assignment.canonicalProductId
         || ordinary.observedAt !== assignment.observedAt
-        || BigInt(ordinary.amountOre) * BigInt(assignment.fulfilment.packageCount)
-          !== BigInt(assignment.checkout.ordinaryTotalOre)
+        || purchase === undefined
+        || BigInt(ordinary.amountOre) * BigInt(purchase.fulfilment.packageCount)
+          !== BigInt(purchase.checkout.ordinaryTotalOre)
       ) {
         context.addIssue({
           code: "custom",
@@ -1431,7 +1433,7 @@ export function reviewedFamilyPlanApiResponseV2SchemaFor(
         : calculateCheckoutCost({
             canonicalProductId: assignment.canonicalProductId,
             chainId: assignment.chain,
-            packageCount: assignment.fulfilment.packageCount,
+            packageCount: purchase.fulfilment.packageCount,
             ordinaryUnitPriceOre: ordinary.amountOre,
             offer,
             offerContext: {
@@ -1456,9 +1458,9 @@ export function reviewedFamilyPlanApiResponseV2SchemaFor(
         || offer.capturedAt !== assignment.officialOffer?.capturedAt
         || recalculated === undefined
         || "state" in recalculated
-        || recalculated.ordinaryTotalOre !== assignment.checkout.ordinaryTotalOre
-        || recalculated.savingOre !== assignment.checkout.savingOre
-        || recalculated.totalOre !== assignment.checkout.totalOre
+        || recalculated.ordinaryTotalOre !== purchase.checkout.ordinaryTotalOre
+        || recalculated.savingOre !== purchase.checkout.savingOre
+        || recalculated.totalOre !== purchase.checkout.totalOre
       ) {
         context.addIssue({
           code: "custom",

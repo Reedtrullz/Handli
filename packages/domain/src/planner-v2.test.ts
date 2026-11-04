@@ -180,10 +180,17 @@ describe("server planning v2 contracts", () => {
 
 describe("calculatePlansV2", () => {
   it("fulfils a requested piece count with whole multipacks and exposes all quantity facts", () => {
-    const [plan] = calculatePlansV2(input(), NOW);
+    const plans = calculatePlansV2(input(), NOW);
+    const [plan] = plans;
 
-    expect(plan?.assignments).toEqual([
-      {
+    expect(plans).toEqual([{
+      id: "plan-v2-zk2ja0xkmxtw",
+      chains: ["extra"],
+      coverage: 1,
+      freshness: {"need:coffee": "eligible"},
+      substitutions: [],
+      totalOre: 12_000,
+      assignments: [{
         needId: "need:coffee",
         canonicalProductId: "product:coffee",
         ean: EAN,
@@ -207,8 +214,8 @@ describe("calculatePlansV2", () => {
           savingOre: 0,
           totalOre: 12_000,
         },
-      },
-    ]);
+      }],
+    }]);
     expect(plan?.totalOre).toBe(12_000);
   });
 

@@ -15,6 +15,7 @@ import { matchProducts } from "./matching";
 import type { OfficialOffer, OfficialOfferEvaluationContext } from "./offers";
 import {
   planResultV2Schema,
+  allocateCheckoutGroup,
   serverPlanningInputV2Schema,
   type CheckoutCostV2,
   type PlanAssignmentV2,
@@ -277,7 +278,23 @@ function planForSubset(
       : { geographicDirectory: input.offerEligibility.geographicDirectory }),
   };
 
+  const needGroups = new Map<string, PlanningNeedV2[]>();
   for (const need of input.needs) {
+    const rule = rulesById.get(need.matchRuleId);
+    const key = rule?.mode === "exact"
+      ? `exact:${rule.exactEan}:${need.requested.unit}` : `need:${need.id}`;
+    const members = needGroups.get(key) ?? [];
+    members.push(need);
+    needGroups.set(key, members);
+  }
+
+  for (const members of needGroups.values()) {
+    members.sort((a, b) => compareText(a.id, b.id));
+    const first = members[0];
+    if (first === undefined) return undefined;
+    const amount = members.reduce((sum, member) => sum + BigInt(member.requested.amount), 0n);
+    if (amount > BigInt(Number.MAX_SAFE_INTEGER)) return undefined;
+    const need = {...first, requested: {...first.requested, amount: Number(amount)}};
     const rule = rulesById.get(need.matchRuleId);
     if (rule === undefined) return undefined;
     const matchingEans = new Set(
@@ -330,9 +347,28 @@ function planForSubset(
 
     const selected = candidates.sort(compareCandidates)[0];
     if (selected === undefined) return undefined;
-    assignments.push(selected.assignment);
-    freshness[need.id] = "eligible";
-    if (rule.mode !== "exact") substitutions.push(need.id);
+    if (members.length === 1) {
+      assignments.push(selected.assignment);
+    } else {
+      const group = {
+        needIds: members.map(member => member.id),
+        fulfilment: selected.assignment.fulfilment,
+        checkout: selected.assignment.checkout,
+      };
+      // Candidate construction always produces a standalone aggregate fulfilment.
+      if (group.fulfilment.contractVersion !== 2) return undefined;
+      const checkoutGroup = {...group, fulfilment: group.fulfilment};
+      let offset = 0;
+      for (const member of members) {
+        const allocation = allocateCheckoutGroup(checkoutGroup, member.id, member.requested, offset);
+        assignments.push({...selected.assignment, needId: member.id, costOre: allocation.checkout.totalOre, ...allocation});
+        offset += member.requested.amount;
+      }
+    }
+    for (const member of members) {
+      freshness[member.id] = "eligible";
+      if (rule.mode !== "exact") substitutions.push(member.id);
+    }
   }
 
   assignments.sort((left, right) => compareText(left.needId, right.needId));

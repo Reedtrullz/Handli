@@ -12,6 +12,7 @@ import type {
 } from "../../../lib/trip-snapshot-repository";
 import {
   reviewedStrictResultTripFixture,
+  sharedStrictResultTripFixture,
   strictResultTripFixture,
 } from "../../../test-support/strict-result-trip-fixture";
 import {
@@ -63,6 +64,22 @@ function activeTrip(completedItemIds: string[] = []): ActiveTripV1 {
 }
 
 describe("Handlemodus", () => {
+  it("reopens a shared one-package trip with both allocated checkout shares", async () => {
+    const fixture = sharedStrictResultTripFixture({offer: true});
+    const snapshot = createStrictResultTripSnapshot({...fixture, now: new Date("2026-07-16T13:00:00.000Z"), tripId: "trip:shared-handle"});
+    const repository = repositoryFor({completedItemIds: [], snapshot});
+    const view = render(<HandleMode repository={repository} now={() => new Date("2026-07-16T13:00:00.000Z")} />);
+    const store = await screen.findByRole("region", {name: "Extra"});
+    expect(within(store).getByText(/Behov 250 ml · fordelt fra felles kjøp 250 ml \(1 pakker i felles kjøp\).*0 ml til overs/)).toBeVisible();
+    expect(within(store).getByText(/Behov 500 ml · fordelt fra felles kjøp 750 ml \(1 pakker i felles kjøp\).*250 ml til overs/)).toBeVisible();
+    expect(within(store).getByText(/Forventet 6,64 kr · ordinært 8,30 kr · 1,66 kr spart/)).toBeVisible();
+    expect(within(store).getByText(/Forventet 13,26 kr · ordinært 16,60 kr · 3,34 kr spart/)).toBeVisible();
+    await userEvent.setup().click(within(store).getAllByRole("checkbox")[1]!);
+    await waitFor(() => expect(repository.setCompleted).toHaveBeenCalled());
+    view.unmount();
+    render(<HandleMode repository={repository} />);
+    expect((await screen.findAllByRole("checkbox"))[1]).toBeChecked();
+  });
   it("groups the immutable checklist by store and persists accessible progress", async () => {
     const user = userEvent.setup();
     const repository = repositoryFor(activeTrip());

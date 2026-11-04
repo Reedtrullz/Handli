@@ -1,4 +1,5 @@
 import {
+  calculatePlansV2,
   deriveExactProductPlanDeltaExplanationsV1,
   deriveReviewedFamilyPlanDeltaExplanationsV1,
   exactProductPlanApiEvidenceEnvelopeSchema,
@@ -9,6 +10,7 @@ import {
   reviewedFamilyPlanApiEvidenceEnvelopeV2Schema,
   reviewedFamilyPlanApiResponseV2SchemaFor,
   planResultV2Schema,
+  sourceNeutralPriceObservationSchema,
   type ExactProductPlanApiRequest,
   type ExactProductPlanApiResponse,
   type GeographicDirectoryRegionAttestationV1,
@@ -278,6 +280,43 @@ export function strictResultTripFixture(
     exactResponse: response,
     plan,
   };
+}
+
+/** Two measured needs share one physical milk package and its public evidence. */
+export function sharedStrictResultTripFixture(
+  options: StrictResultTripFixtureOptions = {},
+): StrictResultTripFixture {
+  const base = strictResultTripFixture(options);
+  const exactRequest = exactProductPlanApiRequestSchema.parse({
+    ...base.exactRequest,
+    needs: [250, 500].map((quantity, index) => ({
+      ...base.exactRequest.needs[0]!,
+      id: index === 0 ? "need:milk" : "need:milk:second",
+      quantity,
+      quantityUnit: "ml",
+    })),
+  });
+  const rows = base.exactResponse.evidence.needs[0]!;
+  const plan = calculatePlansV2({
+    contractVersion: 2,
+    maxStores: 3,
+    needs: exactRequest.needs.map(need => ({id: need.id, query: "milk", requested: {amount: need.quantity, unit: "ml" as const}, matchRuleId: "rule:milk", required: true})),
+    matchingRules: [{id: "rule:milk", mode: "exact", exactEan: GTIN, userApproved: true, explanation: "Chosen milk"}],
+    products: [{canonicalProductId: "product:milk", ean: GTIN, name: "Milk", packageMeasure: {amount: 1000, unit: "ml"}}],
+    ordinaryPrices: rows.ordinaryPrices.map(row => sourceNeutralPriceObservationSchema.parse({ean: GTIN, chain: row.chainId, amountOre: row.amountOre, observedAt: row.observedAt, source: row.sourceId})),
+    officialOffers: rows.officialOffers,
+    offerEligibility: {maxEvidenceAgeMs: 14 * 86400000, location: {countryCode: "NO"}, channel: "in-store", enabledSourceIds: base.exactResponse.evidence.sources.map(row => row.id), enabledMembershipProgramIds: exactRequest.enabledMembershipProgramIds},
+  }, new Date(base.exactResponse.generatedAt))[0];
+  if (plan === undefined) throw new Error("Missing shared fixture plan");
+  const evidence = exactProductPlanApiEvidenceEnvelopeSchema.parse({
+    ...base.exactResponse.evidence,
+    needs: exactRequest.needs.map(need => ({...rows, needId: need.id})),
+    assignmentEvidence: exactRequest.needs.map(need => ({...base.exactResponse.evidence.assignmentEvidence[0]!, needId: need.id, planId: plan.id})),
+  });
+  const planDeltaExplanations = deriveExactProductPlanDeltaExplanationsV1({evidence, generatedAt: base.exactResponse.generatedAt, marketContext: exactRequest.marketContext, plans: [plan]});
+  if (planDeltaExplanations === undefined) throw new Error("Invalid shared fixture explanations");
+  const exactResponse = exactProductPlanApiResponseSchemaFor(exactRequest).parse({...base.exactResponse, evidence, plans: [plan], planDeltaExplanations});
+  return {exactRequest, exactResponse, plan};
 }
 
 const REVIEWED_GTIN = "7038010000027";
