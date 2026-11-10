@@ -105,10 +105,16 @@ if (certificate.status !== 0) {
   throw new Error(`could not create Handlemodus test certificate: ${detail}`);
 }
 
+const standaloneRouteCache = path.join(standaloneRoot, ".next", "server", "route-cache");
+
 let cleaned = false;
 function cleanup() {
   if (cleaned) return;
   cleaned = true;
+  // Next 16.4+ may populate route-cache inside the sealed standalone tree while
+  // Handlemodus serves pages. Drop that runtime cache so later host seal checks
+  // still see the build artifact (and so the digest exclusion stays a belt).
+  rmSync(standaloneRouteCache, { force: true, recursive: true });
   rmSync(tlsDirectory, { force: true, recursive: true });
 }
 process.once("exit", cleanup);

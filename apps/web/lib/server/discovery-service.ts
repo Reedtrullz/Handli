@@ -564,6 +564,7 @@ export class DiscoveryService implements DiscoveryServiceContract {
       const [catalogPage, categories] = await Promise.all([
         this.dependencies.catalog.readDiscoveryPage({
           ...(request.categoryId === undefined ? {} : { categoryId: request.categoryId }),
+          ...(request.chain === "all" ? {} : { chain: request.chain }),
           ...(decodedCursor === undefined ? {} : { cursor: decodedCursor.position }),
           limit: PUBLIC_DISCOVERY_CATALOG_SCAN_MAX,
           ...(request.query === undefined ? {} : { query: request.query }),

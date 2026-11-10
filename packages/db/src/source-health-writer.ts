@@ -1,5 +1,6 @@
 export const WORKER_SOURCE_HEALTH_JOB_KINDS = [
   "catalog-refresh",
+  "store-catalog-price-refresh",
   "benchmark-price-refresh",
   "physical-store-sync",
   "historical-observation-collection",
@@ -117,6 +118,7 @@ export function deriveWorkerSourceHealthSnapshot(
   const madeProgress = (result.status === "succeeded" || result.status === "partial")
     && result.counts.persisted > 0;
   const discoversSourceEvidence = result.jobKind === "catalog-refresh"
+    || result.jobKind === "store-catalog-price-refresh"
     || result.jobKind === "official-offer-ingestion";
   const completedAt = new Date(recordedAt);
 

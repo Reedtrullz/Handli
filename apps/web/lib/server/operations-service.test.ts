@@ -63,6 +63,7 @@ const evidence: OperationsEvidenceSnapshotV1 = {
       "official-offer-fetch": unknownWorkerJob,
       "official-offer-ingestion": unknownWorkerJob,
       "official-offer-lifecycle-reconcile": unknownWorkerJob,
+      "store-catalog-price-refresh": unknownWorkerJob,
       "physical-store-sync": unknownWorkerJob,
     },
   }],

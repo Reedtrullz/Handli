@@ -69,6 +69,16 @@ export const KASSALAPP_PRODUCTION_SCHEDULES: readonly WorkerScheduleDefinition[]
     timeoutMs: 12 * 60 * 1_000,
   }),
   Object.freeze({
+    // Store-scoped catalog+price walks keep REMA 1000, Coop Extra, and
+    // Europris inside the discovery freshness gates. Twelve pages per chain
+    // per run cover the upstream catalog on a rolling window.
+    anchorAt: "2026-09-21T00:15:00.000Z",
+    intervalMs: 6 * 60 * 60 * 1_000,
+    kind: "store-catalog-price-refresh",
+    sourceId: KASSALAPP_SOURCE_ID,
+    timeoutMs: 10 * 60 * 1_000,
+  }),
+  Object.freeze({
     anchorAt: "2026-08-14T00:40:00.000Z",
     intervalMs: 6 * 60 * 60 * 1_000,
     kind: "benchmark-price-refresh",
@@ -229,6 +239,7 @@ const PERMISSION_SCOPE_BY_JOB: Readonly<Record<KassalappWorkerJobKind, string>> 
   "catalog-refresh": "catalog",
   "historical-observation-collection": "priceHistory",
   "physical-store-sync": "physicalStore",
+  "store-catalog-price-refresh": "catalog",
 };
 
 const JOB_KIND_BY_REQUEST_SCOPE: Readonly<

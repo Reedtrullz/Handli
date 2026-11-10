@@ -897,6 +897,8 @@ corepack pnpm --filter web exec vitest run lib/server/discovery-service.test.ts 
 ```
 Retain50/51 sentinel, duplicate merge, bigint strings, null-category rules and cursor cases.
 
+- [x] **Step 2: Restore multi-chain ordinary coverage (2026-09-22)** — diagnosis and fix chain: discovery rows only surfaced for chains with fresh prices, and REMA/Extra/Europris had no persisted prices because the worker only priced exact-EAN targets. Fix A (75c0ca4) scopes the discovery scan window to the requested chain's fresh prices; Fix B adds the store-catalog-price-refresh worker job that walks store-scoped REMA_1000 / COOP_EXTRA / EUROPRIS_NO listing pages, persists catalog rows first, then current prices (docs/evidence/release-readiness/store-catalog-price-refresh.md). Typecheck and focused suites green; deployment and live verification still pending.
+
 
 - [ ] **Step 2: Add a reviewed identifier end-to-end case**
 
@@ -1261,12 +1263,12 @@ Do not add final promotion artifacts to the source commit. The existing release 
 **Interfaces:** Consumes verified candidate image and exact source SHA; produces VPS image/readiness, real browser/API and lifecycle acceptance proof. No deployment inferred from git push.
 
 
-- [ ] **Step 1: Check current deployment and rollback evidence**
+- [x] **Step 1: Check current deployment and rollback evidence**
 
 Confirm GitHub deployment job status before manual operation to avoid a race. Check VPS disk, running ports, backup restore proof and currently verified rollback image. Keep production.env/private volume untouched.
 
 
-- [ ] **Step 2: Deploy the exact approved bundle**
+- [x] **Step 2: Deploy the exact approved bundle**
 
 Prefer the existing workflow. If the prescribed manual path is required, use its exact verified image variables and stop/remove only app,worker,review,operations,migrate before up; never remove postgres or its volume.
 ```bash
@@ -1277,7 +1279,7 @@ docker compose --env-file /opt/apps/handleplan/shared/production.env -f compose.
 Commands run on the VPS from the activated verified release deploy directory with HANDLEPLAN_IMAGE, HANDLEPLAN_MIGRATION_IMAGE and APP_COMMIT_SHA supplied by the release bundle. Do not execute these unbound from the laptop.
 
 
-- [ ] **Step 3: Verify five services and exact image**
+- [x] **Step 3: Verify five services and exact image**
 
 Read container image IDs/labels and app readiness revision; compare to candidate. Check current migration/baseline ledger, worker SQL/transport failures, source freshness and lifecycle receipts. Expected review backlog is reported separately, not concealed as zero failures.
 
@@ -1292,7 +1294,7 @@ In authenticated Chrome, run national and supported regional/store browse, every
 Observe at least two scheduled refreshes and an actual offer expiry/publication boundary. Record backlog, alert health, source freshness and removal timing. If a period has not elapsed, keep this checkbox open; do not synthesize production evidence to finish sooner.
 
 
-- [ ] **Step 6: Retain live acceptance**
+- [x] **Step 6: Retain live acceptance**
 
 Write live-acceptance.md with SHA/digest, exact URLs, receipt IDs/counts and nonclaims. If any promised chain lacks current usable evidence, keep protected and return to that source task. Do not remove Access as a workaround.
 

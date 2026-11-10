@@ -4,6 +4,7 @@ export const WORKER_CONTRACT_VERSION = 1 as const;
 export const KASSALAPP_WORKER_JOB_KINDS = [
   "catalog-refresh",
   "benchmark-price-refresh",
+  "store-catalog-price-refresh",
   "physical-store-sync",
   "historical-observation-collection",
 ] as const;

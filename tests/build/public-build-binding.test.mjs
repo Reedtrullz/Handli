@@ -286,6 +286,51 @@ test("generated declarations and ignored host metadata are excluded but every sh
   }
 });
 
+test("Next request-time route-cache under standalone does not invalidate the sealed binding", () => {
+  const { root } = fixtureRepository();
+  try {
+    // Parent server dir exists in real standalone builds; create it before seal so
+    // only the runtime route-cache leaves are new after requests.
+    mkdirSync(
+      path.join(root, "apps/web/.next/standalone/apps/web/.next/server"),
+      { recursive: true },
+    );
+    const written = recordBinding(root);
+    write(
+      root,
+      "apps/web/.next/standalone/apps/web/.next/server/route-cache/APP_PAGE/deadbeef/$/index.html",
+      "<html>runtime cache</html>\n",
+    );
+    write(
+      root,
+      "apps/web/.next/standalone/apps/web/.next/server/route-cache/APP_PAGE/deadbeef/$/index.meta",
+      "{\"status\":200}\n",
+    );
+    assert.deepEqual(assertPublicBuildBinding(root), written);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+for (const relativePath of [
+  "apps/web/.next/static/route-cache/injected.js",
+  "apps/web/.next/standalone/apps/web/route-cache/injected.js",
+]) {
+  test(`shipped route-cache artifacts remain sealed: ${relativePath}`, () => {
+    const { root } = fixtureRepository();
+    try {
+      recordBinding(root);
+      write(root, relativePath, "export const tampered = true;\n");
+      assert.throws(
+        () => assertPublicBuildBinding(root),
+        /materialization differs|untampered sealed build/u,
+      );
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+}
+
 test("artifact creation order and timestamps do not alter the canonical binding", () => {
   const { root } = fixtureRepository();
   const { root: reorderedRoot } = fixtureRepository();

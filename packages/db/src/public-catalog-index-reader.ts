@@ -120,6 +120,12 @@ interface OfferBackedRow {
 
 export interface PublicCatalogDiscoveryPageOptions {
   categoryId?: string;
+  /**
+   * Restrict the scan window to catalog candidates that carry a fresh
+   * (<= 72h) price observation for this chain. Undefined means "all chains",
+   * which keeps the unfiltered window for existing consumers.
+   */
+  chain?: string;
   cursor?: PublicCatalogDiscoveryPosition;
   limit: number;
   query?: string;
@@ -635,6 +641,7 @@ export class PostgresPublicCatalogIndexReader implements
         options,
         [
           ...(options.categoryId === undefined ? [] : ["categoryId"]),
+          ...(options.chain === undefined ? [] : ["chain"]),
           ...(options.cursor === undefined ? [] : ["cursor"]),
           "limit",
           ...(options.query === undefined ? [] : ["query"]),
@@ -660,7 +667,15 @@ export class PostgresPublicCatalogIndexReader implements
     if (options.cursor !== undefined && cursor === undefined) {
       throw new PublicCatalogIndexReaderError("INVALID_REQUEST");
     }
-    return this.readDiscovery(query, categoryId, cursor, options.limit, at, signal);
+    return this.readDiscovery(
+      query,
+      categoryId,
+      cursor,
+      options.limit,
+      at,
+      signal,
+      options.chain,
+    );
   }
 
   private async readDiscovery(
@@ -670,6 +685,7 @@ export class PostgresPublicCatalogIndexReader implements
     limit: number,
     at: Date,
     signal?: AbortSignal,
+    chain?: string,
   ): Promise<PublicCatalogDiscoveryPage> {
     if (signal?.aborted) throw new PublicCatalogIndexReaderError("CANCELLED");
     if (!(at instanceof Date) || !isFiniteDate(at)) {
@@ -739,6 +755,7 @@ export class PostgresPublicCatalogIndexReader implements
       `
       : Promise.resolve([]);
 
+    const chainFilter = chain ?? null;
     const sqlQuery = client<DiscoveryCatalogEligibilityRow[]>`
       with ranked_catalog as (
         select
@@ -848,6 +865,17 @@ export class PostgresPublicCatalogIndexReader implements
             or gtin = ${searchTerm}
             or lower(display_name) like lower(${contains}) escape '\\'
             or lower(coalesce(brand, '')) like lower(${contains}) escape '\\'
+          )
+          and (
+            ${chainFilter}::text is null
+            or exists (
+              select 1
+              from public.price_observations fresh_chain_price
+              where fresh_chain_price.product_id = latest.canonical_product_id
+                and fresh_chain_price.chain = ${chainFilter}::text
+                and fresh_chain_price.observed_at >= ${freshnessStartsAtIso}::timestamptz
+                and fresh_chain_price.observed_at <= ${atIso}::timestamptz
+            )
           )
       ), ordered_candidates as (
         select

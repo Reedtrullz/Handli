@@ -206,6 +206,7 @@ export class PostgresOperationsRuntimeReader implements OperationsRuntimeReader 
           "official-offer-ingestion",
           "official-offer-lifecycle-reconcile",
           "physical-store-sync",
+          "store-catalog-price-refresh",
         ] as const),
         persistedAt: timestamp(job.persistedAt, observedAt),
         status: textState(job.status, [
@@ -235,6 +236,7 @@ export class PostgresOperationsRuntimeReader implements OperationsRuntimeReader 
           "official-offer-ingestion",
           "official-offer-lifecycle-reconcile",
           "physical-store-sync",
+          "store-catalog-price-refresh",
         ] as const),
       };
       if (healthIsAbsent && [

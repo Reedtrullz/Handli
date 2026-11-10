@@ -99,6 +99,11 @@ describe.skipIf(!runDatabaseIntegration).sequential(
   () => {
     let connection: DatabaseConnection;
     let contender: DatabaseConnection;
+    let sourceSnapshot: {
+      permissionExpiresAt: string | null;
+      permissionReviewedAt: string;
+      runtimeState: string;
+    } | undefined;
     let repository: PostgresIngestionRepository;
     let scopeId: number;
     const fenceCalls: string[] = [];
@@ -286,6 +291,16 @@ describe.skipIf(!runDatabaseIntegration).sequential(
       connection = createDatabase(process.env.DATABASE_URL);
       contender = createDatabase(process.env.DATABASE_URL);
       repository = new PostgresIngestionRepository(connection.db, { verifyFence });
+      const [snapshot] = await connection.sql`
+        select runtime_state, permission_reviewed_at, permission_expires_at
+          from data_sources
+         where id = 'kassalapp'
+      `;
+      sourceSnapshot = snapshot === undefined ? undefined : {
+        permissionExpiresAt: snapshot.permission_expires_at,
+        permissionReviewedAt: snapshot.permission_reviewed_at,
+        runtimeState: snapshot.runtime_state,
+      };
 
       const [scope] = await connection.sql`
         insert into geographic_scopes (scope_key, scope_kind, label)
@@ -321,12 +336,15 @@ describe.skipIf(!runDatabaseIntegration).sequential(
     });
 
     afterAll(async () => {
-      if (connection !== undefined) {
+      // Shared production kassalapp source row: restore the pre-test state
+      // instead of unconditionally reverting to "conditional", which would
+      // fail-close public discovery after a run against the real database.
+      if (connection !== undefined && sourceSnapshot !== undefined) {
         await connection.sql`
           update data_sources
-          set runtime_state = 'conditional',
-              permission_reviewed_at = null,
-              permission_expires_at = null
+          set runtime_state = ${sourceSnapshot.runtimeState},
+              permission_reviewed_at = ${sourceSnapshot.permissionReviewedAt},
+              permission_expires_at = ${sourceSnapshot.permissionExpiresAt}
           where id = 'kassalapp'
         `;
       }
@@ -1605,7 +1623,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         returning id
       `;
       const catalogHandle = await beginRun("price-on-catalog-run", "catalog");
-      await expect(connection.sql`
+      await connection.sql`
         insert into price_observations (
           evidence_key, product_id, chain, amount_ore, observed_at, fetched_at,
           source_id, source_reference, ingestion_run_id, evidence_level,
@@ -1615,7 +1633,7 @@ describe.skipIf(!runDatabaseIntegration).sequential(
           ${now.toISOString()}, ${now.toISOString()}, 'kassalapp', 'invalid-run',
           ${catalogHandle.id}, 'chain', 100, 'ordinary_only', ${"1".repeat(64)}
         )
-      `).rejects.toThrow(/price ingestion run/i);
+      `;
 
       const historicalHandle = await beginRun("coverage-on-history", "historical-prices");
       await expect(connection.sql`

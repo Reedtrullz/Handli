@@ -820,10 +820,12 @@ export function claimEligibilityForRunType(
 ): "historical_eligible" | "ordinary_only" {
   if (runType === "historical-prices") return "historical_eligible";
   if (runType === "benchmark-prices") return "ordinary_only";
+  if (runType === "catalog") return "ordinary_only";
   throw new TypeError("Price persistence requires an exact supported ingestion run type");
 }
 
 function priceCapabilityForRunType(runType: string): SourceIngestionCapability {
+  if (runType === "catalog") return "ordinaryPrice";
   if (runType === "benchmark-prices") return "ordinaryPrice";
   if (runType === "historical-prices") return "priceHistory";
   throw new TypeError("Price persistence requires an exact supported ingestion run type");

@@ -4,6 +4,7 @@ import type {
   KassalappPhysicalStoreSourceRecordV1,
   KassalappPriceSourceRecordV1,
   KassalappProductSourceRecordV1,
+  StoreScopedProductPageOutcome,
   SourceRecordOutcome,
 } from "@handleplan/kassalapp";
 import { describe, expect, it, vi } from "vitest";
@@ -135,6 +136,10 @@ function createGateway(): KassalappIngestionGateway {
         state: "complete",
       }],
     })),
+    getStoreScopedProducts: vi.fn(async (): Promise<StoreScopedProductPageOutcome> => ({
+      catalogOutcomes: [],
+      priceOutcomes: [],
+    })),
   };
 }
 
@@ -192,6 +197,142 @@ function contextFor(kind: WorkerJobKind, signal: AbortSignal = SIGNAL): WorkerJo
 }
 
 const context = contextFor("catalog-refresh");
+
+function storeListingRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    created_at: "2026-07-15T08:30:00.000Z",
+    current_price: 21.9,
+    ean: EAN,
+    id: "store-row-1",
+    name: "Tine Lettmelk",
+    price_history: [],
+    store: { code: "0130" },
+    updated_at: "2026-07-15T08:30:00.000Z",
+    weight: 1,
+    weight_unit: "l",
+    ...overrides,
+  };
+}
+
+describe("store-catalog-price-refresh", () => {
+  it("walks each chain once, persists catalog before price outcomes, and uses the catalog run type", async () => {
+    const gateway = createGateway();
+    vi.mocked(gateway.getStoreScopedProducts).mockImplementation(async (chainCode, page) => {
+      if (page !== 3) return { catalogOutcomes: [], priceOutcomes: [] };
+      return {
+        catalogOutcomes: [{
+          state: "accepted",
+          record: {
+            ...productRecord({ sourceRecordId: `store-row-${chainCode}` }),
+            kind: "product",
+          },
+        }],
+        priceOutcomes: [{
+          state: "accepted",
+          record: {
+            ...priceRecord({ sourceRecordId: `store-price-${chainCode}` }),
+            kind: "price",
+          },
+        }],
+      };
+    });
+    const repository = createRepository();
+    const handlers = createKassalappHandlers(createDependencies({ gateway, repository }));
+
+    const result = await handlers["store-catalog-price-refresh"](contextFor("store-catalog-price-refresh"));
+
+    expect(result).toEqual({ counters: completeCounters });
+    expect(vi.mocked(gateway.getStoreScopedProducts).mock.calls.filter(([, page]) => page === 3))
+      .toHaveLength(5);
+    expect(repository.beginRun).toHaveBeenCalledWith(expect.objectContaining({
+      runType: "catalog",
+    }), SIGNAL);
+    const catalogCall = vi.mocked(repository.persistCatalogOutcomes).mock.calls[0]?.[1] ?? [];
+    const priceCall = vi.mocked(repository.persistPriceOutcomes).mock.calls[0]?.[1] ?? [];
+    expect(catalogCall).toHaveLength(5);
+    expect(priceCall).toHaveLength(5);
+    expect(catalogCall.map((outcome) => outcome.sourceRecordId)).toEqual([
+      "store-row-REMA_1000",
+      "store-row-COOP_EXTRA",
+      "store-row-EUROPRIS_NO",
+      "store-row-BUNNPRIS",
+      "store-row-JOKER_NO",
+    ]);
+    expect(priceCall.map((outcome) => outcome.subjectEan)).toEqual([EAN, EAN, EAN, EAN, EAN]);
+    expect(vi.mocked(repository.persistCatalogOutcomes).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(repository.persistPriceOutcomes).mock.invocationCallOrder[0]!);
+  });
+
+  it("treats empty pages as benign but still persists evidence from other chains", async () => {
+    const gateway = createGateway();
+    vi.mocked(gateway.getStoreScopedProducts).mockImplementation(async (chainCode) => {
+      if (chainCode !== "REMA_1000") return { catalogOutcomes: [], priceOutcomes: [] };
+      return {
+        catalogOutcomes: [{
+          state: "accepted",
+          record: productRecord({ sourceRecordId: "store-row-rema" }),
+        }],
+        priceOutcomes: [],
+      };
+    });
+    const repository = createRepository({
+      accepted: 1,
+      failed: 0,
+      fetched: 1,
+      persisted: 1,
+      quarantined: 0,
+      unknown: 0,
+    });
+    const handlers = createKassalappHandlers(createDependencies({ gateway, repository }));
+
+    const result = await handlers["store-catalog-price-refresh"](contextFor("store-catalog-price-refresh"));
+
+    expect(repository.finalizeRun).toHaveBeenCalledWith(RUN_HANDLE, expect.objectContaining({
+      failed: 0,
+      status: "completed",
+    }), SIGNAL);
+    expect(result).toEqual({ counters: {
+      accepted: 1,
+      failed: 0,
+      fetched: 1,
+      persisted: 1,
+      quarantined: 0,
+      unknown: 0,
+    } });
+  });
+
+  it("persists only the first sighting when upstream pagination repeats a record across pages", async () => {
+    const gateway = createGateway();
+    vi.mocked(gateway.getStoreScopedProducts).mockImplementation(async (chainCode, page) => {
+      if (chainCode !== "REMA_1000" || page > 2) return { catalogOutcomes: [], priceOutcomes: [] };
+      return {
+        catalogOutcomes: [{
+          state: "accepted",
+          record: productRecord({ sourceRecordId: "store-row-dup" }),
+        }],
+        priceOutcomes: [],
+      };
+    });
+    const repository = createRepository();
+    const handlers = createKassalappHandlers(createDependencies({ gateway, repository }));
+
+    await handlers["store-catalog-price-refresh"](contextFor("store-catalog-price-refresh"));
+
+    const catalogCall = vi.mocked(repository.persistCatalogOutcomes).mock.calls[0]?.[1] ?? [];
+    expect(catalogCall).toHaveLength(1);
+    expect(catalogCall[0]?.sourceRecordId).toBe("store-row-dup");
+  });
+
+  it("begins no ingestion attempt when every walked page is empty", async () => {
+    const repository = createRepository();
+    const handlers = createKassalappHandlers(createDependencies({ repository }));
+
+    const result = await handlers["store-catalog-price-refresh"](contextFor("store-catalog-price-refresh"));
+
+    expect(result).toEqual({ counters: { failed: 1 } });
+    expect(repository.beginRun).not.toHaveBeenCalled();
+  });
+});
 
 describe("Kassalapp worker handlers", () => {
   it.each([
