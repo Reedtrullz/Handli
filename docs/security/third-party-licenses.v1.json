@@ -1,7 +1,7 @@
 {
   "contractVersion": 1,
   "generatedFrom": "installed frozen pnpm dependency manifests",
-  "inventorySha256": "fe9231ba1786612ab352b43ad13e8626f0a7b49c9ab1c66f2c36de994c6b2a9f",
+  "inventorySha256": "0c2d3090a3cab0973ca5e3f17359f12c6fd147c6f04991749c91a83d1eeaa21b",
   "licenseCounts": {
     "0BSD": 1,
     "Apache-2.0": 29,
@@ -11,14 +11,14 @@
     "CC-BY-4.0": 1,
     "CC0-1.0": 2,
     "ISC": 16,
-    "MIT": 385,
+    "MIT": 393,
     "MIT-0": 2,
     "MPL-2.0": 3,
     "Python-2.0": 1,
     "Unlicense": 1
   },
-  "lockfileSha256": "d53d5dbedf492cc1e17ab846f777e5f43c8a365ebef0cefa22a2e0d814159306",
-  "packageCount": 457,
+  "lockfileSha256": "4d0fbe54b42942a3dd8f90777bd7cea919614559f49303fd96e4e48493d04b6d",
+  "packageCount": 465,
   "packages": [
     {
       "license": "MIT",
@@ -482,8 +482,18 @@
     },
     {
       "license": "MIT",
+      "name": "@vitest/expect",
+      "version": "4.1.11"
+    },
+    {
+      "license": "MIT",
       "name": "@vitest/mocker",
       "version": "4.1.10"
+    },
+    {
+      "license": "MIT",
+      "name": "@vitest/mocker",
+      "version": "4.1.11"
     },
     {
       "license": "MIT",
@@ -492,8 +502,18 @@
     },
     {
       "license": "MIT",
+      "name": "@vitest/pretty-format",
+      "version": "4.1.11"
+    },
+    {
+      "license": "MIT",
       "name": "@vitest/runner",
       "version": "4.1.10"
+    },
+    {
+      "license": "MIT",
+      "name": "@vitest/runner",
+      "version": "4.1.11"
     },
     {
       "license": "MIT",
@@ -502,13 +522,28 @@
     },
     {
       "license": "MIT",
+      "name": "@vitest/snapshot",
+      "version": "4.1.11"
+    },
+    {
+      "license": "MIT",
       "name": "@vitest/spy",
       "version": "4.1.10"
     },
     {
       "license": "MIT",
+      "name": "@vitest/spy",
+      "version": "4.1.11"
+    },
+    {
+      "license": "MIT",
       "name": "@vitest/utils",
       "version": "4.1.10"
+    },
+    {
+      "license": "MIT",
+      "name": "@vitest/utils",
+      "version": "4.1.11"
     },
     {
       "license": "MIT",
@@ -2219,6 +2254,11 @@
       "license": "MIT",
       "name": "vitest",
       "version": "4.1.10"
+    },
+    {
+      "license": "MIT",
+      "name": "vitest",
+      "version": "4.1.11"
     },
     {
       "license": "MIT",
