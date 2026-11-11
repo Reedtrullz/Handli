@@ -1,7 +1,7 @@
 {
   "contractVersion": 1,
   "generatedFrom": "installed frozen pnpm dependency manifests",
-  "inventorySha256": "0c2d3090a3cab0973ca5e3f17359f12c6fd147c6f04991749c91a83d1eeaa21b",
+  "inventorySha256": "ac61f0d3ad4078ffbbfbfdf8c6320e7bd57a8efbc5e4f2d55428ed62ff372395",
   "licenseCounts": {
     "0BSD": 1,
     "Apache-2.0": 29,
@@ -11,14 +11,14 @@
     "CC-BY-4.0": 1,
     "CC0-1.0": 2,
     "ISC": 16,
-    "MIT": 393,
+    "MIT": 384,
     "MIT-0": 2,
     "MPL-2.0": 3,
     "Python-2.0": 1,
     "Unlicense": 1
   },
-  "lockfileSha256": "4d0fbe54b42942a3dd8f90777bd7cea919614559f49303fd96e4e48493d04b6d",
-  "packageCount": 465,
+  "lockfileSha256": "973da90a786cd04485f8b33b2c305bde86e38e692421b46d3c5f40cafb41701f",
+  "packageCount": 456,
   "packages": [
     {
       "license": "MIT",
@@ -478,72 +478,37 @@
     {
       "license": "MIT",
       "name": "@vitest/expect",
-      "version": "4.1.10"
-    },
-    {
-      "license": "MIT",
-      "name": "@vitest/expect",
-      "version": "4.1.11"
+      "version": "4.1.12"
     },
     {
       "license": "MIT",
       "name": "@vitest/mocker",
-      "version": "4.1.10"
-    },
-    {
-      "license": "MIT",
-      "name": "@vitest/mocker",
-      "version": "4.1.11"
+      "version": "4.1.12"
     },
     {
       "license": "MIT",
       "name": "@vitest/pretty-format",
-      "version": "4.1.10"
-    },
-    {
-      "license": "MIT",
-      "name": "@vitest/pretty-format",
-      "version": "4.1.11"
+      "version": "4.1.12"
     },
     {
       "license": "MIT",
       "name": "@vitest/runner",
-      "version": "4.1.10"
-    },
-    {
-      "license": "MIT",
-      "name": "@vitest/runner",
-      "version": "4.1.11"
+      "version": "4.1.12"
     },
     {
       "license": "MIT",
       "name": "@vitest/snapshot",
-      "version": "4.1.10"
-    },
-    {
-      "license": "MIT",
-      "name": "@vitest/snapshot",
-      "version": "4.1.11"
+      "version": "4.1.12"
     },
     {
       "license": "MIT",
       "name": "@vitest/spy",
-      "version": "4.1.10"
-    },
-    {
-      "license": "MIT",
-      "name": "@vitest/spy",
-      "version": "4.1.11"
+      "version": "4.1.12"
     },
     {
       "license": "MIT",
       "name": "@vitest/utils",
-      "version": "4.1.10"
-    },
-    {
-      "license": "MIT",
-      "name": "@vitest/utils",
-      "version": "4.1.11"
+      "version": "4.1.12"
     },
     {
       "license": "MIT",
@@ -1123,7 +1088,7 @@
     {
       "license": "BSD-3-Clause",
       "name": "fast-uri",
-      "version": "3.1.7"
+      "version": "3.1.9"
     },
     {
       "license": "ISC",
@@ -1783,11 +1748,6 @@
     {
       "license": "MIT",
       "name": "picomatch",
-      "version": "4.0.5"
-    },
-    {
-      "license": "MIT",
-      "name": "picomatch",
       "version": "4.0.7"
     },
     {
@@ -2253,12 +2213,7 @@
     {
       "license": "MIT",
       "name": "vitest",
-      "version": "4.1.10"
-    },
-    {
-      "license": "MIT",
-      "name": "vitest",
-      "version": "4.1.11"
+      "version": "4.1.12"
     },
     {
       "license": "MIT",

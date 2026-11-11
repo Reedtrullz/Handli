@@ -168,7 +168,7 @@ describe("official-offer lifecycle schedule", () => {
 });
 describe("startOfficialOfferLifecycleLoop", () => {
   it("runs on its own interval independent of any ingestion cycle", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ now: SCHEDULED_AT });
     try {
       const reconcile = vi.fn<OfficialOfferLifecycleRepositoryPort["reconcile"]>()
         .mockResolvedValue(RECEIPT);
