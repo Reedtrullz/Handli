@@ -499,6 +499,10 @@ jobs:
           corepack pnpm --filter @handleplan/db exec vitest run
           src/production-image-database-seed.integration.test.ts
           --no-file-parallelism
+      - name: Use the official Ubuntu HTTPS mirror for browser dependencies
+        run: |
+          test -f /etc/apt/apt-mirrors.txt
+          printf '%s\n' 'https://archive.ubuntu.com/ubuntu' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
       - run: corepack pnpm exec playwright install --with-deps chromium firefox webkit
       - name: Prove the exact production image in Chromium, Firefox, and WebKit
         env:
