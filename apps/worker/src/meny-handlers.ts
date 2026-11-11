@@ -55,7 +55,6 @@ export function createMenyHandlers(deps: MenyHandlerDependencies): Partial<Recor
       if (edition.sourceId !== MENY_SOURCE_ID) throw new Error("MENY_EDITION_MISMATCH");
       await authorize("capture");
       abort(signal);
-      counters.fetched += 1;
       const bytes = Buffer.from(viewerHtml, "utf8");
       const checksum = createHash("sha256").update(bytes).digest("hex");
       const existingStatus = await deps.foundation.isCaptureComplete?.(edition.externalEditionId, checksum, signal);
@@ -76,6 +75,7 @@ export function createMenyHandlers(deps: MenyHandlerDependencies): Partial<Recor
         embeddedTextExtractor: createMenyEmbeddedTextExtractor(parseMenyStaticSettings(viewerHtml)!, now),
       });
       const receipt = await pipeline.captureAndExtract({ contractVersion: 1, bytes, edition, mimeType: "text/html", rightsClassification: "public_display" }, signal);
+      counters.fetched += receipt.counts.total;
       counters.persisted += receipt.counts.total;
       counters.quarantined += receipt.counts.reviewRequired + receipt.counts.rejected;
       if (receipt.status !== "completed") counters.failed += 1;

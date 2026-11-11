@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMenyFoundationDependencies, parseMenyValidityHeadline } from "./meny-production";
 import { createMenyHandlers, MENY_JOB_KIND } from "./meny-handlers";
+import { WorkerRunner } from "./runner";
 import { MENY_LAYOUT_FINGERPRINT } from "./meny-offers";
 import { officialOfferEditionDiscoveryInputV1Schema } from "@handleplan/domain";
 
@@ -59,10 +60,10 @@ describe("Meny edition discovery", () => {
 });
 
 describe("Meny ingestion handler", () => {
-  function handlerSetup() {
+  function handlerSetup(viewer = html) {
     const recordEdition = vi.fn(async () => ({ id: 1 }));
     const recordCapture = vi.fn(async () => ({ id: 2, retrievedAt: "2026-09-22T08:00:00.000Z" }));
-    const recordExtraction = vi.fn(async () => ({ id: 3, status: "completed" as const, counts: { total: 1, exactMatch: 0, reviewRequired: 1, rejected: 0 } }));
+    const recordExtraction = vi.fn(async () => ({ id: 3, status: "completed" as "completed" | "degraded" | "failed", counts: { total: 1, exactMatch: 0, reviewRequired: 1, rejected: 0 } }));
     const putIfAbsent = vi.fn(async (write: any) => ({ contractVersion: 1, state: "stored", checksumSha256: write.checksumSha256, byteLength: write.byteLength }));
     const edition = officialOfferEditionDiscoveryInputV1Schema.parse({
       contractVersion: 1, sourceId: "meny", externalEditionId: "3060440", chain: "meny", title: "Uke 39 mandag",
@@ -78,10 +79,51 @@ describe("Meny ingestion handler", () => {
       resolveEdition: vi.fn(async () => edition),
       sourceAccessPolicy: { getDecision: vi.fn(async (_sourceId: string, _capability: string, asOf: string) => ({ contractVersion: 1, permissionId: 1, sourceId: "meny", decision: "approved", capabilities: ["capture", "discover", "extract"], rightsClassifications: ["public_display"], reviewedAt: "2026-09-01T00:00:00.000Z", evaluatedAt: asOf })) },
     };
-    const handler = createMenyHandlers({ foundation, fetchViewerHtml: vi.fn(async () => html), clock: () => new Date("2026-09-22T08:00:00.000Z") })[MENY_JOB_KIND]!;
+    const handler = createMenyHandlers({ foundation, fetchViewerHtml: vi.fn(async () => viewer), clock: () => new Date("2026-09-22T08:00:00.000Z") })[MENY_JOB_KIND]!;
     const run = () => handler({ signal: new AbortController().signal } as never);
-    return { run, foundation, recordEdition, recordCapture, recordExtraction, putIfAbsent };
+    const runWorker = () => new WorkerRunner({
+      createRunId: () => "meny-counter-test",
+      handlers: { [MENY_JOB_KIND]: handler },
+      now: () => new Date("2026-09-22T08:00:00.000Z"),
+    }).run({
+      contractVersion: 1, jobId: "meny-counter-test", kind: MENY_JOB_KIND,
+      requestedAt: "2026-09-22T08:00:00.000Z", sourceId: "meny", timeoutMs: 5_000,
+    }, { fenceToken: "meny-counter-test-fence" });
+    return { run, runWorker, foundation, recordEdition, recordCapture, recordExtraction, putIfAbsent };
   }
+
+  it.each(["completed", "degraded"] as const)("accounts for multiple candidates in a %s extraction", async (status) => {
+    const t = handlerSetup(viewerHtml([HEADLINE,
+      "UKENS TILBUD FERSK KYLLINGFILET 99 00 / PK 700G FØRPRIS 139,00",
+      "UKENS TILBUD NORSKE EPLER 39 00 / PK 1KG FØRPRIS 59,00",
+    ]));
+    t.recordExtraction.mockResolvedValue({ id: 3, status, counts: { total: 2, exactMatch: 0, reviewRequired: 2, rejected: 0 } });
+    expect(await t.runWorker()).toMatchObject({
+      status: status === "completed" ? "succeeded" : "partial",
+      counters: { fetched: 2, persisted: 2, quarantined: 2, accepted: 0, unknown: 0, failed: status === "completed" ? 0 : 1 },
+    });
+    const envelope = t.recordExtraction.mock.calls[0] as unknown as [number, { candidates: unknown[] }];
+    expect(envelope[1].candidates).toHaveLength(2);
+  });
+
+  it.each(["completed", "degraded"] as const)("accounts for an idempotent %s capture without repeating writes", async (status) => {
+    const t = handlerSetup();
+    t.foundation.isCaptureComplete.mockResolvedValue(status);
+    expect(await t.runWorker()).toMatchObject({
+      status: status === "completed" ? "succeeded" : "failed",
+      counters: { fetched: 0, persisted: 0, quarantined: 0, accepted: 0, unknown: 0, failed: status === "completed" ? 0 : 1 },
+    });
+    expect(t.recordEdition).not.toHaveBeenCalled();
+    expect(t.putIfAbsent).not.toHaveBeenCalled();
+    expect(t.recordExtraction).not.toHaveBeenCalled();
+  });
+
+  it("preserves degradation when extraction finds no candidates", async () => {
+    const t = handlerSetup(viewerHtml([HEADLINE]));
+    t.recordExtraction.mockResolvedValue({ id: 3, status: "degraded", counts: { total: 0, exactMatch: 0, reviewRequired: 0, rejected: 0 } });
+    expect(await t.runWorker()).toMatchObject({ status: "failed", counters: { fetched: 0, persisted: 0, quarantined: 0, accepted: 0, unknown: 0, failed: 1 } });
+    expect(t.recordExtraction).toHaveBeenCalledOnce();
+  });
 
   it("stores evidence and only review candidates", async () => {
     const t = handlerSetup();
@@ -103,7 +145,7 @@ describe("Meny ingestion handler", () => {
   it("reports failed writes and retries partially recorded editions", async () => {
     const t = handlerSetup();
     t.recordCapture.mockRejectedValueOnce(new Error("permission denied"));
-    expect((await t.run())?.counters).toMatchObject({ failed: 1, persisted: 0 });
+    expect((await t.run())?.counters).toMatchObject({ failed: 1, fetched: 0, persisted: 0 });
     expect((await t.run())?.counters).toMatchObject({ failed: 0, persisted: 1 });
     expect(t.recordEdition).toHaveBeenCalledTimes(2);
   });
