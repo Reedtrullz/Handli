@@ -111,6 +111,13 @@ jobs:
         # immutable audit rows, so file-level parallelism would invalidate their
         # isolation contract even when every individual test is sequential.
         run: corepack pnpm --filter @handleplan/db exec vitest run --no-file-parallelism
+      - name: Prove private runtime readiness after all migrations
+        env:
+          DATABASE_MIGRATION_URL: postgresql://handleplan:ci_admin_url_safe_0000000000000001@127.0.0.1:5432/handleplan
+          OPERATIONS_DATABASE_URL: postgresql://handleplan_operations:ci_operations_url_safe_000000000001@127.0.0.1:5432/handleplan
+          REVIEW_DATABASE_URL: postgresql://handleplan_review:ci_review_url_safe_00000000000000001@127.0.0.1:5432/handleplan
+          RUN_PRIVATE_RUNTIME_DB_INTEGRATION: "1"
+        run: corepack pnpm --filter web exec vitest run lib/server/private-runtime-readiness.integration.test.ts
       - name: Boot the exact previous application image against the expanded schema
         if: ${{ github.event_name == 'push' }}
         env:

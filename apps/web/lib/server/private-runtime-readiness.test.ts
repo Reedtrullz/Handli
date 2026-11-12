@@ -61,7 +61,7 @@ const operationsSnapshot = {
 } as unknown as OperationsRuntimeSnapshotV1;
 
 describe("private runtime database readiness", () => {
-  it("proves review capability and the 028 marker without reopening private state", async () => {
+  it("proves review capability and the current MIME marker without reopening private state", async () => {
     const database = databaseReturning([{
       decision_v1_execute: false,
       decision_v2_execute: true,
@@ -139,7 +139,7 @@ describe("private runtime database readiness", () => {
     )).resolves.toBe(false);
   });
 
-  it("keeps operations read-only while proving its role, 028 marker, and aggregate read", async () => {
+  it("keeps operations read-only while proving its role, current MIME marker, and aggregate read", async () => {
     const database = databaseReturning([{
       alert_append_execute: false,
       alert_export_execute: false,
@@ -178,7 +178,7 @@ describe("private runtime database readiness", () => {
     expect(operationsService.read).toHaveBeenCalledWith(expect.any(AbortSignal));
   });
 
-  it("does not call the operations aggregate when capability or 028 marker is absent", async () => {
+  it("does not call the operations aggregate when capability or current MIME marker is absent", async () => {
     const database = databaseReturning([{
       alert_append_execute: false,
       alert_export_execute: false,

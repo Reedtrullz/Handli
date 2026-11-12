@@ -147,7 +147,7 @@ const MIGRATION_028_MARKER_RELATION =
 /**
  * Review is intentionally denied the migration ledger after the private
  * security-definer boundary. Prove the exact allowlist/denylist and use the
- * image-only evidence constraint only as a catalog marker for migration 028.
+ * current evidence MIME constraint as a catalog marker without ledger access.
  */
 export function createReviewPostgresReadinessCheck(
   db: HandleplanDatabase,
@@ -183,7 +183,7 @@ export function createReviewPostgresReadinessCheck(
             where constraint_state.conrelid = pg_catalog.to_regclass(
               ${MIGRATION_028_MARKER_RELATION}
             )
-              and constraint_state.conname = 'private_review_evidence_renders_image_mime'
+              and constraint_state.conname = 'private_review_evidence_renders_supported_mime'
               and constraint_state.convalidated
           ) as migration_028_marker,
         pg_catalog.has_function_privilege(
@@ -236,7 +236,7 @@ const OPERATIONS_ALERT_EXPORT_SIGNATURE =
 /**
  * Operations intentionally has no SELECT privilege on the migration ledger.
  * Its readiness proof therefore checks the expected role, its one allowlisted
- * aggregate capability, the migration-028 marker, denied dormant alert
+ * aggregate capability, the current MIME marker, denied dormant alert
  * capabilities, and a real bounded aggregate read through the normal service.
  */
 export function createOperationsPostgresReadinessCheck(
@@ -270,7 +270,7 @@ export function createOperationsPostgresReadinessCheck(
             where constraint_state.conrelid = pg_catalog.to_regclass(
               ${MIGRATION_028_MARKER_RELATION}
             )
-              and constraint_state.conname = 'private_review_evidence_renders_image_mime'
+              and constraint_state.conname = 'private_review_evidence_renders_supported_mime'
               and constraint_state.convalidated
           ) as migration_028_marker,
         pg_catalog.has_function_privilege(
