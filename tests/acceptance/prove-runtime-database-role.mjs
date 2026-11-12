@@ -1324,7 +1324,7 @@ try {
     );
     await pdfBoundaryAdmin.unsafe(`
       alter table private_review_evidence_renders
-        drop constraint private_review_evidence_renders_image_mime
+        drop constraint private_review_evidence_renders_supported_mime
     `);
     const [injectedPdfEvidenceRender] = await pdfBoundaryAdmin`
       insert into private_review_evidence_renders (
@@ -1352,8 +1352,8 @@ try {
     );
     await pdfBoundaryAdmin.unsafe(`
       alter table private_review_evidence_renders
-        add constraint private_review_evidence_renders_image_mime
-        check (mime_type in ('image/jpeg', 'image/png', 'image/webp'))
+        add constraint private_review_evidence_renders_supported_mime
+        check (mime_type in ('image/jpeg', 'image/png', 'image/webp', 'text/html'))
         not valid
     `);
   } finally {
@@ -1387,7 +1387,7 @@ try {
       )
     `,
     /HP_REVIEW_EVIDENCE_UNAVAILABLE/,
-    "v2 must independently reject a non-image receipt even if an owner bypassed the table fence",
+    "v2 must independently reject an unsupported PDF receipt even if an owner bypassed the table fence",
   );
 
   const pdfBoundaryCleanupAdmin = postgres(urlForDatabase(proofDatabase), {
@@ -1412,7 +1412,7 @@ try {
       `);
       await transaction.unsafe(`
         alter table private_review_evidence_renders
-          validate constraint private_review_evidence_renders_image_mime
+          validate constraint private_review_evidence_renders_supported_mime
       `);
     });
     const [restoredImageBoundary] = await pdfBoundaryCleanupAdmin`
@@ -1422,14 +1422,14 @@ try {
       from pg_catalog.pg_constraint constraint_state
       cross join pg_catalog.pg_trigger trigger_state
       where constraint_state.conrelid = 'private_review_evidence_renders'::regclass
-        and constraint_state.conname = 'private_review_evidence_renders_image_mime'
+        and constraint_state.conname = 'private_review_evidence_renders_supported_mime'
         and trigger_state.tgrelid = 'private_review_evidence_renders'::regclass
         and trigger_state.tgname = 'private_review_evidence_renders_append_only'
     `;
     assert.deepEqual(
       restoredImageBoundary,
       { convalidated: true, tgenabled: "O" },
-      "the corruption proof must restore the validated image fence and append-only trigger",
+      "the corruption proof must restore the validated supported-MIME fence and append-only trigger",
     );
   } finally {
     await pdfBoundaryCleanupAdmin.end({ timeout: 5 });

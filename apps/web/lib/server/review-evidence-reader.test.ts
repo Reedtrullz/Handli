@@ -46,6 +46,7 @@ async function temporaryRoot(): Promise<string> {
 function locator(bytes = PNG): PrivateReviewCaptureLocator {
   const checksumSha256 = createHash("sha256").update(bytes).digest("hex");
   return {
+    sourceId: "synthetic-reader-source",
     blobKey: `official-offers/private/v1/${"a".repeat(64)}/42/${checksumSha256}`,
     byteLength: bytes.byteLength,
     candidateId: "review-candidate:42",
@@ -107,6 +108,28 @@ describe("FilesystemPrivateReviewEvidenceReader", () => {
         name: "PrivateReviewEvidenceReaderError",
       }));
     }
+  });
+
+  it("reads bounded UTF-8 MENY HTML as checksum-bound bytes, never executes it", async () => {
+    const root = await temporaryRoot();
+    const html = new TextEncoder().encode('<!doctype html><html><script>globalThis.syntheticExecuted=true</script>ÆØÅ</html>');
+    const capture = { ...locator(html), sourceId: "meny", mimeType: "text/html" };
+    capture.blobKey = capture.blobKey.replace("a".repeat(64), createHash("sha256").update("meny").digest("hex"));
+    await writeCapture(root, capture, html);
+    const reader = new FilesystemPrivateReviewEvidenceReader({ rootDirectory: root });
+    await expect(reader.read(capture, new AbortController().signal)).resolves.toMatchObject({ bytes: html, mimeType: "text/html", checksumSha256: capture.checksumSha256 });
+    await expectReaderError(reader.read({ ...capture, blobKey: capture.blobKey.replace(createHash("sha256").update("meny").digest("hex"), "a".repeat(64)) }, new AbortController().signal), "EVIDENCE_UNAVAILABLE");
+  });
+
+  it("refuses malformed UTF-8 or oversized MENY text captures", async () => {
+    const root = await temporaryRoot();
+    const malformed = Uint8Array.from([...new TextEncoder().encode("<!doctype html><html>"), 0xc3, 0x28]);
+    const capture = { ...locator(malformed), sourceId: "meny", mimeType: "text/html" };
+    capture.blobKey = capture.blobKey.replace("a".repeat(64), createHash("sha256").update("meny").digest("hex"));
+    await writeCapture(root, capture, malformed);
+    const reader = new FilesystemPrivateReviewEvidenceReader({ rootDirectory: root });
+    await expectReaderError(reader.read(capture, new AbortController().signal), "EVIDENCE_CORRUPT");
+    await expectReaderError(reader.read({ ...capture, byteLength: 1024 * 1024 + 1 }, new AbortController().signal), "EVIDENCE_UNAVAILABLE");
   });
 
   it("reads only a canonical owner-private content-addressed capture and verifies every byte", async () => {

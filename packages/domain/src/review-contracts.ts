@@ -18,6 +18,17 @@ import {
 } from "./offer-ingestion-contracts";
 import { membershipProgramIdSchema } from "./offers";
 
+export const MAX_REVIEW_TEXT_EVIDENCE_BYTES = 1024 * 1024;
+
+export function decodeReviewTextEvidence(bytes: Uint8Array): string {
+  if (bytes.byteLength < 1 || bytes.byteLength > MAX_REVIEW_TEXT_EVIDENCE_BYTES) {
+    throw new Error("Invalid private review text length");
+  }
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  if (text.includes("\0")) throw new Error("Invalid private review text encoding");
+  return text;
+}
+
 export const REVIEW_QUEUE_LIMIT_MAX = 50;
 export const REVIEW_REASON_MAX_LENGTH = 1_000;
 

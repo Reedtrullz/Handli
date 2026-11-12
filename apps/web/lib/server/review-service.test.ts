@@ -80,6 +80,7 @@ function repository(overrides: Partial<ReviewQueueRepository> = {}): ReviewQueue
     }),
     get: async () => entry,
     getPrivateCaptureLocator: async () => ({
+      sourceId: "synthetic-review-source",
       blobKey: `official-offers/private/v1/${"a".repeat(64)}/42/${"b".repeat(64)}`,
       byteLength: 10,
       candidateId: entry.candidateId,

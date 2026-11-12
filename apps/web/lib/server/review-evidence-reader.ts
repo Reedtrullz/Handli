@@ -5,6 +5,8 @@ import { constants, type Stats } from "node:fs";
 import { lstat, open, realpath, type FileHandle } from "node:fs/promises";
 import { isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
+import { decodeReviewTextEvidence, MAX_REVIEW_TEXT_EVIDENCE_BYTES } from "@handleplan/domain";
+
 import type { PrivateReviewCaptureLocator } from "@handleplan/db/review-queue";
 
 export const MAX_PRIVATE_REVIEW_EVIDENCE_BYTES = 50 * 1024 * 1024;
@@ -15,7 +17,19 @@ const READ_CHUNK_BYTES = 64 * 1024;
 const CONTENT_KEY_PATTERN =
   /^official-offers\/private\/v1\/([0-9a-f]{64})\/([1-9][0-9]{0,15})\/([0-9a-f]{64})$/u;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+const MENY_CAPTURE_PREFIX = `official-offers/private/v1/${createHash("sha256").update("meny").digest("hex")}/`;
+
+export function isMenyHtmlCapture(locator: Readonly<PrivateReviewCaptureLocator>): boolean {
+  return locator.sourceId === "meny"
+    && locator.mimeType === "text/html"
+    && locator.blobKey.startsWith(MENY_CAPTURE_PREFIX)
+    && Number.isSafeInteger(locator.byteLength)
+    && locator.byteLength >= 1
+    && locator.byteLength <= MAX_REVIEW_TEXT_EVIDENCE_BYTES;
+}
+
 const ALLOWED_MIME_TYPES = new Set([
+  "text/html",
   "application/pdf",
   "image/jpeg",
   "image/png",
@@ -40,7 +54,7 @@ export interface VerifiedPrivateReviewEvidence {
   readonly byteLength: number;
   readonly bytes: Uint8Array;
   readonly checksumSha256: string;
-  readonly mimeType: "application/pdf" | "image/jpeg" | "image/png" | "image/webp";
+  readonly mimeType: "text/html" | "application/pdf" | "image/jpeg" | "image/png" | "image/webp";
 }
 
 export interface PrivateReviewEvidenceReader {
@@ -104,6 +118,13 @@ interface PinnedDirectory {
 }
 
 function hasExpectedMagic(bytes: Uint8Array, mimeType: string): boolean {
+  if (mimeType === "text/html") {
+    try {
+      return /^\s*(?:<!doctype\s+html\b|<html\b)/iu.test(decodeReviewTextEvidence(bytes));
+    } catch {
+      return false;
+    }
+  }
   if (mimeType === "application/pdf") {
     return bytes.byteLength >= 5
       && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44
@@ -141,6 +162,7 @@ function validateLocator(
     || locator.byteLength < 1
     || locator.byteLength > maximumBytes
     || !ALLOWED_MIME_TYPES.has(locator.mimeType)
+    || (locator.mimeType === "text/html" && !isMenyHtmlCapture(locator))
     || !["private_review", "public_display"].includes(locator.rightsClassification)
   ) {
     fail("EVIDENCE_UNAVAILABLE");

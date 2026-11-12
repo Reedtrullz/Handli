@@ -102,3 +102,5 @@
   .sectionHeading { align-items: stretch; flex-direction: column; }
   .sectionHeading > span { align-self: flex-start; white-space: normal; }
 }
+
+.evidenceText { width: 100%; max-height: 70vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--paper); padding: 16px; border: 1px solid var(--line-strong); border-radius: 9px; font: 12px/1.6 ui-monospace, monospace; }

@@ -41,6 +41,7 @@ export class ReviewQueueRepositoryError extends Error {
 }
 
 export interface PrivateReviewCaptureLocator {
+  readonly sourceId: string;
   readonly blobKey: string;
   readonly byteLength: number;
   readonly candidateId: string;
@@ -306,6 +307,7 @@ function requireCaptureLocator(
     .update(`v1\0${candidateId}\0${row.capture_checksum}\0${candidate.provenance.evidenceLocator}`, "utf8")
     .digest("hex")}`;
   return Object.freeze({
+    sourceId: row.source_id,
     blobKey: row.blob_key,
     byteLength: row.byte_length,
     candidateId: `review-candidate:${candidateId}`,

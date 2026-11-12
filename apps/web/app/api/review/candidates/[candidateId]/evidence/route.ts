@@ -63,7 +63,7 @@ export function createReviewEvidenceHandler(
         () => service.render(candidateId.data, principal, lifetime.signal),
         lifetime.signal,
       );
-      if (!["image/jpeg", "image/png", "image/webp"].includes(rendered.mimeType)) {
+      if (!["image/jpeg", "image/png", "image/webp", "text/plain"].includes(rendered.mimeType)) {
         return privateError("EVIDENCE_UNAVAILABLE", 409);
       }
       return new Response(streamedBytes(rendered.bytes), {
@@ -74,7 +74,7 @@ export function createReviewEvidenceHandler(
           "content-disposition": "inline; filename=private-review-evidence",
           "content-length": String(rendered.byteLength),
           "content-security-policy": "default-src 'none'; sandbox",
-          "content-type": rendered.mimeType,
+          "content-type": rendered.mimeType === "text/plain" ? "text/plain;charset=utf-8" : rendered.mimeType,
           "cross-origin-resource-policy": "same-origin",
           expires: "0",
           pragma: "no-cache",

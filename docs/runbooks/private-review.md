@@ -16,6 +16,30 @@ real Cloudflare Access application, grant retailer rights, seed a production
 review queue or private capture, deploy the split runtime, or prove the
 VPS/Caddy/volume state.
 
+## Prepared MENY text evidence (migration 047)
+
+Migration 047 extends the image boundary with a MENY-only text path. It does not
+grant `privateReview`, approve candidates, or change source activation. Existing
+MENY candidates whose scope is unknown still fail the immutable publication-scope
+match. Production permission and scope qualification remain separate gates.
+
+Only `text/html` captures whose database source and content-addressed namespace
+are both MENY qualify. The reader keeps its owner/mode/link/path and full SHA-256
+checks; text is limited to 1 MiB, valid UTF-8 without NUL, and an HTML document
+prefix. The protected route delivers the unchanged bytes as
+`text/plain;charset=utf-8`, with sandbox, nosniff and private no-store headers.
+The browser renders literal text in a keyboard-accessible, scrollable view; it
+never creates an HTML blob URL, iframe, script, or retailer request.
+
+The original complete bytes remain the acknowledgement digest. Unlike image
+`onLoad`, text requires the reviewer to press “Jeg har lest den verifiserte
+teksten” after the escaped view is present. GET still issues only a non-actionable
+challenge. Candidate/version/session, rights, digest and expiry checks precede
+the one-use receipt. SQL checks source/capture/checksum/byte length both on insert
+and independently on approval; old image checks remain, and PDF/other-source HTML
+stay unsupported. Text receipts prove delivery and explicit acknowledgement,
+not that product identity, package, dates or scope are correct.
+
 ## Authentication boundary
 
 Cloudflare must enforce a separate Access application/policy for `/review`,
