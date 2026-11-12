@@ -67,8 +67,10 @@ integration("MENY private text evidence SQL boundary", () => {
         const foundation = new PostgresOfficialOfferFoundationRepository(db);
         const review = new PostgresReviewQueueRepository(db);
         const now = async () => new Date((await tx`select clock_timestamp() as at`)[0]!.at);
-        const fence = async () =>
-          officialOfferAuthorizationFenceV1Schema.parse({
+        const fence = async () => {
+          const [clock] = await tx`select to_char(clock_timestamp() at time zone 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as at`;
+          return officialOfferAuthorizationFenceV1Schema.parse({
             contractVersion: 1,
             permissionId: Number(permission!.id),
             sourceId,
@@ -76,8 +78,9 @@ integration("MENY private text evidence SQL boundary", () => {
             capabilities: permissions.officialOfferCapabilities,
             rightsClassifications: ["public_display"],
             reviewedAt,
-            evaluatedAt: (await now()).toISOString(),
+            evaluatedAt: clock!.at,
           });
+        };
         const start = new Date(Date.now() - 60_000).toISOString();
         const end = new Date(Date.now() + 3_600_000).toISOString();
         const edition = officialOfferEditionDiscoveryInputV1Schema.parse({
