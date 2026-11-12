@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
@@ -28,6 +29,7 @@ const principal: ReviewPrincipal = {
   sessionId: `access-session:${"b".repeat(64)}`,
 };
 const locator: PrivateReviewCaptureLocator = {
+  sourceId: "synthetic-image-source",
   blobKey: `official-offers/private/v1/${"d".repeat(64)}/42/${"c".repeat(64)}`,
   byteLength: bytes.byteLength,
   candidateId: "review-candidate:42",
@@ -90,6 +92,36 @@ function ackRequest(challenge: string, digestSha256 = locator.checksumSha256) {
 }
 
 describe("ReviewEvidenceService", () => {
+  it("delivers MENY HTML only as plain text and binds its acknowledgement to the original bytes", async () => {
+    const html = new TextEncoder().encode('<!doctype html><html><script>alert("synthetic")</script>Tilbud ÆØÅ</html>');
+    const checksumSha256 = createHash("sha256").update(html).digest("hex");
+    const htmlLocator = { ...locator, sourceId: "meny", mimeType: "text/html", byteLength: html.byteLength, checksumSha256,
+      blobKey: `official-offers/private/v1/${createHash("sha256").update("meny").digest("hex")}/42/${checksumSha256}` };
+    const recordEvidenceRender = vi.fn<ReviewQueueRepository["recordEvidenceRender"]>().mockImplementation(async input => ({ evidenceRenderId: "review-evidence-render:9", expiresAt: input.expiresAt, renderedAt: NOW.toISOString() }));
+    const service = new ReviewEvidenceService(repository({ getPrivateCaptureLocator: async () => htmlLocator, recordEvidenceRender }),
+      reader({ read: async () => ({ bytes: html, byteLength: html.byteLength, checksumSha256, mimeType: "text/html" }) }),
+      new ReviewEvidenceChallengeCodec(SECRET, () => NOW), new ReviewEvidenceProofCodec(SECRET, () => NOW), () => NOW);
+    const rendered = await service.render(locator.candidateId, principal);
+    expect(rendered.mimeType).toBe("text/plain");
+    expect(rendered.bytes).toEqual(html);
+    expect(recordEvidenceRender).not.toHaveBeenCalled();
+    await expect(service.acknowledge({ contractVersion: 1, candidateId: locator.candidateId, challenge: rendered.challengeToken, digestSha256: "0".repeat(64), presentation: "full_capture" }, principal)).rejects.toMatchObject({ code: "EVIDENCE_UNAVAILABLE" });
+    expect(recordEvidenceRender).not.toHaveBeenCalled();
+    await expect(service.acknowledge({ contractVersion: 1, candidateId: locator.candidateId, challenge: rendered.challengeToken, digestSha256: checksumSha256, presentation: "full_capture" }, principal)).resolves.toMatchObject({ proofToken: expect.stringMatching(/^review-proof:v1\./u) });
+    expect(recordEvidenceRender).toHaveBeenCalledOnce();
+    expect(recordEvidenceRender.mock.calls[0]![0].checksumSha256).toBe(checksumSha256);
+  });
+
+  it("rejects other-source HTML even if its blob key claims the MENY namespace", async () => {
+    const claimedMeny = { ...locator, sourceId: "synthetic-other-source", mimeType: "text/html",
+      blobKey: `official-offers/private/v1/${createHash("sha256").update("meny").digest("hex")}/42/${locator.checksumSha256}` };
+    const read = vi.fn<PrivateReviewEvidenceReader["read"]>();
+    const service = new ReviewEvidenceService(repository({ getPrivateCaptureLocator: async () => claimedMeny }), reader({ read }),
+      new ReviewEvidenceChallengeCodec(SECRET, () => NOW), new ReviewEvidenceProofCodec(SECRET, () => NOW), () => NOW);
+    await expect(service.render(locator.candidateId, principal)).rejects.toMatchObject({ code: "EVIDENCE_UNAVAILABLE" });
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("returns verified bytes with a non-actionable challenge and records nothing on GET", async () => {
     const read = vi.fn<PrivateReviewEvidenceReader["read"]>().mockResolvedValue({
       byteLength: bytes.byteLength,

@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  decodeReviewTextEvidence,
+  MAX_REVIEW_TEXT_EVIDENCE_BYTES,
   reviewDecisionResponseV1Schema,
   reviewDecisionRequestV1Schema,
   reviewEvidenceAckRequestV1Schema,
@@ -13,6 +15,8 @@ import {
   type ReviewQueueCandidateV1,
 } from "@handleplan/domain";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { membershipChainLabel } from "../../lib/membership-presentation";
 
 import styles from "./review-workspace.module.css";
 
@@ -59,8 +63,7 @@ function money(ore: number | undefined): string {
 }
 
 function chainLabel(chain: ReviewQueueCandidateV1["chain"]): string {
-  if (chain === "rema-1000") return "REMA 1000";
-  return chain === "bunnpris" ? "Bunnpris" : "Extra";
+  return membershipChainLabel(chain) ?? chain;
 }
 
 function productLabel(candidate: ReviewQueueCandidateV1): string {
@@ -421,7 +424,8 @@ interface RenderedEvidenceState {
   digestSha256: string;
   expiresAt: string;
   mimeType: string;
-  objectUrl: string;
+  objectUrl: string | undefined;
+  text: string | undefined;
   proofToken: string | undefined;
   rendered: boolean;
 }
@@ -455,11 +459,16 @@ function EvidencePanel({ candidate, disabled, onEvidenceChange }: EvidencePanelP
       setFailure("PDF-kildebevis kan ikke vises sikkert i nettleseren i v1.");
       return;
     }
+    const textEvidence = candidate.sourceId === "meny" && candidate.capture.mimeType === "text/html";
+    if (!textEvidence && !["image/jpeg", "image/png", "image/webp"].includes(candidate.capture.mimeType)) {
+      setFailure("Denne typen kildebevis kan ikke vises sikkert.");
+      return;
+    }
     controller.current?.abort();
     acknowledgementController.current?.abort();
     const requestController = new AbortController();
     controller.current = requestController;
-    if (evidence !== undefined) URL.revokeObjectURL(evidence.objectUrl);
+    if (evidence?.objectUrl !== undefined) URL.revokeObjectURL(evidence.objectUrl);
     setEvidence(undefined);
     onEvidenceChange(undefined);
     setFailure(undefined);
@@ -470,7 +479,7 @@ function EvidencePanel({ candidate, disabled, onEvidenceChange }: EvidencePanelP
         {
           cache: "no-store",
           credentials: "same-origin",
-          headers: { accept: candidate.capture.mimeType },
+          headers: { accept: textEvidence ? "text/plain" : candidate.capture.mimeType },
           signal: requestController.signal,
         },
       );
@@ -483,6 +492,11 @@ function EvidencePanel({ candidate, disabled, onEvidenceChange }: EvidencePanelP
       const presentation = response.headers.get("x-handleplan-review-evidence-presentation");
       const contentType = response.headers.get("content-type");
       const contentLength = response.headers.get("content-length");
+      if (textEvidence && (contentLength === null || !/^[1-9][0-9]*$/u.test(contentLength)
+        || Number(contentLength) > MAX_REVIEW_TEXT_EVIDENCE_BYTES)) {
+        setFailure("Tekstbeviset overstiger den sikre størrelsesgrensen.");
+        return;
+      }
       const blob = await response.blob();
       if (
         !reviewEvidenceChallengeTokenSchema.safeParse(challengeToken).success
@@ -491,7 +505,7 @@ function EvidencePanel({ candidate, disabled, onEvidenceChange }: EvidencePanelP
         || !Number.isFinite(Date.parse(expiresAt))
         || Date.parse(expiresAt) <= Date.now()
         || presentation !== "full_capture"
-        || contentType !== candidate.capture.mimeType
+        || contentType !== (textEvidence ? "text/plain;charset=utf-8" : candidate.capture.mimeType)
         || contentLength === null
         || !/^[1-9][0-9]*$/u.test(contentLength)
         || Number(contentLength) !== blob.size
@@ -500,14 +514,13 @@ function EvidencePanel({ candidate, disabled, onEvidenceChange }: EvidencePanelP
         setFailure("Kildebeviset returnerte et ugyldig eller utløpt svar.");
         return;
       }
-      const digestBuffer = await globalThis.crypto.subtle.digest(
-        "SHA-256",
-        await blob.arrayBuffer(),
-      );
+      const sourceBuffer = await blob.arrayBuffer();
+      const text = textEvidence ? decodeReviewTextEvidence(new Uint8Array(sourceBuffer)) : undefined;
+      const digestBuffer = await globalThis.crypto.subtle.digest("SHA-256", sourceBuffer);
       const digestSha256 = [...new Uint8Array(digestBuffer)]
         .map((value) => value.toString(16).padStart(2, "0"))
         .join("");
-      const objectUrl = URL.createObjectURL(blob);
+      const objectUrl = textEvidence ? undefined : URL.createObjectURL(blob);
       setEvidence({
         acknowledging: false,
         candidateId: candidate.candidateId,
@@ -516,8 +529,9 @@ function EvidencePanel({ candidate, disabled, onEvidenceChange }: EvidencePanelP
         cropReference: candidate.capture.cropReference,
         digestSha256,
         expiresAt,
-        mimeType: contentType,
+        mimeType: textEvidence ? "text/plain" : contentType,
         objectUrl,
+        text,
         proofToken: undefined,
         rendered: false,
       });
@@ -533,7 +547,7 @@ function EvidencePanel({ candidate, disabled, onEvidenceChange }: EvidencePanelP
     }
   }
 
-  async function acknowledgeRenderedImage(): Promise<void> {
+  async function acknowledgeRenderedEvidence(): Promise<void> {
     if (
       evidence === undefined
       || evidence.candidateId !== candidate.candidateId
@@ -652,27 +666,39 @@ function EvidencePanel({ candidate, disabled, onEvidenceChange }: EvidencePanelP
         </div>
       ) : (
         <div className={styles.evidenceFrame}>
-          {evidence.mimeType !== "application/pdf" && (
+          {evidence.mimeType === "text/plain" ? (
+            <>
+              <pre className={styles.evidenceText} aria-label="Verifisert HTML-kildefil som tekst" tabIndex={0}>{evidence.text}</pre>
+              <p>HTML-kilden vises som ren tekst. Ingen kode eller eksternt innhold kjøres.</p>
+              <button className="secondary-button" type="button"
+                disabled={disabled || evidence.acknowledging || evidence.rendered}
+                onClick={() => void acknowledgeRenderedEvidence()}>
+                Jeg har lest den verifiserte teksten
+              </button>
+            </>
+          ) : (
             // This is a verified same-session blob URL, never a retailer URL.
             // eslint-disable-next-line @next/next/no-img-element
             <img
               alt="Verifisert full kildefil for tilbudskandidaten"
               onError={() => {
-                URL.revokeObjectURL(evidence.objectUrl);
+                if (evidence.objectUrl !== undefined) URL.revokeObjectURL(evidence.objectUrl);
                 setEvidence(undefined);
                 onEvidenceChange(undefined);
                 setFailure("Nettleseren kunne ikke vise den verifiserte kildefilen.");
               }}
-              onLoad={() => void acknowledgeRenderedImage()}
+              onLoad={() => void acknowledgeRenderedEvidence()}
               src={evidence.objectUrl}
             />
           )}
           <p role="status">
             {evidence.acknowledging
-              ? "Bildet er dekodet. Binder full SHA-256 til kandidaten…"
+              ? "Binder full SHA-256 til kandidaten…"
               : evidence.rendered
-                ? `Hele bildefilen er levert og dekodet. Godkjenningsbeviset utløper ${new Date(evidence.expiresAt).toLocaleTimeString("nb-NO")}.`
-                : "Kildebytes er verifisert. Venter på at nettleseren dekoder hele bildet."}
+                ? `Hele kildefilen er verifisert og bekreftet. Godkjenningsbeviset utløper ${new Date(evidence.expiresAt).toLocaleTimeString("nb-NO")}.`
+                : evidence.mimeType === "text/plain"
+                  ? "Les den verifiserte teksten før du bekrefter visningen."
+                  : "Kildebytes er verifisert. Venter på at nettleseren dekoder hele bildet."}
           </p>
           <button className="secondary-button" disabled={disabled} onClick={() => void loadEvidence()} type="button">
             Verifiser på nytt
@@ -846,7 +872,7 @@ export function ReviewWorkspace() {
         <details className={styles.filters}>
           <summary>Filtrer køen</summary>
           <fieldset className={styles.filterGrid} disabled={acting}>
-            <label>Kjede<select onChange={(event) => setFilters((value) => ({ ...value, chain: event.target.value }))} value={filters.chain}><option value="">Alle</option><option value="bunnpris">Bunnpris</option><option value="rema-1000">REMA 1000</option><option value="extra">Extra</option></select></label>
+            <label>Kjede<select onChange={(event) => setFilters((value) => ({ ...value, chain: event.target.value }))} value={filters.chain}><option value="">Alle</option><option value="bunnpris">Bunnpris</option><option value="rema-1000">REMA 1000</option><option value="extra">Extra</option><option value="meny">MENY</option></select></label>
             <label>Omfang<select onChange={(event) => setFilters((value) => ({ ...value, scopeKind: event.target.value }))} value={filters.scopeKind}><option value="">Alle</option><option value="national">Nasjonalt</option><option value="region">Region</option><option value="postal_set">Postnummer</option><option value="store_set">Butikker</option></select></label>
             <label>Min. alder (timer)<input inputMode="numeric" onChange={(event) => setFilters((value) => ({ ...value, minAgeHours: event.target.value }))} value={filters.minAgeHours} /></label>
             <label>Maks. alder (timer)<input inputMode="numeric" onChange={(event) => setFilters((value) => ({ ...value, maxAgeHours: event.target.value }))} value={filters.maxAgeHours} /></label>

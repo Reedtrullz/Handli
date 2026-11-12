@@ -63,6 +63,21 @@ describe("GET /api/review/candidates/:candidateId/evidence", () => {
     expect(getService).not.toHaveBeenCalled();
   });
 
+  it("serves literal source text with sandbox, nosniff and no-store, never text/html", async () => {
+    const html = new TextEncoder().encode('<!doctype html><html><script>alert("synthetic")</script></html>');
+    const render = vi.fn<ReviewEvidenceServiceContract["render"]>().mockResolvedValue({
+      bytes: html, byteLength: html.byteLength, mimeType: "text/plain", challengeToken,
+      expiresAt: "2099-07-17T12:02:00.000Z", presentation: "full_capture", verifiedAt: "2099-07-17T12:00:00.000Z",
+    });
+    const response = await createReviewEvidenceHandler(() => service(render), async () => principal)(new Request("https://handle.reidar.tech/api/review/candidates/review-candidate:42/evidence"), "review-candidate:42");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/plain;charset=utf-8");
+    expect(response.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(html);
+  });
+
   it("streams bounded verified bytes with a non-actionable challenge and strict anti-cache headers", async () => {
     const render = vi.fn<ReviewEvidenceServiceContract["render"]>().mockResolvedValue({
       byteLength: bytes.byteLength,

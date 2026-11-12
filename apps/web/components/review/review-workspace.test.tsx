@@ -65,6 +65,48 @@ afterEach(() => {
 });
 
 describe("ReviewWorkspace", () => {
+  it.each([true, false])("shows MENY HTML as literal text and requires an explicit, successful acknowledgement (%s)", async acknowledgementSucceeds => {
+    const source = '<!doctype html><html><script>fetch("https://untrusted.invalid/source")</script><iframe src="https://untrusted.invalid/frame"></iframe><img src="https://untrusted.invalid/image">Tilbud ÆØÅ</html>';
+    const bytes = new TextEncoder().encode(source);
+    const textEntry = { ...entry, sourceId: "meny", chain: "meny", capture: { ...entry.capture, mimeType: "text/html" } };
+    const challenge = `review-challenge:v1.${Date.parse("2099-07-17T12:01:00.000Z").toString(36)}.${"d".repeat(22)}.${"e".repeat(64)}.${"f".repeat(64)}`;
+    const proofToken = `review-proof:v1.${Date.parse("2099-07-17T12:02:00.000Z").toString(36)}.${"a".repeat(22)}.${"b".repeat(64)}.${"c".repeat(64)}`;
+    const createObjectURL = vi.fn();
+    vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL: vi.fn() });
+    vi.stubGlobal("crypto", { subtle: { digest: vi.fn(async (_algorithm: string, input: ArrayBuffer) => Uint8Array.from(createHash("sha256").update(new Uint8Array(input)).digest()).buffer) } });
+    const acknowledgements: unknown[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.startsWith("/api/review/")) throw new Error("Source HTML must never load external URLs");
+      if (url.endsWith("/evidence")) return new Response(bytes, { headers: { "content-type": "text/plain;charset=utf-8", "content-length": String(bytes.byteLength),
+        "x-handleplan-review-evidence-challenge": challenge, "x-handleplan-review-evidence-expires": "2099-07-17T12:01:00.000Z", "x-handleplan-review-evidence-presentation": "full_capture" } });
+      if (url.endsWith("/evidence/ack")) {
+        acknowledgements.push(JSON.parse(String(init?.body)));
+        return acknowledgementSucceeds ? Response.json({ contractVersion: 1, candidateId: entry.candidateId, expiresAt: "2099-07-17T12:02:00.000Z", presentation: "full_capture", proofToken, renderedAt: "2099-07-17T12:00:01.000Z" }) : Response.json({ code: "EVIDENCE_UNAVAILABLE" }, {status: 409});
+      }
+      return Response.json({ contractVersion: 1, items: [textEntry] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<ReviewWorkspace />);
+    await screen.findByRole("heading", { name: "Vurder kandidat" });
+    expect(screen.getByText("MENY · Synthetic local")).toBeVisible();
+    expect(screen.getByRole("option", { name: "MENY", hidden: true })).toHaveValue("meny");
+    await user.click(screen.getByRole("button", { name: "Vis verifisert full kildefil" }));
+    const text = await screen.findByLabelText("Verifisert HTML-kildefil som tekst");
+    expect(text.textContent).toBe(source);
+    expect(text.querySelector("script, iframe, img")).toBeNull();
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(acknowledgements).toEqual([]);
+    await user.type(screen.getByLabelText("Begrunnelse"), "Kontrollert som tekst.");
+    expect(screen.getByRole("button", { name: "Godkjenn som uttrekt" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Jeg har lest den verifiserte teksten" }));
+    await waitFor(() => expect(acknowledgements).toHaveLength(1));
+    expect(acknowledgements[0]).toMatchObject({ digestSha256: createHash("sha256").update(bytes).digest("hex"), candidateId: entry.candidateId });
+    await waitFor(() => acknowledgementSucceeds ? expect(screen.getByRole("button", { name: "Godkjenn som uttrekt" })).toBeEnabled() : expect(screen.getByRole("button", { name: "Godkjenn som uttrekt" })).toBeDisabled());
+    expect(fetchMock.mock.calls.every(([url]) => String(url).startsWith("/api/review/"))).toBe(true);
+  });
+
   it("browses the private queue and places rights metadata beside immutable typed fields", async () => {
     const fetcher = vi.fn(async () => Response.json({ contractVersion: 1, items: [entry] }));
     vi.stubGlobal("fetch", fetcher);
