@@ -130,6 +130,7 @@ const currentMigrations = [
   "044_store_scoped_job_kind.sql",
   "045_store_catalog_discovery_health.sql",
   "046_catalog_run_price_guard.sql",
+  "047_meny_private_review_text_evidence.sql",
 ];
 const legacy040SchemaFixture = resolve(
   root,
@@ -663,15 +664,8 @@ async function verifyBaselineActivation(sql) {
   assert.match(baseline?.artifact_sha256 ?? "", /^[0-9a-f]{64}$/);
   assert.equal(baseline?.covered_count, 40);
   assert.match(baseline?.resulting_schema_sha256 ?? "", /^[0-9a-f]{64}$/);
-  const ledger = await readMigrationLedger(sql, [
-    "041_public_offer_projection_repair.sql",
-    "042_official_offer_worker_boundary.sql",
-    "043_meny_official_offer_source.sql",
-    "044_store_scoped_job_kind.sql",
-    "045_store_catalog_discovery_health.sql",
-    "046_catalog_run_price_guard.sql",
-  ]);
-  assert.equal(ledger.length, 6);
+  const ledger = await readMigrationLedger(sql, currentMigrations.slice(40));
+  assert.equal(ledger.length, currentMigrations.length - 40);
   const [projection] = await sql`
     select pg_catalog.pg_get_functiondef(
       'public.public_official_offer_rows_v1(bigint[], timestamptz)'::regprocedure
@@ -3042,7 +3036,9 @@ process.exit(child.status ?? 1);
   assert.equal(restoreResult.evidence.status, "archive-restored-schema-verified");
   const restored = postgres(localDatabaseUrl(restoreDatabase, 55443, restoreRole, restoreContainerPassword), { max: 1, onnotice: () => {} });
   const [ledgerCount] = await restored`select count(*)::integer as count from handleplan_schema_migrations`;
-  assert.equal(ledgerCount.count, label === "baseline" ? 6 : 46);
+  assert.equal(ledgerCount.count, label === "baseline"
+    ? currentMigrations.length - 40
+    : currentMigrations.length);
   const [baselineState] = await restored`
     select to_regclass('public.handleplan_schema_baselines') is not null as exists
   `;
