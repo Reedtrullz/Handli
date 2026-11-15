@@ -7,6 +7,7 @@ import {
   readMonitorConfig,
   runPublicMonitor,
   sanitizedFailure,
+  summarizeNonOperationalSources,
   validateSourceStatusContract,
 } from "../../scripts/operations/check-public-monitor.mjs";
 
@@ -296,6 +297,126 @@ test("turns degraded and silent source states into alerts without a recovery req
     }),
     nowMs: () => Date.parse(NOW),
   }), "SOURCE_NOT_OPERATIONAL");
+});
+
+test("logs only approved non-operational source keys with fixed state words", async () => {
+  const sentinelName = "SENTINEL-DISPLAY-NAME https://private.invalid/feed";
+  const entries = [
+    sourceEntry({
+      health: null,
+      latestTerminalIngestion: null,
+      source: { ...sourceEntry().source, displayName: sentinelName, id: "meny", kind: "offer" },
+    }),
+    sourceEntry({
+      health: { ...sourceEntry().health, state: "degraded" },
+      source: { ...sourceEntry().source, displayName: sentinelName, id: "open-prices" },
+    }),
+    sourceEntry({
+      health: null,
+      latestTerminalIngestion: null,
+      source: { ...sourceEntry().source, displayName: sentinelName, id: "tjek", kind: "offer" },
+    }),
+    sourceEntry({
+      governanceState: "not-approved",
+      health: null,
+      source: { ...sourceEntry().source, displayName: sentinelName, id: "unapproved", runtimeState: "blocked" },
+    }),
+    sourceEntry({
+      source: { ...sourceEntry().source, displayName: "Zeta healthy", id: "zeta" },
+    }),
+  ];
+  const degraded = sourceStatus({ entries, overall: "degraded" });
+  validateSourceStatusContract(degraded, Date.parse(NOW));
+  assert.deepEqual(summarizeNonOperationalSources(degraded), [
+    { id: "meny", state: "no-health" },
+    { id: "open-prices", state: "degraded" },
+    { id: "tjek", state: "no-health" },
+  ]);
+
+  let caught;
+  try {
+    await runPublicMonitor(config(), {
+      fetchImpl: endpointFetch({ source: degraded }),
+      nowMs: () => Date.parse(NOW),
+    });
+  } catch (error) {
+    caught = error;
+  }
+  const output = JSON.stringify(sanitizedFailure(caught));
+  assert.deepEqual(JSON.parse(output), {
+    code: "SOURCE_DEGRADED",
+    contractVersion: 1,
+    event: "public-monitor.failed",
+    sources: [
+      { id: "meny", state: "no-health" },
+      { id: "open-prices", state: "degraded" },
+      { id: "tjek", state: "no-health" },
+    ],
+  });
+  for (const forbidden of [
+    "SENTINEL",
+    "private.invalid",
+    "unapproved",
+    "zeta",
+    "recordedAt",
+    sourceEntry().health.recordedAt,
+    ACCESS_ID,
+  ]) {
+    assert.doesNotMatch(output, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
+  }
+
+  const stale = sourceStatus({
+    entries: [sourceEntry({
+      health: {
+        ...sourceEntry().health,
+        freshness: "stale",
+        lastSuccess: {
+          captureAt: null,
+          discoveryAt: "2026-07-15T08:00:00.000Z",
+          eligibleEvidenceAt: null,
+          publishAt: null,
+        },
+        recordedAt: "2026-07-15T09:00:00.000Z",
+      },
+    })],
+    hasMore: true,
+    overall: "unknown",
+  });
+  validateSourceStatusContract(stale, Date.parse(NOW));
+  await assert.rejects(runPublicMonitor(config(), {
+    fetchImpl: endpointFetch({ source: stale }),
+    nowMs: () => Date.parse(NOW),
+  }), (error) => {
+    assert.deepEqual(sanitizedFailure(error), {
+      code: "SOURCE_UNKNOWN",
+      contractVersion: 1,
+      directoryIncomplete: true,
+      event: "public-monitor.failed",
+      sources: [{ id: "approved-source", state: "stale" }],
+    });
+    return true;
+  });
+
+  const forged = new PublicMonitorFailure("SOURCE_UNKNOWN", {
+    sources: [
+      { id: "https://private.invalid/", state: "no-health" },
+      { id: "meny", state: "SENTINEL-free-text" },
+      { id: "meny", note: "SENTINEL", state: "stale" },
+    ],
+  });
+  assert.deepEqual(sanitizedFailure(forged), {
+    code: "SOURCE_UNKNOWN",
+    contractVersion: 1,
+    event: "public-monitor.failed",
+    sources: [{ id: "meny", state: "stale" }],
+  });
+  assert.deepEqual(sanitizedFailure(new PublicMonitorFailure("REVISION_MISMATCH", {
+    sources: [{ id: "meny", state: "stale" }],
+  })), {
+    code: "REVISION_MISMATCH",
+    contractVersion: 1,
+    event: "public-monitor.failed",
+  });
 });
 
 test("rejects extra source fields, derived-overall lies, and replayed status", () => {

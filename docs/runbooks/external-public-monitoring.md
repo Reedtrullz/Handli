@@ -95,6 +95,18 @@ Its only output is an allowlisted JSON outcome containing contract version,
 probe states, or a fixed failure code. Do not add `curl --verbose`, shell
 tracing, request dumps, or dynamic exception messages to this workflow.
 
+For `SOURCE_DEGRADED` and `SOURCE_UNKNOWN` only, the failure outcome also
+carries a `sources` array naming each approved source that keeps the overall
+state from being operational, plus `directoryIncomplete: true` when the
+bounded directory reported more rows. Each item is exactly
+`{ "id": <source key>, "state": <fixed word> }`. The key must match
+`^[a-z0-9][a-z0-9._-]{0,63}$` (otherwise it is written as `unlisted`), and the
+state is one of `degraded`, `failed`, `disabled`, `ingestion-failed`,
+`ingestion-degraded`, `ingestion-cancelled`, `no-health`, `stale`, or
+`no-recent-success`, using the same precedence as the derived overall state.
+Display names, scopes, clocks, counts, and URLs are never written, because
+this repository and its Actions logs are public.
+
 ## Notification and protection setup
 
 Before treating the monitor as operational:
