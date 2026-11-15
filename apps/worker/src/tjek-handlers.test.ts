@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { officialOfferEditionDiscoveryInputV1Schema, syntheticAuthorizedLocalEdition } from "@handleplan/domain";
 import { createTjekHandlers, TJEK_JOB_KIND } from "./tjek-handlers";
+import { WorkerRunner } from "./runner";
 const catalog = { id: "edition", dealer_id: "5b11sm", chainId: "bunnpris", type: "incito" } as never;
 const edition = officialOfferEditionDiscoveryInputV1Schema.parse({ ...syntheticAuthorizedLocalEdition, sourceId: "tjek", externalEditionId: "edition", chain: "bunnpris" });
 function setup() {
@@ -12,7 +13,15 @@ function setup() {
   const foundation = { isCaptureComplete: vi.fn(async (): Promise<"completed" | "degraded" | undefined> => undefined), repository: { recordEdition, recordCapture, recordExtraction }, privateBlobStore: { putIfAbsent }, resolveEdition: vi.fn(async () => edition), sourceAccessPolicy: { getDecision: vi.fn(async (_: string, __: string, asOf: string) => ({ contractVersion: 1, permissionId: 1, sourceId: "tjek", decision: "approved", capabilities: ["capture", "discover", "extract"], rightsClassifications: ["public_display"], reviewedAt: "2026-07-01T00:00:00.000Z", evaluatedAt: asOf })) } };
   const handler = createTjekHandlers({ client: client as never, foundation, clock: () => new Date("2026-07-17T08:00:00.000Z") })[TJEK_JOB_KIND]!;
   const run = () => handler({ signal: new AbortController().signal } as never);
-  return { run, client, foundation, recordEdition, recordCapture, recordExtraction, putIfAbsent };
+  const runWorker = () => new WorkerRunner({
+    createRunId: () => "tjek-counter-test",
+    handlers: { [TJEK_JOB_KIND]: handler },
+    now: () => new Date("2026-07-17T08:00:00.000Z"),
+  }).run({
+    contractVersion: 1, jobId: "tjek-counter-test", kind: TJEK_JOB_KIND,
+    requestedAt: "2026-07-17T08:00:00.000Z", sourceId: "tjek", timeoutMs: 5_000,
+  }, { fenceToken: "tjek-counter-test-fence" });
+  return { run, runWorker, client, foundation, recordEdition, recordCapture, recordExtraction, putIfAbsent };
 }
 describe("Tjek foundation ingestion", () => {
   it("stores evidence and only unresolved review candidates", async () => {
@@ -46,5 +55,30 @@ describe("Tjek foundation ingestion", () => {
     const t = setup(); t.foundation.resolveEdition.mockRejectedValue(new Error("scope unavailable"));
     expect((await t.run())?.counters).toMatchObject({ failed: 1 });
     expect(t.putIfAbsent).not.toHaveBeenCalled();
+  });
+  it("keeps worker counter accounting valid for new and already-complete captures", async () => {
+    const t = setup();
+    expect(await t.runWorker()).toMatchObject({
+      status: "succeeded",
+      counters: { fetched: 1, persisted: 1, quarantined: 1, accepted: 0, unknown: 0, failed: 0 },
+    });
+    t.foundation.isCaptureComplete.mockResolvedValue("completed");
+    expect(await t.runWorker()).toMatchObject({
+      status: "succeeded",
+      counters: { fetched: 0, persisted: 0, quarantined: 0, accepted: 0, unknown: 0, failed: 0 },
+    });
+    t.foundation.isCaptureComplete.mockResolvedValue("degraded");
+    expect(await t.runWorker()).toMatchObject({
+      status: "failed",
+      counters: { fetched: 0, persisted: 0, quarantined: 0, accepted: 0, unknown: 0, failed: 1 },
+    });
+  });
+  it("keeps a failed capture failed instead of invalid accounting", async () => {
+    const t = setup();
+    t.recordCapture.mockRejectedValueOnce(new Error("permission denied"));
+    expect(await t.runWorker()).toMatchObject({
+      status: "failed",
+      counters: { fetched: 0, persisted: 0, quarantined: 0, accepted: 0, unknown: 0, failed: 1 },
+    });
   });
 });

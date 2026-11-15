@@ -66,6 +66,50 @@ describe("worker source-health snapshot derivation", () => {
     });
   });
 
+  it("records review-only official-offer discovery as healthy and advances discovery", () => {
+    const discovery = {
+      ...result,
+      counts: { accepted: 0, failed: 0, fetched: 2, persisted: 2, quarantined: 2, unknown: 0 },
+      jobId: "meny:official-offer-discovery:2026-07-17T07:00:00.000Z",
+      jobKind: "official-offer-discovery" as const,
+      sourceId: "meny",
+    };
+    expect(deriveWorkerSourceHealthSnapshot(discovery, previous)).toMatchObject({
+      lastCaptureSuccessAt: COMPLETED_AT,
+      lastDiscoverySuccessAt: COMPLETED_AT,
+      lastPublishSuccessAt: previous.lastPublishSuccessAt,
+      newestEligibleEvidenceAt: previous.newestEligibleEvidenceAt,
+      status: "healthy",
+    });
+
+    // The current edition was already captured: discovery still succeeded,
+    // but capture did not make new progress.
+    expect(deriveWorkerSourceHealthSnapshot({
+      ...discovery,
+      counts: { accepted: 0, failed: 0, fetched: 0, persisted: 0, quarantined: 0, unknown: 0 },
+    }, previous)).toMatchObject({
+      lastCaptureSuccessAt: previous.lastCaptureSuccessAt,
+      lastDiscoverySuccessAt: COMPLETED_AT,
+      status: "healthy",
+    });
+
+    expect(deriveWorkerSourceHealthSnapshot({
+      ...discovery,
+      counts: { ...discovery.counts, failed: 1 },
+      status: "partial",
+    }, previous)).toMatchObject({
+      lastCaptureSuccessAt: COMPLETED_AT,
+      lastDiscoverySuccessAt: COMPLETED_AT,
+      status: "degraded",
+    });
+
+    expect(deriveWorkerSourceHealthSnapshot({
+      ...discovery,
+      counts: { accepted: 0, failed: 1, fetched: 0, persisted: 0, quarantined: 0, unknown: 0 },
+      status: "failed",
+    }, previous)).toMatchObject({ ...previous, status: "failed" });
+  });
+
   it("marks partial progress degraded while retaining real success clocks", () => {
     const snapshot = deriveWorkerSourceHealthSnapshot({
       ...result,

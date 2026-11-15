@@ -323,6 +323,117 @@ describe.skipIf(!runDatabaseIntegration).sequential(
         )
       `).rejects.toThrow(/lifecycle results do not assert source-health/i);
 
+      const discoveryJobId =
+        `${sourceId}:official-offer-discovery:2026-07-16T13:50:00.000Z`;
+      const discoveryCompletedAt = new Date("2026-07-16T13:50:02.000Z");
+      await expect(repository.record({
+        ...input,
+        completedAt: discoveryCompletedAt,
+        counts: {
+          accepted: 0,
+          failed: 0,
+          fetched: 2,
+          persisted: 2,
+          quarantined: 2,
+          unknown: 0,
+        },
+        jobId: discoveryJobId,
+        jobKind: "official-offer-discovery",
+        scheduledAt: new Date("2026-07-16T13:50:00.000Z"),
+        sourceId,
+        startedAt: new Date("2026-07-16T13:50:01.000Z"),
+        status: "succeeded",
+      }, lease.fenceToken)).resolves.toEqual({ created: true });
+      const [discoveryHealth] = await connection.sql<RawSourceHealthClockRow[]>`
+        select
+          status,
+          last_discovery_success_at,
+          last_capture_success_at,
+          last_publish_success_at,
+          newest_eligible_evidence_at
+        from source_health_snapshots
+        where worker_job_id = ${discoveryJobId}
+      `;
+      expect(decodeSourceHealthClockRow(discoveryHealth)).toEqual({
+        last_capture_success_at: discoveryCompletedAt,
+        last_discovery_success_at: discoveryCompletedAt,
+        last_publish_success_at: null,
+        newest_eligible_evidence_at: null,
+        status: "healthy",
+      });
+
+      const unchangedDiscoveryJobId =
+        `${sourceId}:official-offer-discovery:2026-07-16T14:00:00.000Z`;
+      const unchangedDiscoveryCompletedAt = new Date("2026-07-16T14:00:02.000Z");
+      await expect(repository.record({
+        ...input,
+        completedAt: unchangedDiscoveryCompletedAt,
+        counts: {
+          accepted: 0,
+          failed: 0,
+          fetched: 0,
+          persisted: 0,
+          quarantined: 0,
+          unknown: 0,
+        },
+        jobId: unchangedDiscoveryJobId,
+        jobKind: "official-offer-discovery",
+        scheduledAt: new Date("2026-07-16T14:00:00.000Z"),
+        sourceId,
+        startedAt: new Date("2026-07-16T14:00:01.000Z"),
+        status: "succeeded",
+      }, lease.fenceToken)).resolves.toEqual({ created: true });
+      const [unchangedDiscoveryHealth] = await connection.sql<RawSourceHealthClockRow[]>`
+        select
+          status,
+          last_discovery_success_at,
+          last_capture_success_at,
+          last_publish_success_at,
+          newest_eligible_evidence_at
+        from source_health_snapshots
+        where worker_job_id = ${unchangedDiscoveryJobId}
+      `;
+      expect(decodeSourceHealthClockRow(unchangedDiscoveryHealth)).toEqual({
+        last_capture_success_at: discoveryCompletedAt,
+        last_discovery_success_at: unchangedDiscoveryCompletedAt,
+        last_publish_success_at: null,
+        newest_eligible_evidence_at: null,
+        status: "healthy",
+      });
+
+      const forgedDiscoveryJobId =
+        `${sourceId}:official-offer-discovery:2026-07-16T14:10:00.000Z`;
+      await connection.sql`
+        insert into worker_job_results (
+          job_id, source_id, job_kind, scheduled_at, run_id, status,
+          started_at, completed_at, counts, result_hash
+        ) values (
+          ${forgedDiscoveryJobId}, ${sourceId}, 'official-offer-discovery',
+          '2026-07-16T14:10:00Z', ${`forged-discovery-run-${nonce}`}, 'succeeded',
+          '2026-07-16T14:10:01Z', '2026-07-16T14:10:02Z',
+          '{"accepted":0,"failed":0,"fetched":0,"persisted":0,"quarantined":0,"unknown":0}'::jsonb,
+          ${"f".repeat(64)}
+        )
+      `;
+      await expect(connection.sql`
+        insert into source_health_snapshots (
+          worker_job_id, source_id, status, last_discovery_success_at,
+          last_capture_success_at, details, recorded_at
+        ) values (
+          ${forgedDiscoveryJobId}, ${sourceId}, 'degraded', '2026-07-16T14:10:02Z',
+          '2026-07-16T13:50:02Z', '{}'::jsonb, '2026-07-16T14:10:02Z'
+        )
+      `).rejects.toThrow(/successful official-offer discovery requires healthy source health/i);
+      await expect(connection.sql`
+        insert into source_health_snapshots (
+          worker_job_id, source_id, status, last_discovery_success_at,
+          last_capture_success_at, details, recorded_at
+        ) values (
+          ${forgedDiscoveryJobId}, ${sourceId}, 'healthy', '2026-07-16T14:00:02Z',
+          '2026-07-16T13:50:02Z', '{}'::jsonb, '2026-07-16T14:10:02Z'
+        )
+      `).rejects.toThrow(/discovery success must match deterministic job progress/i);
+
       await lease.release();
       await expect(repository.record({
         ...input,

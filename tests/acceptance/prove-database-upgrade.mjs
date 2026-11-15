@@ -131,6 +131,7 @@ const currentMigrations = [
   "045_store_catalog_discovery_health.sql",
   "046_catalog_run_price_guard.sql",
   "047_meny_private_review_text_evidence.sql",
+  "048_official_offer_discovery_health.sql",
 ];
 const legacy040SchemaFixture = resolve(
   root,

@@ -49,12 +49,31 @@ const PUBLIC_FAILURE_CODES = new Set([
   "SOURCE_UNKNOWN",
 ]);
 
+const MAX_REPORTED_SOURCES = 50;
+const REPORTED_SOURCE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
+// Fixed vocabulary for the per-source failure summary. These are the only
+// strings the summary can contain besides a pattern-checked source key.
+const REPORTED_SOURCE_STATES = new Set([
+  "degraded",
+  "disabled",
+  "failed",
+  "ingestion-cancelled",
+  "ingestion-degraded",
+  "ingestion-failed",
+  "no-health",
+  "no-recent-success",
+  "stale",
+]);
+const SOURCE_SUMMARY_CODES = new Set(["SOURCE_DEGRADED", "SOURCE_UNKNOWN"]);
+
 export class PublicMonitorFailure extends Error {
-  constructor(code, { retryable = false } = {}) {
+  constructor(code, { retryable = false, sources, directoryIncomplete = false } = {}) {
     super(code);
     this.name = "PublicMonitorFailure";
     this.code = code;
     this.retryable = retryable;
+    this.sources = sources;
+    this.directoryIncomplete = directoryIncomplete === true;
   }
 }
 
@@ -185,23 +204,68 @@ function hasRecentRecordedSuccess(entry, generatedAt) {
   });
 }
 
+// The degraded half of the fixed state vocabulary.
+const DEGRADED_SOURCE_STATES = new Set([
+  "degraded",
+  "disabled",
+  "failed",
+  "ingestion-degraded",
+  "ingestion-failed",
+]);
+
+/**
+ * Classifies one approved entry. Returns undefined for an operational entry.
+ * This is the single precedence used by the derived overall state and the
+ * public per-source summary.
+ */
+function approvedEntryProblem(entry, generatedAt) {
+  if (entry.health !== null && new Set(["degraded", "failed", "disabled"]).has(entry.health.state)) {
+    return entry.health.state;
+  }
+  if (hasNewerFailedOrDegradedIngestion(entry)) {
+    return entry.latestTerminalIngestion.state === "failed"
+      ? "ingestion-failed"
+      : "ingestion-degraded";
+  }
+  if (hasNewerCancelledIngestion(entry)) return "ingestion-cancelled";
+  if (entry.health === null) return "no-health";
+  if (entry.health.freshness === "stale") return "stale";
+  if (!hasRecentRecordedSuccess(entry, generatedAt)) return "no-recent-success";
+  return undefined;
+}
+
+/**
+ * Public-log-safe summary of approved sources that keep the overall state from
+ * being operational: only a pattern-checked source key and a fixed state word.
+ * Display names, scopes, clocks, URLs, and counts are never included.
+ */
+export function summarizeNonOperationalSources(value) {
+  const summary = [];
+  const seen = new Set();
+  for (const entry of value.entries) {
+    if (entry.governanceState !== "approved") continue;
+    const state = approvedEntryProblem(entry, value.generatedAt);
+    if (state === undefined || !REPORTED_SOURCE_STATES.has(state)) continue;
+    const id = typeof entry.source.id === "string" && REPORTED_SOURCE_ID_PATTERN.test(entry.source.id)
+      ? entry.source.id
+      : "unlisted";
+    const key = `${id}\u0000${state}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    summary.push(Object.freeze({ id, state }));
+    if (summary.length >= MAX_REPORTED_SOURCES) break;
+  }
+  return Object.freeze(summary.sort((left, right) =>
+    compareText(left.id, right.id) || compareText(left.state, right.state)));
+}
+
 function deriveSourceOverall(entries, hasMore, generatedAt) {
   const approved = entries.filter(({ governanceState }) => governanceState === "approved");
-  if (
-    approved.some(({ health }) => health !== null && new Set([
-      "degraded",
-      "failed",
-      "disabled",
-    ]).has(health.state))
-    || approved.some(hasNewerFailedOrDegradedIngestion)
-  ) return "degraded";
+  const problems = approved.map((entry) => approvedEntryProblem(entry, generatedAt));
+  if (problems.some((problem) => DEGRADED_SOURCE_STATES.has(problem))) return "degraded";
   if (hasMore) return "unknown";
   if (approved.length === 0) return "no-approved-sources";
-  if (
-    approved.some(hasNewerCancelledIngestion)
-    || approved.some(({ health }) => health === null || health.freshness === "stale")
-    || approved.some((entry) => !hasRecentRecordedSuccess(entry, generatedAt))
-  ) return "unknown";
+  if (problems.some((problem) => problem !== undefined)) return "unknown";
   return "operational";
 }
 
@@ -481,8 +545,12 @@ export async function runPublicMonitor(config, dependencies = {}) {
 
   const sourceStatus = await requestJson("/api/source-status", config, dependencies);
   validateSourceStatusContract(sourceStatus, dependencies.nowMs?.() ?? Date.now());
-  if (sourceStatus.overall === "degraded") fail("SOURCE_DEGRADED");
-  if (sourceStatus.overall === "unknown") fail("SOURCE_UNKNOWN");
+  if (sourceStatus.overall === "degraded" || sourceStatus.overall === "unknown") {
+    fail(sourceStatus.overall === "degraded" ? "SOURCE_DEGRADED" : "SOURCE_UNKNOWN", {
+      directoryIncomplete: sourceStatus.hasMore,
+      sources: summarizeNonOperationalSources(sourceStatus),
+    });
+  }
   if (sourceStatus.overall === "no-approved-sources") fail("SOURCE_NOT_OPERATIONAL");
 
   return Object.freeze({
@@ -498,11 +566,27 @@ export function sanitizedFailure(error) {
   const code = error instanceof PublicMonitorFailure && PUBLIC_FAILURE_CODES.has(error.code)
     ? error.code
     : "MONITOR_FAILED";
-  return Object.freeze({
+  const failure = {
     code,
     contractVersion: CONTRACT_VERSION,
     event: "public-monitor.failed",
-  });
+  };
+  if (SOURCE_SUMMARY_CODES.has(code) && Array.isArray(error.sources)) {
+    const sources = error.sources
+      .filter((source) =>
+        source !== null
+        && typeof source === "object"
+        && typeof source.id === "string"
+        && (REPORTED_SOURCE_ID_PATTERN.test(source.id) || source.id === "unlisted")
+        && REPORTED_SOURCE_STATES.has(source.state))
+      .slice(0, MAX_REPORTED_SOURCES)
+      .map(({ id, state }) => Object.freeze({ id, state }));
+    if (error.directoryIncomplete === true) failure.directoryIncomplete = true;
+    // An empty list with directoryIncomplete means no visible approved source
+    // explains the truncated directory.
+    failure.sources = Object.freeze(sources);
+  }
+  return Object.freeze(failure);
 }
 
 async function main() {
