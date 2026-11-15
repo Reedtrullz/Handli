@@ -2,8 +2,8 @@
 
 The repository contains an external, read-only monitor in
 `.github/workflows/external-public-monitor.yml`. GitHub-hosted Actions keeps the
-probe outside the Handleplan VPS failure domain. The scheduled job performs
-three bounded `GET` requests:
+probe outside the Handleplan VPS failure domain. The monitor performs three
+bounded `GET` requests:
 
 1. `/api/health` must return the exact process-liveness contract and the
    configured deployed revision.
@@ -20,6 +20,21 @@ or otherwise mutate the application. The workflow has only `contents: read`
 permission and contains no VPS credential, SSH step, deployment command, or
 recovery action. Source degradation should qualify or remove affected claims
 through the application data boundary, not create a web restart loop.
+
+## External 15-minute trigger
+
+GitHub's `schedule` event is best-effort. Since late August 2026 the scheduler
+has been dropping most 15-minute ticks for this workflow, sometimes leaving
+only a handful of runs per day. The primary clock is therefore the Cloudflare
+Worker cron in `scripts/operations/monitor-dispatch/`, which dispatches this
+workflow on the default branch every 15 minutes. The workflow's `schedule`
+entry remains as a backup. The monitor is read-only, so an occasional duplicate
+run is harmless.
+
+Expect `workflow_dispatch` runs in the Actions history. If both the Worker
+dispatches and the backup schedule stop, the monitor is not running. The
+dispatcher is not a dead-man monitor; the independent missed-heartbeat monitor
+below is still required.
 
 This scheduled monitor is separate from the deployment-time external promotion
 probe in `.github/workflows/deploy-preview.yml`. That probe uses the `preview`
