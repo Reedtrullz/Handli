@@ -68,15 +68,33 @@ constructs a request carrying Access credentials. A domain change therefore
 requires a reviewed source change; do not turn the origin back into a GitHub
 variable.
 
-Configure these environment variables (not repository variables):
+Configure these repository variables (Settings → Secrets and variables →
+Actions → Variables → Repository variables, not `external-public-monitor`
+Environment variables). The workflow reads them as
+`vars.HANDLEPLAN_MONITOR_EXPECTED_REVISION` and
+`vars.HANDLEPLAN_MONITOR_EXPECTED_MIGRATION`, and a manual dispatch may
+override either one with the `expected_revision` / `expected_migration`
+inputs:
 
 - `HANDLEPLAN_MONITOR_EXPECTED_REVISION`: the full 40-character lowercase Git
   revision currently deployed.
 - `HANDLEPLAN_MONITOR_EXPECTED_MIGRATION`: the migration filename the deployed
   readiness contract must report, for example
-  `031_supported_chain_expansion.sql`. Update this environment variable
-  in deployment lockstep with the application/readiness promotion; a stale
-  value must alert rather than teaching the monitor to accept either version.
+  `031_supported_chain_expansion.sql`.
+
+Update both repository variables in deployment lockstep with the
+application/readiness promotion; a stale value must alert rather than teaching
+the monitor to accept either version. With the GitHub CLI:
+
+```sh
+gh variable set HANDLEPLAN_MONITOR_EXPECTED_REVISION --repo Reedtrullz/Handli --body <40-char-deployed-sha>
+gh variable set HANDLEPLAN_MONITOR_EXPECTED_MIGRATION --repo Reedtrullz/Handli --body <migration-filename>
+gh variable list --repo Reedtrullz/Handli
+```
+
+Do not pass `--env external-public-monitor`: an Environment variable with the
+same name would take precedence over the repository variable in this job and
+silently split the source of truth.
 
 Configure these environment secrets for a least-privilege Cloudflare Access
 service token restricted to the three monitoring paths:
@@ -115,7 +133,8 @@ directory itself is the only known cause.
 
 Before treating the monitor as operational:
 
-1. Merge the workflow into the default branch, configure all four names, and
+1. Merge the workflow into the default branch, configure all four names (the
+   two repository variables and the two Environment secrets), and
    restrict the `external-public-monitor` Environment to that protected branch.
    A scheduled workflow that exists only on a feature branch does not run on a
    timer. The job also rejects a manual dispatch from any other ref, but the
@@ -139,9 +158,9 @@ Before treating the monitor as operational:
    maintainers exist; the author must never be the only effective reviewer of
    code that can receive the monitoring Environment secrets. Retain ruleset
    configuration and one non-author approval as activation evidence.
-6. Keep the expected revision variable coupled to the successful production
-   promotion/readback procedure. A revision mismatch is an alert, not a reason
-   for the monitor to accept whichever revision happens to answer.
+6. Keep the expected revision repository variable coupled to the successful
+   production promotion/readback procedure. A revision mismatch is an alert,
+   not a reason for the monitor to accept whichever revision happens to answer.
 7. Configure an independently operated dead-man monitor outside both GitHub
    Actions and the VPS. It must expect a completed scheduled probe at least
    every 15 minutes and alert the maintainer after a bounded missed-heartbeat
