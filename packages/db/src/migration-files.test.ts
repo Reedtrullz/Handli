@@ -167,6 +167,7 @@ describe("forward-only v1 migrations", () => {
       "045_store_catalog_discovery_health.sql",
       "046_catalog_run_price_guard.sql",
       "047_meny_private_review_text_evidence.sql",
+      "048_official_offer_discovery_health.sql",
     ]);
   });
 
@@ -176,7 +177,7 @@ describe("forward-only v1 migrations", () => {
       .sort();
     expect(files[0]).toBe("001_price_cache.sql");
     const guardedFiles = files.slice(1);
-    expect(guardedFiles.at(-1)).toBe("047_meny_private_review_text_evidence.sql");
+    expect(guardedFiles.at(-1)).toBe("048_official_offer_discovery_health.sql");
     const source = (
       await Promise.all(
         guardedFiles.map((file) => readFile(path.join(migrationsDirectory, file), "utf8")),
@@ -520,6 +521,38 @@ describe("forward-only v1 migrations", () => {
     expect(forwardMigration).toContain(
       "worker counters cannot advance governed publish success",
     );
+  });
+
+  it("lets review-only official-offer discovery assert source health in a forward migration", async () => {
+    const [previous, forward] = await Promise.all([
+      readFile(path.join(migrationsDirectory, "045_store_catalog_discovery_health.sql"), "utf8"),
+      readFile(path.join(migrationsDirectory, "048_official_offer_discovery_health.sql"), "utf8"),
+    ]);
+
+    expect(previous).not.toContain("official-offer-discovery");
+    expect(forward).toContain("create or replace function validate_worker_source_health_snapshot()");
+    expect(forward).toMatch(/set search_path = pg_catalog, public[\s\S]*as \$\$/u);
+    expect(forward).toContain(
+      "if worker_result.job_kind = 'official-offer-discovery'\n     and worker_result.status in ('succeeded', 'partial') then",
+    );
+    expect(forward).toContain("successful official-offer discovery requires healthy source health");
+    expect(forward).toContain("and worker_result.job_kind <> 'official-offer-discovery'");
+    // Every pre-existing guard survives the rewrite.
+    for (const guard of [
+      "official-offer lifecycle results do not assert source-health snapshots",
+      "requires canonical aggregate counters",
+      "requires consistent aggregate counters",
+      "worker discovery success must match deterministic job progress",
+      "worker capture success must match deterministic job progress",
+      "worker counters cannot advance governed publish success",
+      "worker counters cannot advance governed eligible evidence",
+      "zero-accepted-record ingestion requires degraded source health",
+      "failed or timed-out worker result requires failed source health",
+      "cancelled worker results do not assert a source-health state",
+      "worker_result.job_kind in ('catalog-refresh', 'official-offer-ingestion', 'store-catalog-price-refresh')",
+    ]) {
+      expect(forward).toContain(guard);
+    }
   });
 
   it("seals versioned postal directories once and rejects late child append", async () => {

@@ -5,6 +5,7 @@ export const WORKER_SOURCE_HEALTH_JOB_KINDS = [
   "physical-store-sync",
   "historical-observation-collection",
   "open-prices-benchmark-refresh",
+  "official-offer-discovery",
   "official-offer-ingestion",
 ] as const;
 
@@ -71,9 +72,23 @@ function copyBoundedClock(value: Date | null, recordedAt: Date, name: string): D
   return new Date(value);
 }
 
+/**
+ * Production official-offer discovery (Tjek, MENY) discovers the current
+ * editions, captures any new one, and extracts review-only candidates. Its
+ * candidates are never auto-accepted: they all land in human review, so
+ * `accepted` is structurally zero and cannot signal health. A `succeeded`
+ * result already means every discovered edition was captured and extracted
+ * (or verified as an already-complete capture) with no failures.
+ */
+function isReviewOnlyOfficialOfferDiscovery(result: WorkerSourceHealthResult): boolean {
+  return result.jobKind === "official-offer-discovery";
+}
+
 function healthState(result: WorkerSourceHealthResult): WorkerSourceHealthState {
   if (result.status === "failed" || result.status === "timed-out") return "failed";
-  if (result.status === "partial" || result.counts.accepted === 0) return "degraded";
+  if (result.status === "partial") return "degraded";
+  if (isReviewOnlyOfficialOfferDiscovery(result)) return "healthy";
+  if (result.counts.accepted === 0) return "degraded";
   return "healthy";
 }
 
@@ -120,13 +135,18 @@ export function deriveWorkerSourceHealthSnapshot(
   const discoversSourceEvidence = result.jobKind === "catalog-refresh"
     || result.jobKind === "store-catalog-price-refresh"
     || result.jobKind === "official-offer-ingestion";
+  // A completed official-offer discovery run proves the source listing was
+  // reachable and every discovered edition is captured, even when the current
+  // edition was already captured by an earlier run and nothing new persisted.
+  const discoveredOfficialOffers = isReviewOnlyOfficialOfferDiscovery(result)
+    && (result.status === "succeeded" || result.status === "partial");
   const completedAt = new Date(recordedAt);
 
   return Object.freeze({
     details: Object.freeze({}),
     geographicScopeId: null,
     lastCaptureSuccessAt: madeProgress ? completedAt : lastCaptureSuccessAt,
-    lastDiscoverySuccessAt: madeProgress && discoversSourceEvidence
+    lastDiscoverySuccessAt: (madeProgress && discoversSourceEvidence) || discoveredOfficialOffers
       ? completedAt
       : lastDiscoverySuccessAt,
     // Worker counters prove capture progress, not a governed public publication.

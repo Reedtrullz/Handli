@@ -334,10 +334,10 @@ export class PostgresWorkerJobStateRepository {
 
       if (
         value.status !== "cancelled"
-        // Phase-level discovery/fetch results are independently observable for
-        // lag, but neither phase alone proves the combined source-health
-        // progression asserted by official-offer-ingestion.
-        && value.jobKind !== "official-offer-discovery"
+        // Production official-offer discovery (Tjek, MENY) runs discovery,
+        // capture, and review-only extraction in one job, so its terminal
+        // result asserts source health (migration 048). A phase-level fetch
+        // alone still proves nothing about the combined progression.
         && value.jobKind !== "official-offer-fetch"
         && value.jobKind !== "official-offer-lifecycle-reconcile"
       ) {

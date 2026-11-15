@@ -42,6 +42,27 @@ claim eligibility. A zero-accepted-record nominal success is recorded as
 degraded ingestion health. This makes the processing condition visible without
 turning it into a public evidence, coverage, or ranking claim.
 
+Official-offer sources (Tjek, MENY) run a single production
+`official-offer-discovery` job that discovers the current editions, captures
+any new edition privately, and extracts review-only candidates. Since
+migration 048 that job's terminal result appends a source-wide snapshot too
+(previously it appended none, so these approved sources stayed `unknown`
+forever; see issue #97). Because every official-offer candidate goes to human
+review, `accepted` is always zero for this job kind, so the zero-accepted rule
+does not apply to it:
+
+- `succeeded` (every discovered edition captured and extracted, or verified as
+  an already-complete capture) records `healthy` and advances the discovery
+  clock, even when nothing new was persisted;
+- `partial` records `degraded` and also advances the discovery clock;
+- `failed`/`timed-out` records `failed` without advancing any clock;
+- the capture clock still advances only on persisted progress, and publish and
+  eligible-evidence clocks remain owned by the governed publisher.
+
+Both jobs run daily, inside the 26-hour window, so a working source stays
+`operational`. The generic `official-offer-ingestion` handler remains
+unwired in production; it would duplicate the discovery job's capture.
+
 `overall` has deliberately narrow meaning:
 
 - `no-approved-sources`: no returned source/scope row has current combined

@@ -42,7 +42,6 @@ export function createTjekHandlers(deps: TjekHandlerDependencies): Partial<Recor
         await authorize("capture");
         const offers = await deps.client.getOffersFromCatalog(catalog, signal);
         abort(signal);
-        counters.fetched += offers.length;
         const bytes = Buffer.from(JSON.stringify({ catalog, offers }));
         const checksum = createHash("sha256").update(bytes).digest("hex");
         const existingStatus = await deps.foundation.isCaptureComplete?.(catalog.id, checksum, signal);
@@ -84,6 +83,10 @@ export function createTjekHandlers(deps: TjekHandlerDependencies): Partial<Recor
           } },
         });
         const receipt = await pipeline.captureAndExtract({ contractVersion: 1, bytes, edition, mimeType: "application/json", rightsClassification: "public_display" }, signal);
+        // Count candidate units only once they are persisted, mirroring MENY:
+        // an already-complete capture fetches nothing new, and counting raw
+        // offers before capture breaks worker counter accounting.
+        counters.fetched += receipt.counts.total;
         counters.persisted += receipt.counts.total;
         counters.quarantined += receipt.counts.reviewRequired + receipt.counts.rejected;
         if (receipt.status !== "completed") counters.failed += 1;
