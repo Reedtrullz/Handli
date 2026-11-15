@@ -397,6 +397,23 @@ test("logs only approved non-operational source keys with fixed state words", as
     return true;
   });
 
+  const truncated = sourceStatus({ hasMore: true, overall: "unknown" });
+  validateSourceStatusContract(truncated, Date.parse(NOW));
+  assert.deepEqual(summarizeNonOperationalSources(truncated), []);
+  await assert.rejects(runPublicMonitor(config(), {
+    fetchImpl: endpointFetch({ source: truncated }),
+    nowMs: () => Date.parse(NOW),
+  }), (error) => {
+    assert.deepEqual(sanitizedFailure(error), {
+      code: "SOURCE_UNKNOWN",
+      contractVersion: 1,
+      directoryIncomplete: true,
+      event: "public-monitor.failed",
+      sources: [],
+    });
+    return true;
+  });
+
   const forged = new PublicMonitorFailure("SOURCE_UNKNOWN", {
     sources: [
       { id: "https://private.invalid/", state: "no-health" },

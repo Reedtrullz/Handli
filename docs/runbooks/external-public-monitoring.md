@@ -107,6 +107,10 @@ state is one of `degraded`, `failed`, `disabled`, `ingestion-failed`,
 Display names, scopes, clocks, counts, and URLs are never written, because
 this repository and its Actions logs are public.
 
+An empty `sources` array is meaningful: with `directoryIncomplete: true`,
+no approved source on the returned page is non-operational, so the truncated
+directory itself is the only known cause.
+
 ## Notification and protection setup
 
 Before treating the monitor as operational:

@@ -204,9 +204,19 @@ function hasRecentRecordedSuccess(entry, generatedAt) {
   });
 }
 
+// The degraded half of the fixed state vocabulary.
+const DEGRADED_SOURCE_STATES = new Set([
+  "degraded",
+  "disabled",
+  "failed",
+  "ingestion-degraded",
+  "ingestion-failed",
+]);
+
 /**
- * Classifies one approved entry with the same precedence as the derived
- * overall state. Returns undefined for an operational entry.
+ * Classifies one approved entry. Returns undefined for an operational entry.
+ * This is the single precedence used by the derived overall state and the
+ * public per-source summary.
  */
 function approvedEntryProblem(entry, generatedAt) {
   if (entry.health !== null && new Set(["degraded", "failed", "disabled"]).has(entry.health.state)) {
@@ -251,21 +261,11 @@ export function summarizeNonOperationalSources(value) {
 
 function deriveSourceOverall(entries, hasMore, generatedAt) {
   const approved = entries.filter(({ governanceState }) => governanceState === "approved");
-  if (
-    approved.some(({ health }) => health !== null && new Set([
-      "degraded",
-      "failed",
-      "disabled",
-    ]).has(health.state))
-    || approved.some(hasNewerFailedOrDegradedIngestion)
-  ) return "degraded";
+  const problems = approved.map((entry) => approvedEntryProblem(entry, generatedAt));
+  if (problems.some((problem) => DEGRADED_SOURCE_STATES.has(problem))) return "degraded";
   if (hasMore) return "unknown";
   if (approved.length === 0) return "no-approved-sources";
-  if (
-    approved.some(hasNewerCancelledIngestion)
-    || approved.some(({ health }) => health === null || health.freshness === "stale")
-    || approved.some((entry) => !hasRecentRecordedSuccess(entry, generatedAt))
-  ) return "unknown";
+  if (problems.some((problem) => problem !== undefined)) return "unknown";
   return "operational";
 }
 
@@ -582,6 +582,8 @@ export function sanitizedFailure(error) {
       .slice(0, MAX_REPORTED_SOURCES)
       .map(({ id, state }) => Object.freeze({ id, state }));
     if (error.directoryIncomplete === true) failure.directoryIncomplete = true;
+    // An empty list with directoryIncomplete means no visible approved source
+    // explains the truncated directory.
     failure.sources = Object.freeze(sources);
   }
   return Object.freeze(failure);
