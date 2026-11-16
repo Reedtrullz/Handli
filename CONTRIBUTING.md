@@ -20,6 +20,26 @@ formal appeal body exists.
    `corepack pnpm test` where applicable. A green UI test cannot override a
    failed privacy, rights, security, data-truth, or operations gate.
 
+## Engineering roadmap
+
+Use [Handli — Engineering Roadmap](https://github.com/users/Reedtrullz/projects/24)
+for this repository's planning state. Issues are the canonical work items;
+pull requests carry reviewable changes. The roadmap supplements the contribution,
+privacy, provenance and review rules in this file.
+
+New findings enter **Intake**. Move to **Ready** only after checking evidence,
+duplicates, ownership, bounded scope, acceptance criteria and dependencies.
+Use **In Progress**, **Blocked** and **In Review** to describe actual work.
+Priority (P0–P3), Phase, Effort (XS–XL), Confidence and Category describe planning;
+Area names the real subsystem. Confidence is separate from priority.
+
+Use **Done** only after the intended outcome and required checks are complete,
+with the implementing change merged where applicable. Use closing references in
+PRs only for fully resolved Issues. Native item-closed and PR-merged workflows
+are enabled; re-read Issue and Project state after an authorized merge. A draft
+PR, green CI or Project status does not establish deployment or human acceptance.
+Merge, deployment, provider access and release gates require their own authorization.
+
 ## Licence and provenance
 
 Original contributions are submitted under `AGPL-3.0-or-later`, the repository
